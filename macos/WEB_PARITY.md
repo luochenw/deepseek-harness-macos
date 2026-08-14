@@ -37,7 +37,7 @@ capability is only possible because this is a native app:
 
 - Refine presentation parity for every tool render intent: terminal, diff, read, search, web results, and code dispatch (syntax highlighting, collapse/expand for long output). Attachment images gained a [zoomable lightbox](.agents/notes/implemented/feature/2026-08-14-attachment-lightbox.md); the cross-message attachment **rail** (a strip of every image in the session) is still open.
 - Complete session-event folding with full trajectory virtualization (currently `LazyVStack`, on-screen-lazy but not measured/windowed). Compaction summaries now [persist into the scrollback](.agents/notes/implemented/feature/2026-08-14-workflow-phase-grouping-and-status.md) instead of only an ephemeral banner; retry notices remain ephemeral by design (frequent, transient — see that note's rationale).
-- Subagents: whole-tree ("descendants") viewing beyond one-level-at-a-time breadcrumb navigation; scope the tool/todo/goal dashboard cards to the currently-viewed subagent instead of always the top-level session.
+- Subagents: gained a [whole-tree ("descendants") view](.agents/notes/implemented/feature/2026-08-14-subagent-descendants-tree.md), walked client-side (depth/node-capped, with explicit truncation disclosure) since the client-facing `subagent.list` RPC's support for a server-side descendants scope is unverified. Still open: scope the tool/todo/goal dashboard cards to the currently-viewed subagent instead of always the top-level session.
 - Add native accessibility/UI tests that execute a real App instance and verify Host event projections.
 
 ## Deliberate architecture

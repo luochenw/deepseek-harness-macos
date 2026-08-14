@@ -30,7 +30,7 @@ private struct SubagentCard: View {
   let items: [DSHSubagentEntry]
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      HStack { Label("子代理", systemImage: "person.3").font(.caption.weight(.bold)); Spacer(); if !harness.subagentPath.isEmpty { Button("返回上级", action: harness.navigateUpSubagent).buttonStyle(.bordered).controlSize(.small) } }
+      HStack { Label("子代理", systemImage: "person.3").font(.caption.weight(.bold)); Spacer(); Button("完整树", action: { harness.showSubagentTree = true }).buttonStyle(.bordered).controlSize(.small); if !harness.subagentPath.isEmpty { Button("返回上级", action: harness.navigateUpSubagent).buttonStyle(.bordered).controlSize(.small) } }
       if !harness.subagentPath.isEmpty { Text(harness.subagentPath.map(\.title).joined(separator: " › ")).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
       ForEach(items) { item in
         Button(action: { harness.openSubagent(item) }) { HStack(spacing: 8) {

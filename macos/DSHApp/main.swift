@@ -150,6 +150,20 @@ final class HarnessController: ObservableObject {
     var id: String { address.childSessionId }
   }
 
+  /// One node of a client-walked subagent tree — see
+  /// .agents/notes/implemented/feature/2026-08-14-subagent-descendants-tree.md.
+  struct SubagentTreeNode: Identifiable {
+    let entry: DSHSubagentEntry
+    let depth: Int
+    /// The breadcrumb path from the tree root down to (not including) this
+    /// node — assigning this to `subagentPath` before calling `openSubagent`
+    /// re-enters the existing one-level navigation at the right place.
+    let ancestorPath: [SubagentNavigationNode]
+    var children: [SubagentTreeNode] = []
+    var id: String { entry.id }
+    func flattened() -> [SubagentTreeNode] { [self] + children.flatMap { $0.flattened() } }
+  }
+
   struct ToolActivity: Identifiable {
     enum State { case running, succeeded, failed }
     let id = UUID()
@@ -237,6 +251,10 @@ final class HarnessController: ObservableObject {
   /// conversation pane. Never inserted into `sessions` — see
   /// .agents/notes/implemented/feature/2026-08-14-subagent-transcript-redesign.md.
   @Published var subagentTranscript: Session?
+  @Published var showSubagentTree = false
+  @Published var subagentTree: [SubagentTreeNode]?
+  @Published var subagentTreeLoading = false
+  @Published var subagentTreeTruncated = false
   @Published var selectedWorkflowRunID: String?
   @Published var draftImage: DraftImage?
   @Published private(set) var isRunning = false
@@ -1453,6 +1471,7 @@ struct ContentView: View {
       }
     }
     .sheet(isPresented: $harness.showSessionSearch) { SessionSearchView() }
+    .sheet(isPresented: $harness.showSubagentTree) { SubagentTreeView() }
     .sheet(isPresented: $harness.showRenameSession) { RenameSessionSheet() }
     .sheet(item: $harness.pendingApproval) { approval in ApprovalSheet(approval: approval) }
     .sheet(item: $harness.pendingQuestion) { question in QuestionBatchSheet(question: question) }
