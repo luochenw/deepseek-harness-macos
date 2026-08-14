@@ -113,12 +113,35 @@ final class HarnessController: ObservableObject {
   }
 
   struct WorkflowRun: Identifiable {
-    struct Member: Identifiable { let id: Int; var label: String; var phase: String?; let childId: String; var outcome: String? }
+    /// The wire vocabulary is `WorkflowAgentOutcome = 'completed' | 'failed'
+    /// | 'cancelled'` (member-level) and `WorkflowStopReason = 'completed' |
+    /// 'cancelled' | 'error'` (run-level) — both absent while running. See
+    /// .agents/notes/implemented/feature/2026-08-14-workflow-phase-grouping-and-status.md.
+    enum Status { case running, completed, failed, cancelled }
+    struct Member: Identifiable {
+      let id: Int; var label: String; var phase: String?; let childId: String; var outcome: String?
+      var status: Status {
+        switch outcome {
+        case "completed": .completed
+        case "failed": .failed
+        case "cancelled": .cancelled
+        default: .running
+        }
+      }
+    }
     let id: String
     let parentSessionId: String
     var name: String
     var stopReason: String?
     var members: [Member] = []
+    var status: Status {
+      switch stopReason {
+      case "completed": .completed
+      case "error": .failed
+      case "cancelled": .cancelled
+      default: .running
+      }
+    }
   }
 
   struct SubagentNavigationNode: Identifiable {
@@ -511,8 +534,12 @@ final class HarnessController: ObservableObject {
     case "compaction/end":
       runNotice = "历史上下文压缩完成"
     case "compaction/summary":
-      if let summary = data["summary"] as? String { runNotice = "上下文摘要：\(summary)" }
-      else { runNotice = "已生成上下文摘要" }
+      let summary = data["summary"] as? String
+      runNotice = summary.map { "上下文摘要：\($0)" } ?? "已生成上下文摘要"
+      // Persist into the scrollback — the banner above is overwritten by the
+      // next event, but a compaction is a rare, meaningful moment worth
+      // being able to scroll back to (unlike retries, left as ephemeral).
+      sessions[index].messages.append(Message(role: .system, text: summary.map { "历史上下文已压缩。摘要：\($0)" } ?? "历史上下文已压缩。"))
     default:
       break
     }

@@ -19,7 +19,7 @@ Last audited against the installed DSH Web Host API and the web bundle compositi
 | Models and credentials | Catalog/status/session selection, Host credential writes and revisioned Relay/custom provider authoring implemented | `llm.models`, `credentials.describe`, `session.selectModel` |
 | Agent presets | Roster/select implemented | `agentPreset.list`, `agentPreset.select` |
 | Settings | Inventory, revisioned JSON editor, mutate, open-document, credential write controls, and inline revision-conflict recovery (discard-and-reload or keep-edits-and-retry) implemented | `settings.describe` |
-| Workflow | Durable run-state, member phase/outcome and native member drill-down implemented | `tool-workflow/*` events |
+| Workflow | Durable run-state, members grouped by phase, real `running/completed/failed/cancelled` status vocabulary (verified against the upstream wire types, not guessed) and native member drill-down implemented — see [workflow-phase-grouping-and-status](.agents/notes/implemented/feature/2026-08-14-workflow-phase-grouping-and-status.md) | `tool-workflow/*` events |
 
 ## Native capability beyond web parity
 
@@ -35,9 +35,8 @@ capability is only possible because this is a native app:
 
 ## Remaining web-parity work
 
-- Refine presentation parity for every tool render intent: terminal, diff, read, search, web results, code dispatch and attachment history images (syntax highlighting, collapse/expand, a real image lightbox/rail — currently a single non-zoomable inline preview).
-- Complete session-event folding with full trajectory virtualization (currently `LazyVStack`, on-screen-lazy but not measured/windowed) and richer retry / compaction detail history (currently ephemeral single-line banners, overwritten by the next event rather than kept in the transcript).
-- Expand workflow detail: group members by phase, adopt the full `running|completed|failed|cancelled|interrupted` status vocabulary (currently a single optional `outcome: String?`).
+- Refine presentation parity for every tool render intent: terminal, diff, read, search, web results, and code dispatch (syntax highlighting, collapse/expand for long output). Attachment images gained a [zoomable lightbox](.agents/notes/implemented/feature/2026-08-14-attachment-lightbox.md); the cross-message attachment **rail** (a strip of every image in the session) is still open.
+- Complete session-event folding with full trajectory virtualization (currently `LazyVStack`, on-screen-lazy but not measured/windowed). Compaction summaries now [persist into the scrollback](.agents/notes/implemented/feature/2026-08-14-workflow-phase-grouping-and-status.md) instead of only an ephemeral banner; retry notices remain ephemeral by design (frequent, transient — see that note's rationale).
 - Subagents: whole-tree ("descendants") viewing beyond one-level-at-a-time breadcrumb navigation; scope the tool/todo/goal dashboard cards to the currently-viewed subagent instead of always the top-level session.
 - Add native accessibility/UI tests that execute a real App instance and verify Host event projections.
 

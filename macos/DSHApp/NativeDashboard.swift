@@ -53,10 +53,47 @@ private struct WorkflowCard: View {
       Label("工作流", systemImage: "point.3.connected.trianglepath.dotted").font(.caption.weight(.bold))
       ForEach(items) { run in
         DisclosureGroup(isExpanded: Binding(get: { harness.selectedWorkflowRunID == run.id }, set: { if $0 { harness.selectWorkflow(run) } else if harness.selectedWorkflowRunID == run.id { harness.selectedWorkflowRunID = nil } })) {
-          ForEach(run.members) { member in Button(action: { harness.openWorkflowMember(run: run, member: member) }) { HStack { VStack(alignment: .leading) { Text(member.label).font(.caption); Text([member.phase, member.outcome].compactMap { $0 }.joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary) }; Spacer(); Image(systemName: "arrow.up.right.square").font(.caption2) } }.buttonStyle(.plain) }
-        } label: { HStack { Text(run.name).font(.caption.weight(.medium)); Spacer(); Text(run.stopReason ?? "运行中").font(.caption2).foregroundStyle(run.stopReason == nil ? .blue : .secondary) } }
+          ForEach(Self.groupedByPhase(run.members), id: \.phase) { group in
+            VStack(alignment: .leading, spacing: 3) {
+              if let phase = group.phase { Text(phase).font(.caption2.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 3) }
+              ForEach(group.members) { member in
+                Button(action: { harness.openWorkflowMember(run: run, member: member) }) {
+                  HStack {
+                    statusDot(member.status)
+                    Text(member.label).font(.caption)
+                    Spacer()
+                    Image(systemName: "arrow.up.right.square").font(.caption2)
+                  }
+                }.buttonStyle(.plain)
+              }
+            }
+          }
+        } label: { HStack { statusDot(run.status); Text(run.name).font(.caption.weight(.medium)); Spacer(); Text(Self.label(run.status)).font(.caption2).foregroundStyle(.secondary) } }
       }
     }.padding(12).background(.teal.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+  }
+
+  private static func groupedByPhase(_ members: [HarnessController.WorkflowRun.Member]) -> [(phase: String?, members: [HarnessController.WorkflowRun.Member])] {
+    var order: [String?] = []
+    var buckets: [String?: [HarnessController.WorkflowRun.Member]] = [:]
+    for member in members {
+      if buckets[member.phase] == nil { order.append(member.phase) }
+      buckets[member.phase, default: []].append(member)
+    }
+    return order.map { (phase: $0, members: buckets[$0] ?? []) }
+  }
+
+  @ViewBuilder private func statusDot(_ status: HarnessController.WorkflowRun.Status) -> some View {
+    Image(systemName: Self.icon(status)).foregroundStyle(Self.color(status)).font(.caption2)
+  }
+  private static func icon(_ status: HarnessController.WorkflowRun.Status) -> String {
+    switch status { case .running: "circle.dotted"; case .completed: "checkmark.circle.fill"; case .failed: "xmark.circle.fill"; case .cancelled: "minus.circle.fill" }
+  }
+  private static func color(_ status: HarnessController.WorkflowRun.Status) -> Color {
+    switch status { case .running: .blue; case .completed: .green; case .failed: .red; case .cancelled: .secondary }
+  }
+  private static func label(_ status: HarnessController.WorkflowRun.Status) -> String {
+    switch status { case .running: "运行中"; case .completed: "已完成"; case .failed: "失败"; case .cancelled: "已取消" }
   }
 }
 
