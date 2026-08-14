@@ -1,0 +1,22 @@
+# Build output — produced by scripts/build-macos-app.sh, never committed.
+/dist/
+
+# Scratch/session workspace used by prior automation runs in this directory
+# (browser captures, personal documents, unrelated research). Not part of the
+# app project and must never enter git history.
+/work/
+/outputs/
+/wb_*.txt
+/wb_*.json
+/lark_doc.json
+/lark_doc.md
+/时间的形状——一万字随笔.md
+
+# macOS / editor noise
+.DS_Store
+*.swp
+
+# Swift build artifacts if a future SwiftPM/Xcode project is added
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/

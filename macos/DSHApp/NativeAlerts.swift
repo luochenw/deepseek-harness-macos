@@ -1,0 +1,75 @@
+import AppKit
+import UserNotifications
+
+/// Menu-bar presence and system notifications — native capability a
+/// WebView-based client cannot provide. See
+/// .agents/notes/implemented/feature/2026-08-14-native-menu-bar-and-notifications.md.
+@MainActor
+final class NativeAlerts: NSObject {
+  private var statusItem: NSStatusItem?
+
+  func attach() {
+    UNUserNotificationCenter.current().delegate = self
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    item.button?.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "DeepSeek Harness")
+    let menu = NSMenu()
+    let open = NSMenuItem(title: "打开 DeepSeek Harness", action: #selector(activateApp), keyEquivalent: "")
+    open.target = self
+    menu.addItem(open)
+    menu.addItem(.separator())
+    menu.addItem(NSMenuItem(title: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+    item.menu = menu
+    statusItem = item
+  }
+
+  func setBadge(running: Bool, needsAttention: Bool) {
+    let symbol = needsAttention ? "exclamationmark.circle.fill" : running ? "circle.fill" : "sparkles"
+    statusItem?.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "DeepSeek Harness")
+    statusItem?.button?.contentTintColor = needsAttention ? .systemOrange : running ? .systemBlue : nil
+  }
+
+  @objc private func activateApp() {
+    NSApp.activate(ignoringOtherApps: true)
+    NSApp.windows.first?.makeKeyAndOrderFront(nil)
+  }
+
+  private func post(id: String, title: String, body: String) {
+    let content = UNMutableNotificationContent()
+    content.title = title
+    content.body = body
+    content.sound = .default
+    UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+  }
+
+  func notifyApprovalNeeded(toolName: String) {
+    setBadge(running: true, needsAttention: true)
+    guard !NSApp.isActive else { return }
+    NSApp.requestUserAttention(.informationalRequest)
+    post(id: "approval", title: "DSH 需要你的许可", body: "请求执行：\(toolName)")
+  }
+
+  func notifyQuestionNeeded() {
+    setBadge(running: true, needsAttention: true)
+    guard !NSApp.isActive else { return }
+    NSApp.requestUserAttention(.informationalRequest)
+    post(id: "question", title: "DSH 有问题要问你", body: "点击查看并回答")
+  }
+
+  func notifyTurnFinished(summary: String) {
+    setBadge(running: false, needsAttention: false)
+    guard !NSApp.isActive else { return }
+    post(id: "turn-end", title: "DSH 已完成", body: summary)
+  }
+}
+
+extension NativeAlerts: UNUserNotificationCenterDelegate {
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+    Task { @MainActor in self.activateApp() }
+    completionHandler()
+  }
+
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+    completionHandler([.banner, .sound])
+  }
+}

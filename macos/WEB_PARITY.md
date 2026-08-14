@@ -1,0 +1,46 @@
+# Native DSH Web-Parity Matrix
+
+Last audited against the installed DSH Web Host API and the web bundle composition.
+
+## Native implementation connected to the real Host
+
+| Web domain | Native status | Host transport |
+|---|---|---|
+| Workspaces and persistent sessions | Implemented with native workspace create/rename/delete | `workspace.list`, `session.list`, `session.create`, host events |
+| Session search, rename, fork, archive | Implemented | `session.search`, `session.rename`, `session.fork`, `workspace.archiveSession` |
+| Conversation history and streaming | Implemented with reasoning, retry, compaction, pagination and trajectory baseline | `session.history`, `events.mux` |
+| Prompt, queue, cancel | Implemented with native queue edit/remove/steer | `session.prompt`, `session.cancel`, `session/queue` |
+| Images | Implemented send, durable history ref, Host retrieval and automatic native preview | `session.prompt` image content block |
+| Tool and job state | Implemented callId-correlated Host render-intent cards, including delivered file open/reveal controls | `tool/*`, `session/jobs`, `host.openPath` |
+| Todo, plan, goal | Implemented baseline | session projections and `goal.*` |
+| Approval and questions | Implemented baseline | answerable mux frames and `/api/respond` |
+| Subagents | Catalog, nested history navigation, continuable prompt (text and image) and interrupt implemented. A subagent transcript is a dedicated overlay on the conversation pane (not a synthetic top-level session) that streams live and visually distinguishes read-only (one-shot) from continuable transcripts — see [subagent-transcript-redesign](.agents/notes/implemented/feature/2026-08-14-subagent-transcript-redesign.md) | `subagent.list`, `subagent.history`, `subagent.prompt`, `subagent.interrupt` |
+| Skills | Catalog implemented | `skill.list` |
+| Models and credentials | Catalog/status/session selection, Host credential writes and revisioned Relay/custom provider authoring implemented | `llm.models`, `credentials.describe`, `session.selectModel` |
+| Agent presets | Roster/select implemented | `agentPreset.list`, `agentPreset.select` |
+| Settings | Inventory, revisioned JSON editor, mutate, open-document, credential write controls, and inline revision-conflict recovery (discard-and-reload or keep-edits-and-retry) implemented | `settings.describe` |
+| Workflow | Durable run-state, member phase/outcome and native member drill-down implemented | `tool-workflow/*` events |
+
+## Native capability beyond web parity
+
+Not every native feature is "catching up" to the web client — some native
+capability is only possible because this is a native app:
+
+- **Menu bar presence + system notifications**: a persistent `NSStatusItem`
+  reflects idle/running/needs-attention state; local notifications fire for
+  approval requests, agent questions, and top-level turn completion whenever
+  the app isn't frontmost, with a Dock-bounce attention request and a
+  click-to-activate path back into the app. See
+  [native-menu-bar-and-notifications](.agents/notes/implemented/feature/2026-08-14-native-menu-bar-and-notifications.md).
+
+## Remaining web-parity work
+
+- Refine presentation parity for every tool render intent: terminal, diff, read, search, web results, code dispatch and attachment history images (syntax highlighting, collapse/expand, a real image lightbox/rail — currently a single non-zoomable inline preview).
+- Complete session-event folding with full trajectory virtualization (currently `LazyVStack`, on-screen-lazy but not measured/windowed) and richer retry / compaction detail history (currently ephemeral single-line banners, overwritten by the next event rather than kept in the transcript).
+- Expand workflow detail: group members by phase, adopt the full `running|completed|failed|cancelled|interrupted` status vocabulary (currently a single optional `outcome: String?`).
+- Subagents: whole-tree ("descendants") viewing beyond one-level-at-a-time breadcrumb navigation; scope the tool/todo/goal dashboard cards to the currently-viewed subagent instead of always the top-level session.
+- Add native accessibility/UI tests that execute a real App instance and verify Host event projections.
+
+## Deliberate architecture
+
+The macOS app is SwiftUI/AppKit native. It starts the bundled DSH Host only as a local runtime, consumes its documented loopback RPC and WebSocket event protocol, and does not embed the Web UI in a WebView. Its RPC client implements the legacy dot-method `ApiProxy` surface (`session.*`, `workspace.*`, `subagent.*`, ...); the newer Typert Gateway (`/api/<namespace>/<method>`, used by `dynamicCordisRunner` self-modification and other newer capabilities) has no native client today.
