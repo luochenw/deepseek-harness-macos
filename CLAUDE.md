@@ -43,6 +43,19 @@
 - **写代码并行**：不同功能域（比如"补 diff 渲染卡片"和"补 workflow 详情钻取"）分属不同的 `DSH<Feature>.swift` / `Native<Feature>View.swift` 文件 → 可以并行改，互不覆盖。**`main.swift` 例外**——它是单一 `HarnessController` 的核心，多个并行改动同时碰它极易冲突，涉及 `main.swift` 的改动串行做，或者拆到 `extension HarnessController` 的独立文件里再引用。
 - 一律直接在当前分支上改（这是个人维护的开源项目，不强制 worktree/PR 流程），但落笔前 `git status` 确认没有别的改动会被覆盖。
 
+## CLAUDE.md 组织方式：不拆子目录
+
+新功能不要另开一份子目录 CLAUDE.md（比如 `macos/DSHApp/CLAUDE.md`）。原因：
+
+- Claude Code 的子目录 CLAUDE.md 是**按文件所在目录懒加载**的（读到那个目录下的文件才加载），不是按文件名。这个仓库恰恰是"按功能域拆*文件*、不拆*目录*"（见上面「多 Agent 并行」）——`NativeDashboard.swift`、`NativeAttachmentPreview.swift`、`main.swift` 全在同一个 `macos/DSHApp/` 目录下，放一份目录级 CLAUDE.md 起不到"只在改这个功能时才加载"的效果，跟直接写进根 CLAUDE.md 没区别，纯增加维护成本。
+- 官方按目录拆分是给真正的 monorepo/多包仓库用的（`packages/api`、`packages/web` 各自有独立构建/测试栈），参考 [Set up Claude Code in a monorepo or large codebase](https://code.claude.com/docs/en/large-codebases)。这个项目是单一 Swift target，没有这种边界。
+- 这份文件目前 100 出头行，远低于官方建议的 200 行拆分阈值（[Write effective instructions](https://code.claude.com/docs/en/memory#write-effective-instructions)），没有"太长导致遵从率下降"的压力，不需要为了拆而拆。
+
+以后如果真要拆，按这个优先级：
+
+1. **先考虑 `.claude/rules/*.md` + `paths:` frontmatter**——按 glob 匹配文件而非目录，更贴合这个项目"按文件名前缀分功能域"的组织方式（比如给 `Native*.swift` 单开一份规则）。
+2. **只有新增一个真正独立的子系统**（新 target、独立 CLI 工具、单独的 docs 站点，有自己的构建/测试流程）才值得为它开一份子目录 CLAUDE.md——这才对得上 monorepo 那套场景。
+
 ## 开发与收尾流程
 
 **规则**：直接在 `main` 分支开发，不强制 feature 分支（外部贡献者提 PR 除外，见 README 的 Contributing）。
