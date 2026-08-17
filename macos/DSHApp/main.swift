@@ -74,6 +74,12 @@ final class HarnessController: ObservableObject {
     /// (state, summary, presentation) in `activeTools` at render time, so the
     /// row updates in place when the result lands without mutating messages.
     var toolCallId: String?
+    /// True for `source: {kind:"plugin", plugin:"session-relay"}` messages
+    /// (dsh-tool-session-relay) — the one non-"user" source kind admitted
+    /// past the injected-context filter below, so the transcript can show
+    /// who a cross-session message came from without text-sniffing the
+    /// plugin's envelope wording.
+    var isRelayMessage = false
   }
 
   struct Session: Identifiable, Equatable {
@@ -736,14 +742,18 @@ final class HarnessController: ObservableObject {
       }
     case "user/message":
       let payload = liveMessagePayload(data)
-      // Injected user-role contexts never render; real input dedupes against
-      // the local echo send() already appended (the outgoing first message
-      // may carry the workspace-context appendix, hence prefix matching).
-      // Queue drains, slash fallbacks, and other clients still land here.
-      if liveSourceKind(payload) == nil || liveSourceKind(payload) == "user", let text = liveMessageText(payload).map(userDisplayText) {
+      // Injected user-role contexts never render — except the cross-session
+      // relay plugin's own delivered messages, which are real conversation
+      // content from another session's model, not machine plumbing. Real
+      // typed input dedupes against the local echo send() already appended
+      // (the outgoing first message may carry the workspace-context
+      // appendix, hence prefix matching). Queue drains, slash fallbacks, and
+      // other clients still land here.
+      let relay = liveIsRelayMessage(payload)
+      if liveSourceKind(payload) == nil || liveSourceKind(payload) == "user" || relay, let text = liveMessageText(payload).map(userDisplayText) {
         let lastUser = sessions[index].messages.last(where: { $0.role == .user })?.text
         if let lastUser, text == lastUser || text.hasPrefix(lastUser) {} else {
-          sessions[index].messages.append(Message(role: .user, text: text))
+          sessions[index].messages.append(Message(role: .user, text: text, isRelayMessage: relay))
         }
       }
     case "tool/call":
@@ -881,6 +891,14 @@ final class HarnessController: ObservableObject {
 
   private func liveSourceKind(_ message: [String: Any]) -> String? {
     (message["source"] as? [String: Any])?["kind"] as? String
+  }
+
+  /// True for `source: {kind:"plugin", plugin:"session-relay"}` — the one
+  /// non-"user" source kind admitted past the injected-context filter, since
+  /// it carries real cross-session conversation content rather than model
+  /// plumbing (agent-instructions, skill catalogs, snapshots stay filtered).
+  private func liveIsRelayMessage(_ message: [String: Any]) -> Bool {
+    liveSourceKind(message) == "plugin" && (message["source"] as? [String: Any])?["plugin"] as? String == "session-relay"
   }
 
   private func liveMessageText(_ value: Any?) -> String? {
@@ -1420,9 +1438,12 @@ final class HarnessController: ObservableObject {
       case "user/message":
         let message = historyMessage(data)
         // Only real typed input becomes a bubble; injected user-role
-        // contexts (13KB instruction snapshots…) stay out of the transcript.
-        guard messageSourceKind(message) == nil || messageSourceKind(message) == "user" else { continue }
-        if let text = textFromMessage(message) { result.append(Message(role: .user, text: userDisplayText(text), timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(message))) }
+        // contexts (13KB instruction snapshots…) stay out of the transcript
+        // — except the cross-session relay plugin's own delivered messages,
+        // which are real conversation content, not model plumbing.
+        let relay = historyIsRelayMessage(message)
+        guard messageSourceKind(message) == nil || messageSourceKind(message) == "user" || relay else { continue }
+        if let text = textFromMessage(message) { result.append(Message(role: .user, text: userDisplayText(text), timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(message), isRelayMessage: relay)) }
       case "assistant/message":
         let payload = historyMessage(data)
         if let text = textFromMessage(payload) {
@@ -1532,6 +1553,12 @@ final class HarnessController: ObservableObject {
   /// plumbing and must never render as conversation bubbles.
   private func messageSourceKind(_ value: DSHJSONValue) -> String? {
     value.object?["source"]?.object?["kind"]?.string
+  }
+
+  /// History-replay counterpart of `liveIsRelayMessage(_:)` — same
+  /// `source.kind`/`source.plugin` check over the `DSHJSONValue` shape.
+  private func historyIsRelayMessage(_ value: DSHJSONValue) -> Bool {
+    messageSourceKind(value) == "plugin" && value.object?["source"]?.object?["plugin"]?.string == "session-relay"
   }
 
   /// Display text of a user message: the outgoing first prompt carries the
@@ -2820,13 +2847,24 @@ private struct MessageBubble: View {
     case .user:
       HStack {
         Spacer(minLength: 180)
-        VStack(alignment: .leading, spacing: 7) {
-          Text(message.text)
-            .textSelection(.enabled).font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.ink)
-          if let attachment = message.attachment { AttachmentPreview(ref: attachment) }
+        VStack(alignment: .trailing, spacing: 5) {
+          // 跨会话信使投递的消息在正文里自带 "[跨会话消息 · 来自会话「X」]"
+          // 信封——这里只加一枚小标签复述来源，键的是结构化的 isRelayMessage
+          // 字段（source.plugin == "session-relay"），不裁剪信封本身：正文
+          // 原样全文展示。
+          if message.isRelayMessage {
+            Label("来自其他会话", systemImage: "arrow.triangle.branch")
+              .font(.system(size: 10.5, weight: .medium))
+              .foregroundStyle(DSHTheme.accent)
+          }
+          VStack(alignment: .leading, spacing: 7) {
+            Text(message.text)
+              .textSelection(.enabled).font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.ink)
+            if let attachment = message.attachment { AttachmentPreview(ref: attachment) }
+          }
+          .padding(.horizontal, DSHSpace.s4).padding(.vertical, DSHSpace.s3)
+          .dshCard(tint: DSHTheme.surfaceTint2, radius: DSHRadius.lg)
         }
-        .padding(.horizontal, DSHSpace.s4).padding(.vertical, DSHSpace.s3)
-        .dshCard(tint: DSHTheme.surfaceTint2, radius: DSHRadius.lg)
         // The card hugs its content and sits on the right edge; 640 is only
         // the wrap ceiling. A maxWidth frame directly on the Text is greedy —
         // it stretched every bubble to full width, so a short message wore a

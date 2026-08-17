@@ -29,9 +29,52 @@ cp "$ROOT/macos/DSHApp/AppIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns"
 cp "$NODE_SOURCE" "$STAGE/Contents/MacOS/node"
 chmod 755 "$STAGE/Contents/MacOS/node"
 ditto "$DSH_SOURCE" "$STAGE/Contents/Resources/Runtime/dsh"
+
+# In-house cordis plugins (macos/Runtime-extras/<pkg>/) ride along inside the
+# Runtime, one directory per package. They must also be declared in the
+# Runtime's own package.json dependencies — healProfilesModuleFallback only
+# symlinks packages inside that dependency closure into $DSH_HOME/profiles,
+# so an out-of-tree package absent from it fails plain-name resolution from
+# cordis.patch.yml even though the files are physically present.
+# See .agents/notes/proposed/feature/2026-08-17-cross-session-relay.md.
+RUNTIME_DSH="$STAGE/Contents/Resources/Runtime/dsh"
+extra_dests=()
+shopt -s nullglob  # an empty (or missing) Runtime-extras/ must no-op, not fail the build on the literal glob
+for extra in "$ROOT"/macos/Runtime-extras/*/; do
+  extra="${extra%/}"
+  read -r pkg_name pkg_version < <("$NODE_SOURCE" -e "
+    const p = require('$extra/package.json');
+    console.log(p.name + ' ' + p.version);
+  ")
+  dest="$RUNTIME_DSH/node_modules/$pkg_name"
+  mkdir -p "$(dirname "$dest")"
+  ditto "$extra" "$dest"
+  # Relative to $STAGE/Contents/Resources — matches the manifest's own path
+  # convention (see the hashing loop below), not the absolute $dest used for
+  # the filesystem ops above.
+  extra_dests+=("Runtime/dsh/node_modules/$pkg_name")
+  "$NODE_SOURCE" -e "
+    const fs = require('node:fs');
+    const path = '$RUNTIME_DSH/package.json';
+    const manifest = JSON.parse(fs.readFileSync(path, 'utf8'));
+    manifest.dependencies['$pkg_name'] = '$pkg_version';
+    fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
+  "
+done
+shopt -u nullglob
+
 cd "$STAGE/Contents/Resources"
 find Runtime -type f -not -path "*/node_modules/*" -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 > Runtime.manifest.sha256
 find Runtime/dsh/node_modules -type l -print0 | LC_ALL=C sort -z | xargs -0 -I{} shasum -a 256 "{}" 2>/dev/null >> Runtime.manifest.sha256 || true
+# The two passes above deliberately skip node_modules' real files (the
+# upstream dependency tree, ~342MB, already vetted by its own npm install) —
+# but that same exclusion also blinds the manifest to our own in-house
+# plugins' real files, ditto'd in above as actual files, not symlinks. Hash
+# those specifically so a corrupted/truncated in-house plugin still fails
+# the integrity check below.
+for rel_dest in "${extra_dests[@]}"; do
+  find "$rel_dest" -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 >> Runtime.manifest.sha256
+done
 cd - >/dev/null
 "$STAGE/Contents/MacOS/node" "$STAGE/Contents/Resources/Runtime/dsh/lib/bin.js" --version
 ( cd "$STAGE/Contents/Resources" && shasum -a 256 -c Runtime.manifest.sha256 >/dev/null )

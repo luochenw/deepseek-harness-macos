@@ -164,6 +164,12 @@ private struct GeneralSettingsSection: View {
   @AppStorage(AppPrefs.enterToSendKey) private var enterToSend = true
   @AppStorage(AppPrefs.notifyTurnEndKey) private var notifyTurnEnd = true
   @AppStorage(AppPrefs.notifyAttentionKey) private var notifyAttention = true
+  // 读文件而非 UserDefaults：真值来自 cordis.patch.yml 里标记块是否存在
+  // （见 DSHSessionRelaySettings.swift），跟用户手改那份文件不会状态漂移。
+  // 初值先给 false，真值在 .onAppear 里读一次——State 初始化表达式在这个
+  // 视图每次被重新构造时都会重新求值（父级任何 @Published 字段变化都会
+  // 触发），当初值是一次同步磁盘读时，那就是白白读盘。
+  @State private var sessionRelayEnabled = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: DSHSpace.s4) {
@@ -196,7 +202,27 @@ private struct GeneralSettingsSection: View {
             : "当前：回车换行，⌘回车发送。",
           isOn: $enterToSend)
       }
+
+      DSHSettingsGroup(title: "会话互通") {
+        DSHToggleRow(
+          title: "允许会话之间互相发现与发消息",
+          caption: sessionRelayEnabled
+            ? "已启用：模型可以用 list_sessions / send_to_session 找到其他会话并发消息，对方无需单独开启即可收到；实验性功能，默认关闭。"
+            : "开启后，模型能看到本机其他正在跑的会话并互相发消息、完成后互相提醒——不代表用户已授权对方请求的操作，实验性功能。",
+          isOn: Binding(
+            get: { sessionRelayEnabled },
+            set: { newValue in
+              // cordis.patch.yml is the source of truth (see
+              // DSHSessionRelaySettings.swift's doc comment) — if the write
+              // fails (permissions, full disk, unwritable config root), the
+              // switch must reflect what's actually on disk, not what the
+              // user asked for and didn't get.
+              sessionRelayEnabled = SessionRelaySettings.setEnabled(newValue) ? newValue : SessionRelaySettings.enabled
+            }
+          ))
+      }
     }
+    .onAppear { sessionRelayEnabled = SessionRelaySettings.enabled }
   }
 }
 

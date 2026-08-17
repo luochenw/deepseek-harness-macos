@@ -34,6 +34,15 @@ capability is only possible because this is a native app:
   click-to-activate path back into the app. See
   [native-menu-bar-and-notifications](.agents/notes/implemented/feature/2026-08-14-native-menu-bar-and-notifications.md).
 
+- **Cross-session relay** (experimental, off by default): a Settings toggle
+  mounts a host-plane cordis plugin (`macos/Runtime-extras/dsh-tool-session-relay/`)
+  giving the model `list_sessions`, `send_to_session`, and
+  `notify_session_on_done` tools, so one top-level session can discover and
+  message another directly — something the Host's own RPC surface and the
+  web client have no equivalent for (harness only ships ancestor-scoped
+  subagent messaging). See
+  [cross-session-relay](.agents/notes/implemented/feature/2026-08-17-cross-session-relay.md).
+
 ## Remaining web-parity work
 
 - Refine presentation parity for every tool render intent: terminal, diff, read, search, web results, and code dispatch (syntax highlighting, collapse/expand for long output). Attachment images gained a [zoomable lightbox](.agents/notes/implemented/feature/2026-08-14-attachment-lightbox.md); the cross-message attachment **rail** (a strip of every image in the session) is still open.
