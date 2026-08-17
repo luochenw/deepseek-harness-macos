@@ -910,7 +910,14 @@ final class HarnessController: ObservableObject {
   }
 
   func forkCurrentSession() {
-    guard let hostClient, let sessionId = hostCurrentSessionID else { return }
+    guard let sessionId = hostCurrentSessionID else { return }
+    forkSession(sessionId)
+  }
+
+  /// Codex-style fork: branch any listed session and jump straight into the
+  /// new branch (the original stays untouched in the list).
+  func forkSession(_ sessionId: String) {
+    guard let hostClient else { return }
     Task {
       do {
         let childID = try await hostClient.forkSession(sessionId)
@@ -920,6 +927,30 @@ final class HarnessController: ObservableObject {
           self.openHostSessionID(childID)
         }
       } catch { await MainActor.run { self.appendSystem("创建分支失败：\(error.localizedDescription)") } }
+    }
+  }
+
+  func copySessionID(_ sessionId: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(sessionId, forType: .string)
+    status = "会话 ID 已复制"
+  }
+
+  /// "删除" from the sidebar. The Host protocol has no destructive delete —
+  /// archive is its sanctioned removal (event log retained, hidden from
+  /// every grouping surface); the archived-sessions view stays the recovery
+  /// path. A deleted current session is replaced with a fresh one.
+  func deleteSession(_ sessionId: String) {
+    guard let hostClient else { return }
+    Task {
+      do {
+        try await hostClient.archiveSession(sessionId)
+        await MainActor.run {
+          self.status = "会话已删除（可在归档中找回）"
+          if self.hostCurrentSessionID == sessionId { self.newSession() }
+          self.refreshHostSnapshots()
+        }
+      } catch { await MainActor.run { self.appendSystem("删除会话失败：\(error.localizedDescription)") } }
     }
   }
 
@@ -1784,6 +1815,7 @@ private struct Sidebar: View {
               }
             }
           }
+          .scrollIndicators(.hidden)
         }
       }.frame(maxHeight: .infinity)
 
@@ -1855,6 +1887,12 @@ private struct SidebarSessionRow: View {
       isActive: harness.hostCurrentSessionID == session.sessionId,
       action: { harness.openHostSession(session) }
     )
+    .contextMenu {
+      Button("创建分支") { harness.forkSession(session.sessionId) }
+      Button("复制会话 ID") { harness.copySessionID(session.sessionId) }
+      Divider()
+      Button("删除", role: .destructive) { harness.deleteSession(session.sessionId) }
+    }
   }
 }
 
@@ -1982,6 +2020,9 @@ private struct ConversationView: View {
           }
         }.frame(maxWidth: .infinity).padding(DSHSpace.s6)
       }
+      // No visible scrollbar in the transcript (Claude Code / Codex style) —
+      // the always-on system bar reads as chrome; scrolling still works.
+      .scrollIndicators(.hidden)
       .onChange(of: harness.displayedSession?.messages) { _, messages in if let last = messages?.last { proxy.scrollTo(last.id, anchor: .bottom) } }
     }
   }
