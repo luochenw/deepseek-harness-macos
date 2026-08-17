@@ -44,12 +44,7 @@ struct MarkdownText: View {
         .textSelection(.enabled)
         .padding(.top, 3)
     case .code(let content):
-      Text(content)
-        .font(.system(size: 12, design: .monospaced)).foregroundStyle(DSHTheme.ink)
-        .textSelection(.enabled)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(DSHTheme.surfaceTint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+      CollapsibleCodeBlock(content: content)
     case .bullet(let items):
       VStack(alignment: .leading, spacing: 3) {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
@@ -74,13 +69,29 @@ struct MarkdownText: View {
         Text(Self.inline(content)).font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkSoft).textSelection(.enabled)
       }
     case .table(let rows):
-      // Monospace keeps the pipes aligned well enough without a real grid.
-      Text(rows.joined(separator: "\n"))
-        .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(DSHTheme.ink)
-        .textSelection(.enabled)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-        .background(DSHTheme.surfaceTint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+      // Real grid, not monospaced pipes: cells split on `|`, first row is
+      // the header (bolder, no divider line — grouping by weight/背景 per
+      // the design convention here, not hard rules).
+      let parsed = rows.map { row in
+        row.trimmingCharacters(in: CharacterSet(charactersIn: "|"))
+          .components(separatedBy: "|")
+          .map { $0.trimmingCharacters(in: .whitespaces) }
+      }
+      Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+        ForEach(Array(parsed.enumerated()), id: \.offset) { rowIndex, cells in
+          GridRow {
+            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+              Text(Self.inline(cell))
+                .font(.system(size: 12.5, design: .rounded))
+                .fontWeight(rowIndex == 0 ? .semibold : .regular)
+                .foregroundStyle(rowIndex == 0 ? DSHTheme.ink : DSHTheme.inkSoft)
+                .textSelection(.enabled)
+            }
+          }
+        }
+      }
+      .padding(10)
+      .background(DSHTheme.surfaceTint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
   }
 
@@ -171,5 +182,33 @@ struct MarkdownText: View {
     if !tableRows.isEmpty { blocks.append(.table(tableRows)) }
 
     return blocks.enumerated().map { IdentifiedBlock(id: $0.offset, block: $0.element) }
+  }
+}
+
+/// Fenced code with Claude Code-style folding: long blocks default to their
+/// first lines plus an expand toggle, so a pasted script doesn't swallow the
+/// conversation. Short blocks render in full with no chrome.
+private struct CollapsibleCodeBlock: View {
+  let content: String
+  @State private var expanded = false
+  private static let collapseThreshold = 14
+  private static let previewLines = 8
+  var body: some View {
+    let lines = content.components(separatedBy: "\n")
+    let collapsible = lines.count > Self.collapseThreshold
+    VStack(alignment: .leading, spacing: 6) {
+      Text(collapsible && !expanded ? lines.prefix(Self.previewLines).joined(separator: "\n") : content)
+        .font(.system(size: 12, design: .monospaced)).foregroundStyle(DSHTheme.ink)
+        .textSelection(.enabled)
+      if collapsible {
+        Button(action: { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }) {
+          Text(expanded ? "收起" : "… 展开全部 \(lines.count) 行")
+            .font(.system(size: 11, design: .monospaced)).foregroundStyle(DSHTheme.accent)
+        }.buttonStyle(.plain)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(10)
+    .background(DSHTheme.surfaceTint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
   }
 }

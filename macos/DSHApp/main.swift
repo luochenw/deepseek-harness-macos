@@ -614,6 +614,20 @@ final class HarnessController: ObservableObject {
         if sessions[index].messages.last?.role == .assistant { sessions[index].messages[sessions[index].messages.count - 1].text += delta }
         else { sessions[index].messages.append(Message(role: .assistant, text: delta)) }
       }
+      // Thinking streams as reasoning-delta chunks (field name is `text`, not
+      // `textDelta` — pi-ai adapter shape). Folding them into the message's
+      // reasoning field live means thinking lands in the collapsed ✻ block
+      // as it happens instead of being dropped until the final message.
+      if let chunk = data["chunk"] as? [String: Any], chunk["type"] as? String == "reasoning-delta", let delta = chunk["text"] as? String {
+        if sessions[index].messages.last?.role == .assistant {
+          let last = sessions[index].messages.count - 1
+          sessions[index].messages[last].reasoning = (sessions[index].messages[last].reasoning ?? "") + delta
+        } else {
+          var message = Message(role: .assistant, text: "")
+          message.reasoning = delta
+          sessions[index].messages.append(message)
+        }
+      }
     case "assistant/message":
       if let text = liveMessageText(data["message"]) {
         var message = Message(role: .assistant, text: text)
@@ -1770,7 +1784,6 @@ private struct Sidebar: View {
         }
       }.frame(maxHeight: .infinity)
 
-      WorkspaceManagerView()
       VStack(alignment: .leading, spacing: 6) {
         Button(action: { harness.showSettings = true }) { Label("设置", systemImage: "gearshape") }.buttonStyle(.dshGhost)
         HStack(spacing: 6) {
@@ -1799,13 +1812,28 @@ private struct SidebarRowChrome: View {
         DSHStatusDot(kind: statusKind)
         VStack(alignment: .leading, spacing: 2) {
           Text(title).font(.system(size: 12.5)).foregroundStyle(DSHTheme.ink).lineLimit(1)
-          Text(date, style: .relative).font(.system(size: 10.5)).foregroundStyle(DSHTheme.inkFaint)
+          Text(Self.compactTime(date)).font(.system(size: 10.5)).foregroundStyle(DSHTheme.inkFaint)
         }
         Spacer(minLength: 0)
       }
       .padding(.horizontal, DSHSpace.s2).padding(.vertical, 7)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      // contentShape makes the whole row hit-testable — a plain-style Button
+      // only responds where content draws, so the trailing blank half of the
+      // row was otherwise dead space.
+      .contentShape(Rectangle())
       .background(isActive ? DSHTheme.sidebarSelected : .clear, in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
     }.buttonStyle(.plain)
+  }
+  /// Minute-granularity timestamp — `Text(_, style: .relative)` ticks with
+  /// seconds, which reads as visual noise in a static list.
+  private static func compactTime(_ date: Date) -> String {
+    let interval = Date().timeIntervalSince(date)
+    if interval < 60 { return "刚刚" }
+    if interval < 3600 { return "\(Int(interval / 60)) 分钟前" }
+    if Calendar.current.isDateInToday(date) { return date.formatted(date: .omitted, time: .shortened) }
+    if Calendar.current.isDateInYesterday(date) { return "昨天 " + date.formatted(date: .omitted, time: .shortened) }
+    return date.formatted(.dateTime.month().day())
   }
 }
 
