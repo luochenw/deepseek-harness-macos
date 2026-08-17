@@ -200,80 +200,58 @@ private struct GeneralSettingsSection: View {
   }
 }
 
+/// 官方与自定义彻底分区：各自一张卡片，各管各的 Key 与模型；模型行
+/// 点击即为当前会话选用。顶部不再放"提供方/模型"下拉——那是输入框旁
+/// 模型菜单的职责，这里只留当前使用摘要。
 private struct ModelSettingsSection: View {
   @EnvironmentObject private var harness: HarnessController
 
-  private var selectedGroup: DSHModelGroup? {
-    harness.availableModels.first(where: { $0.id == harness.provider }) ?? harness.availableModels.first
+  /// Catalog groups that belong to custom (llm-pi-ai) configurations —
+  /// everything else is official.
+  private var customProviderIDs: Set<String> {
+    Set(harness.configurableProviders.map(\.provider))
   }
-
-  private var selectedModel: DSHModelCatalogModel? {
-    guard let group = selectedGroup else { return nil }
-    return group.models.first(where: { $0.id == harness.model }) ?? group.models.first
+  private var officialGroups: [DSHModelGroup] {
+    harness.availableModels.filter { !customProviderIDs.contains($0.id) }
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: DSHSpace.s3) {
-      Text("当前会话模型").dshSectionLabel()
-
-      if harness.availableModels.isEmpty {
-        Text("尚未读到 Host 模型目录。先刷新；若还没有可用端点，请添加自定义配置。")
-          .font(.caption)
-          .foregroundStyle(DSHTheme.inkFaint)
-      } else {
-        Picker("提供方", selection: Binding(
-          get: { selectedGroup?.id ?? "" },
-          set: { providerID in
-            guard let group = harness.availableModels.first(where: { $0.id == providerID }),
-                  let firstModel = group.models.first else { return }
-            harness.selectCurrentModel(provider: group.id, model: firstModel.id)
-          }
-        )) {
-          ForEach(harness.availableModels) { group in
-            Text(group.nativeDisplayName).tag(group.id)
-          }
+    VStack(alignment: .leading, spacing: DSHSpace.s4) {
+      HStack {
+        if let group = harness.availableModels.first(where: { $0.id == harness.provider }),
+           let model = group.models.first(where: { $0.id == harness.model }) {
+          Text("当前会话使用：\(group.nativeDisplayName) · \(model.name)")
+            .font(.caption).foregroundStyle(DSHTheme.inkSoft)
+        } else {
+          Text("尚未读到 Host 模型目录；先刷新，或添加自定义配置。")
+            .font(.caption).foregroundStyle(DSHTheme.inkFaint)
         }
+        Spacer()
+        Button(action: harness.refreshModelConfiguration) { Image(systemName: "arrow.clockwise") }
+          .buttonStyle(.dshGhost)
+          .help("刷新 Host 模型目录")
+      }
 
-        Picker("模型", selection: Binding(
-          get: { selectedModel?.id ?? "" },
-          set: { modelID in
-            guard let group = selectedGroup else { return }
-            harness.selectCurrentModel(provider: group.id, model: modelID)
-          }
-        )) {
-          ForEach(selectedGroup?.models ?? []) { model in
-            Text(model.name).tag(model.id)
-          }
+      DSHSettingsGroup(title: "官方配置") {
+        // LOCAL_ 前缀是本机管道凭据（两端读同一引用），不需要用户管理。
+        ForEach(officialCredentialRefs, id: \.self) { reference in
+          CredentialQuickEntry(reference: reference)
         }
-
-        if let description = selectedModel?.description, !description.isEmpty {
-          Text(description)
-            .font(.caption)
-            .foregroundStyle(DSHTheme.inkFaint)
+        if officialGroups.isEmpty {
+          Text("尚未读到官方模型目录。")
+            .font(.caption).foregroundStyle(DSHTheme.inkFaint)
+        }
+        ForEach(officialGroups) { group in
+          if officialGroups.count > 1 {
+            Text(group.nativeDisplayName)
+              .font(.system(size: 12, weight: .semibold)).foregroundStyle(DSHTheme.ink)
+          }
+          ForEach(group.models) { model in
+            ModelSelectRow(groupID: group.id, model: model)
+          }
         }
       }
 
-      Button("刷新 Host 模型目录", action: harness.refreshModelConfiguration)
-        .buttonStyle(.dshSecondary)
-
-      // 官方与自定义分开：自定义配置的 Key 内嵌在各自的配置行里；这里
-      // 只留不属于任何自定义配置的官方凭据。LOCAL_ 前缀是本机管道凭据
-      // （两端读同一引用，值改成什么都自洽），不需要用户管理，不展示。
-      let officialRefs = officialCredentialRefs
-      if !officialRefs.isEmpty {
-        VStack(alignment: .leading, spacing: DSHSpace.s2) {
-          Text("官方配置").dshSectionLabel()
-          ForEach(officialRefs, id: \.self) { reference in
-            CredentialQuickEntry(reference: reference)
-          }
-          Text(harness.hasCredential ? "已检测到可用凭据。" : "尚未检测到可用凭据；粘贴对应引用的 API Key 并保存。")
-            .font(.caption)
-            .foregroundStyle(harness.hasCredential ? DSHTheme.accent : DSHTheme.warm)
-        }
-      }
-
-      // 自定义配置 lives inline under the model picker now — switching and
-      // endpoint management are one surface, not a separate tab.
       CustomConfigurationSettingsSection()
     }
   }
@@ -284,6 +262,41 @@ private struct ModelSettingsSection: View {
     return harness.credentialStates.keys
       .filter { !customRefs.contains($0) && !$0.hasPrefix("LOCAL_") }
       .sorted()
+  }
+}
+
+/// 点击整行即为当前会话选用该模型；当前使用的行带高亮勾。
+private struct ModelSelectRow: View {
+  @EnvironmentObject private var harness: HarnessController
+  let groupID: String
+  let model: DSHModelCatalogModel
+
+  private var isCurrent: Bool { harness.provider == groupID && harness.model == model.id }
+
+  var body: some View {
+    Button {
+      harness.selectCurrentModel(provider: groupID, model: model.id)
+    } label: {
+      HStack(spacing: DSHSpace.s3) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(model.name).font(.system(size: 13)).foregroundStyle(DSHTheme.ink)
+          if let description = model.description, !description.isEmpty {
+            Text(description)
+              .font(.system(size: 11)).foregroundStyle(DSHTheme.inkFaint)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        Spacer(minLength: DSHSpace.s3)
+        if isCurrent {
+          Label("当前使用", systemImage: "checkmark.circle.fill")
+            .font(.system(size: 11)).foregroundStyle(DSHTheme.accent)
+        } else {
+          Text("使用").font(.system(size: 11)).foregroundStyle(DSHTheme.inkSoft)
+        }
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
   }
 }
 
@@ -430,7 +443,21 @@ private struct CustomProviderRow: View {
         detailRow("API 地址", profile.string("baseURL") ?? "—")
         detailRow("协议", profile.string("api") ?? "—")
         let models = profile.modelIDs
-        detailRow("模型", models.isEmpty ? "—" : models.joined(separator: "、"))
+        if models.isEmpty {
+          detailRow("模型", "—")
+        } else {
+          // 模型胶囊点击即为当前会话选用，与官方组的模型行同一语义。
+          HStack(alignment: .firstTextBaseline, spacing: DSHSpace.s2) {
+            Text("模型")
+              .font(.system(size: 11)).foregroundStyle(DSHTheme.inkFaint)
+              .frame(width: 56, alignment: .leading)
+            HStack(spacing: DSHSpace.s1) {
+              ForEach(models, id: \.self) { id in
+                modelChip(id)
+              }
+            }
+          }
+        }
         // 这份配置自己的 Key 就地填写——官方与自定义的凭据不再混在一张
         // 全局列表里。
         if let keyRef = profile.apiKeyEnv {
@@ -451,6 +478,21 @@ private struct CustomProviderRow: View {
         .lineLimit(1).truncationMode(.middle)
         .textSelection(.enabled)
     }
+  }
+
+  private func modelChip(_ id: String) -> some View {
+    let isCurrent = harness.provider == provider.provider && harness.model == id
+    return Button {
+      harness.selectCurrentModel(provider: provider.provider, model: id)
+    } label: {
+      Text(id)
+        .font(.system(size: 11, design: .monospaced))
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(isCurrent ? DSHTheme.accentSoft : DSHTheme.surfaceTint, in: Capsule())
+        .foregroundStyle(isCurrent ? DSHTheme.accent : DSHTheme.inkSoft)
+    }
+    .buttonStyle(.plain)
+    .help(isCurrent ? "当前会话正在使用" : "为当前会话选用此模型")
   }
 }
 
