@@ -1499,6 +1499,21 @@ final class HarnessController: ObservableObject {
     draft = ""
     draftImage = nil
     let preview = image == nil ? text : "\(text)\n[图片附件：\(image!.url.lastPathComponent)]"
+    // First prompt of a session carries the imported-folder context: the
+    // session's Agent only knows its cwd, but every file tool accepts
+    // absolute paths — naming the other registered folders is what actually
+    // lets the model read them. Sent once (the session keeps it in context),
+    // shown to the user as typed.
+    var outgoingText = text
+    if !sessions[sessionIndex].messages.contains(where: { $0.role == .user }) {
+      let current = workspace?.standardizedFileURL.path
+      let extras = hostWorkspaces
+        .filter { URL(fileURLWithPath: $0.path).standardizedFileURL.path != current }
+        .map { "\($0.title)：\($0.path)" }
+      if !extras.isEmpty {
+        outgoingText += "\n\n[工作区上下文] 除当前目录外，这些本地文件夹也已引入，可用绝对路径读取：\n" + extras.joined(separator: "\n")
+      }
+    }
     sessions[sessionIndex].messages.append(Message(role: .user, text: preview))
     // No placeholder assistant bubble here — `assistant/chunk` (above) opens
     // a fresh bubble itself on the first delta; a synchronous placeholder
@@ -1510,7 +1525,7 @@ final class HarnessController: ObservableObject {
     status = "持久 Host 正在处理"
     Task {
       do {
-        var content: [DSHPromptContent] = text.isEmpty ? [] : [.text(text)]
+        var content: [DSHPromptContent] = outgoingText.isEmpty ? [] : [.text(outgoingText)]
         if let image, let bytes = try? Data(contentsOf: image.url) { content.append(.image(data: bytes.base64EncodedString(), mediaType: image.mediaType, name: image.url.lastPathComponent)) }
         try await hostClient.prompt(sessionId: hostSessionID, content: content)
         await MainActor.run { self.status = "已交给持久 Host；等待事件流接入" }

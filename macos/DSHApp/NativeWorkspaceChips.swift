@@ -35,13 +35,15 @@ struct WorkspaceChips: View {
       }
       .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
 
-      // Imported folders sit beside it as their own chips; click to switch.
+      // Imported folders sit beside it as passive context chips — they show
+      // what the session can reach, not switch targets (switching lives in
+      // the active chip's menu). Right-click removes one from the registry.
       ForEach(otherWorkspaces.prefix(compact ? 2 : 4)) { workspace in
-        Button(action: { harness.registerWorkspace(URL(fileURLWithPath: workspace.path, isDirectory: true)) }) {
-          chipLabel(icon: "folder", text: workspace.title)
-        }
-        .buttonStyle(.plain)
-        .help("切换到 \(workspace.path)")
+        chipLabel(icon: "folder", text: workspace.title)
+          .help(workspace.path)
+          .contextMenu {
+            Button("从列表移除", role: .destructive) { harness.deleteWorkspace(workspace) }
+          }
       }
 
       // Branch chip — only for git workspaces: pick a branch (checkout) or
