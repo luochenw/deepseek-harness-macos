@@ -2601,9 +2601,12 @@ private struct Composer: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { editorContentHeight = $0 }
           TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).scrollContentBackground(.hidden)
             .focused($editorFocused)
-            // The editor's own scroll view: thin overlay scroller, never the
-            // always-on gutter bar (background placement — see NativeScrollbars).
-            .dshThinScrollers()
+            // No scroller on the composer at all — below the max height the
+            // box grows instead of scrolling, so a bar has nothing to say;
+            // past the max, wheel/trackpad still scroll. Enforced per bounds
+            // change because AppKit re-adds the legacy bar on every layout
+            // under "始终显示滚动条" (see NativeScrollbars).
+            .dshNoTextScrollers()
             // 回车直接发送；Shift+回车换行。Intercepted before the newline is
             // inserted, so a sent draft doesn't leave a stray empty line.
             .onKeyPress(.return, phases: .down) { press in
@@ -2728,6 +2731,11 @@ private struct StatusStrip: View {
           Text("↑\(Self.compact(usage.totalInputTokens)) ↓\(Self.compact(usage.outputTokens))")
             .foregroundStyle(DSHTheme.inkFaint)
             .help("会话累计 token：输入（含缓存读写）↑ / 输出 ↓")
+          if usage.totalInputTokens > 0 {
+            Text("命中 \(Int((Double(usage.cacheReadTokens) / Double(usage.totalInputTokens) * 100).rounded()))%")
+              .foregroundStyle(DSHTheme.inkFaint)
+              .help("提示缓存命中率：缓存读 \(Self.compact(usage.cacheReadTokens)) / 总输入 \(Self.compact(usage.totalInputTokens))")
+          }
         }
         if let stats = harness.sessionStats, stats.turns > 0 {
           Text("\(stats.turns) 轮 · \(stats.steps) 步")
