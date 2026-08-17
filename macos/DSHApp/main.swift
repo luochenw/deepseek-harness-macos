@@ -354,7 +354,13 @@ final class HarnessController: ObservableObject {
   /// default page's first message — gates duplicate sends until it resolves.
   private var isCreatingFirstSession = false
   let attachmentStore = DSHAttachmentStore()
-  private let nativeAlerts = NativeAlerts()
+  // Internal, not private: the voice-dispatch extension
+  // (DSHVoiceDispatch.swift) posts completion/approval notifications.
+  let nativeAlerts = NativeAlerts()
+  /// Wake-dispatched background sessions: sessionId → short task label.
+  /// Their mux events are intercepted for completion notification instead
+  /// of being dropped with other non-current sessions.
+  @Published var voiceTaskSessions: [String: String] = [:]
   var hostClientForAttachments: DSHHostClient? { hostClient }
 
   private var hostRuntime: DSHHostRuntime?
@@ -575,6 +581,8 @@ final class HarnessController: ObservableObject {
         applyLiveSubagentEvent(event)
       } else if sessionID == hostCurrentSessionID {
         applyLiveEvent(event, view: frame["view"] as? [String: Any])
+      } else if voiceTaskSessions[sessionID] != nil {
+        handleVoiceTaskEvent(sessionID: sessionID, event: event)
       }
     case "session/projection":
       guard let sessionId = frame["sessionId"] as? String, sessionId == hostCurrentSessionID,
@@ -2996,8 +3004,15 @@ private struct Composer: View {
                 harness.draft = base
                 return
               }
+              // 唤醒 = 派活：任务进独立新会话后台执行（工作区按话里
+              // 提到的名字判定，未提及用当前工作区），不占用当前对话
+              // 和输入框；完成/待审批走系统通知。手动听写照旧只填入。
+              if viaWake, VoiceSettings.wakeAutoSend {
+                harness.draft = base
+                harness.dispatchVoiceTask(text)
+                return
+              }
               harness.draft = base + (base.isEmpty ? "" : " ") + text
-              if viaWake, VoiceSettings.wakeAutoSend, harness.canSend { harness.send() }
             })
           Spacer()
           ComposerModelMenu()
