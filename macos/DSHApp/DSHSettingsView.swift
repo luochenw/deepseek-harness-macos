@@ -271,24 +271,49 @@ private struct ModelSettingsSection: View {
   }
 }
 
-/// One credential reference row: masked entry plus save, with the configured
-/// badge reflecting the Host's credentials service state.
+/// One credential reference row: the CURRENT value is read back and prefilled
+/// in password style (eye button reveals it) — a bare configured badge wasn't
+/// enough to verify what's actually stored. Save arms only on a change.
 private struct CredentialQuickEntry: View {
   @EnvironmentObject private var harness: HarnessController
   let reference: String
   @State private var value = ""
+  @State private var stored = ""
+  @State private var reveal = false
+
+  private var trimmed: String { value.trimmingCharacters(in: .whitespacesAndNewlines) }
+
   var body: some View {
     HStack(spacing: DSHSpace.s2) {
       Text(reference)
         .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(DSHTheme.ink)
         .lineLimit(1).truncationMode(.middle)
         .frame(width: 168, alignment: .leading)
-      SecureField("粘贴 API Key", text: $value).dshField()
+      Group {
+        if reveal {
+          TextField("粘贴 API Key", text: $value)
+        } else {
+          SecureField("粘贴 API Key", text: $value)
+        }
+      }
+      .dshField()
+      Button { reveal.toggle() } label: {
+        Image(systemName: reveal ? "eye.slash" : "eye")
+      }
+      .buttonStyle(.dshGhost)
+      .help(reveal ? "隐藏" : "显示明文")
       let configured = harness.credentialStates[reference]?.configured == true
       DSHBadge(text: configured ? "已配置" : "未配置", tone: configured ? .accent : .warm)
-      Button("保存") { harness.saveCredential(ref: reference, value: value); value = "" }
-        .buttonStyle(.dshSecondary)
-        .disabled(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      Button("保存") {
+        harness.saveCredential(ref: reference, value: trimmed)
+        stored = trimmed
+      }
+      .buttonStyle(.dshSecondary)
+      .disabled(trimmed.isEmpty || trimmed == stored)
+    }
+    .onAppear {
+      stored = harness.credentialValue(ref: reference) ?? ""
+      value = stored
     }
   }
 }
@@ -361,14 +386,15 @@ private struct CustomProviderRow: View {
   let edit: () -> Void
 
   private var isLegacyRelay: Bool { provider.provider == "relay" }
+  private var profile: [String: DSHJSONValue]? { harness.providerProfile(provider) }
   private var credentialConfigured: Bool {
     guard let reference = harness.providerCredentialReference(provider) else { return false }
     return harness.credentialStates[reference]?.configured == true
   }
 
   var body: some View {
-    HStack(spacing: DSHSpace.s3) {
-      VStack(alignment: .leading, spacing: 2) {
+    HStack(alignment: .top, spacing: DSHSpace.s3) {
+      VStack(alignment: .leading, spacing: DSHSpace.s1) {
         Text(isLegacyRelay ? "自定义配置" : provider.displayName)
           .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(DSHTheme.ink)
@@ -376,6 +402,14 @@ private struct CustomProviderRow: View {
           .font(.caption)
           .foregroundStyle(DSHTheme.inkFaint)
           .lineLimit(1)
+        // 当前配置直接可见（与编辑抽屉同源），不用点进去才知道配了什么。
+        if let profile {
+          detailRow("API 地址", profile.string("baseURL") ?? "—")
+          detailRow("协议", profile.string("api") ?? "—")
+          let models = profile.modelIDs
+          detailRow("模型", models.isEmpty ? "—" : models.joined(separator: "、"))
+          if let keyRef = profile.apiKeyEnv { detailRow("Key 引用", keyRef) }
+        }
       }
       Spacer()
       DSHBadge(text: credentialConfigured ? "已配置" : "待填写 Key", tone: credentialConfigured ? .accent : .warm)
@@ -383,6 +417,18 @@ private struct CustomProviderRow: View {
         .buttonStyle(.dshSecondary)
     }
     .padding(.vertical, DSHSpace.s2)
+  }
+
+  private func detailRow(_ label: String, _ value: String) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: DSHSpace.s2) {
+      Text(label)
+        .font(.system(size: 11)).foregroundStyle(DSHTheme.inkFaint)
+        .frame(width: 56, alignment: .leading)
+      Text(value)
+        .font(.system(size: 11, design: .monospaced)).foregroundStyle(DSHTheme.inkSoft)
+        .lineLimit(1).truncationMode(.middle)
+        .textSelection(.enabled)
+    }
   }
 }
 
