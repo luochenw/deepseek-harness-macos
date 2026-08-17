@@ -52,6 +52,9 @@ enum VoiceEngineError: LocalizedError {
 /// loopback endpoints) with no Host-side meaning.
 enum VoiceSettings {
   static let wakeEnabledKey = "dsh.voice.wakeEnabled"
+  /// Set the first time wake gets auto-enabled after a successful talk
+  /// session — so an explicit later opt-out is never overridden again.
+  static let wakeAutoEnabledOnceKey = "dsh.voice.wakeAutoEnabledOnce"
   static let wakePhraseKey = "dsh.voice.wakePhrase"
   static let engineKey = "dsh.voice.engine" // "apple" (default) | "local"
   static let sttEndpointKey = "dsh.voice.sttEndpoint"

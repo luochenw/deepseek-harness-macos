@@ -98,9 +98,21 @@ struct VoiceInputButton: View {
     }
     // Covers both the settings pane and the context menu writing the defaults.
     .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in syncWakeListener() }
-    .onChange(of: voice.state) { _, newState in
+    .onChange(of: voice.state) { oldState, newState in
       switch newState {
-      case .idle, .denied: wake.resume() // talk session over; no-op unless suspended
+      case .idle, .denied:
+        // Using the mic IS the opt-in: after the first successful talk
+        // session, wake-word listening turns on by itself — no separate
+        // right-click step. An explicit opt-out afterwards sticks (the
+        // once-marker keeps this from re-arming).
+        if newState == .idle, oldState == .listening || oldState == .transcribing,
+           !VoiceSettings.wakeEnabled, !UserDefaults.standard.bool(forKey: VoiceSettings.wakeAutoEnabledOnceKey) {
+          UserDefaults.standard.set(true, forKey: VoiceSettings.wakeAutoEnabledOnceKey)
+          UserDefaults.standard.set(true, forKey: VoiceSettings.wakeEnabledKey)
+          // UserDefaults.didChangeNotification → syncWakeListener() starts
+          // the resident listener now that the talk session freed the mic.
+        }
+        wake.resume() // talk session over; no-op unless suspended
       default: break
       }
     }
