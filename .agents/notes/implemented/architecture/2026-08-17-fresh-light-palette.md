@@ -1,6 +1,6 @@
 # Agent Note: 清新明亮浅色主题（取消深色外观）
 
-Status: implemented — 用户第三次反馈配色仍然"太颜色/太重"，并点名不要深色底和黑色字
+Status: implemented — 同日被 2026-08-17-jelly-sea-theme.md 部分推翻：用户澄清要的是"果冻海"质感且"可以有深色"，强制浅色与蓝白色板被替换；"深色底不配深色字"的硬规则保留
 
 ## Problem
 

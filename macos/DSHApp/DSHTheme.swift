@@ -1,60 +1,84 @@
 import SwiftUI
 import AppKit
 
-/// Fresh light-blue design tokens — the single source of color/radius/spacing
+/// Jelly-sea design tokens — the single source of color/radius/spacing
 /// for the whole app. See
-/// .agents/notes/implemented/architecture/2026-08-17-fresh-light-palette.md.
+/// .agents/notes/implemented/architecture/2026-08-17-jelly-sea-theme.md.
 /// Every view should read colors/radii/spacing from here rather than
 /// inlining new literals, so the palette stays consistent across the
 /// ~40-file surface it's applied to.
 ///
-/// Light-only by design: the app forces `.aqua` appearance at launch
-/// (DSHNativeApp.init), so there is exactly one palette here — airy
-/// near-white surfaces with a whisper of cool blue, slate-blue text
-/// (deliberately not pure black), and a clear sky-blue accent reserved
-/// for the few spots that carry real state (primary action, running
-/// indicator, warning/error), not for decoration.
+/// The look is "果冻海" — translucent, clear, luminous. Both appearances
+/// share the same construction: an aqua sea-water canvas at the bottom,
+/// and every surface above it is a *translucent* wash (alpha < 1) so
+/// layers glow through each other like jelly. Light mode is bright
+/// lagoon water; dark mode is deep-sea glass. Hard rule carried over
+/// from user feedback: a dark background always pairs with light text —
+/// never black-on-dark.
 enum DSHTheme {
-  // MARK: Text — slate blue, not black.
+  /// Builds a `Color` that redraws itself from light/dark sRGBA tuples as
+  /// the system appearance changes — no Asset Catalog needed (this project
+  /// deliberately has no Xcode project; see AGENTS.md). The alpha channel
+  /// is load-bearing here: translucency is what makes the jelly look.
+  private static func dynamic(light: (Double, Double, Double, Double), dark: (Double, Double, Double, Double)) -> Color {
+    Color(NSColor(name: nil) { appearance in
+      let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+      let c = isDark ? dark : light
+      return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: c.3)
+    })
+  }
 
-  static let ink = Color(red: 0.169, green: 0.227, blue: 0.286)
-  static let inkSoft = Color(red: 0.361, green: 0.435, blue: 0.502)
-  static let inkFaint = Color(red: 0.561, green: 0.631, blue: 0.690)
+  // MARK: Text — deep sea-teal in light mode, pale aqua-white in dark.
 
-  // MARK: Surfaces — canvas < surface < surfaceTint < surfaceTint2 forms the
-  // depth ladder regions are told apart by; nothing here is a border.
+  static let ink = dynamic(light: (0.102, 0.239, 0.263, 1), dark: (0.867, 0.949, 0.937, 1))
+  static let inkSoft = dynamic(light: (0.318, 0.459, 0.482, 1), dark: (0.627, 0.761, 0.745, 1))
+  static let inkFaint = dynamic(light: (0.529, 0.647, 0.663, 1), dark: (0.451, 0.576, 0.561, 1))
 
-  static let canvas = Color(red: 0.973, green: 0.984, blue: 0.992)
-  static let surface = Color(red: 1.0, green: 1.0, blue: 1.0)
-  static let surfaceTint = Color(red: 0.945, green: 0.965, blue: 0.980)
-  static let surfaceTint2 = Color(red: 0.906, green: 0.941, blue: 0.965)
+  // MARK: Surfaces — an opaque sea canvas at the bottom, then translucent
+  // washes stacked on top. canvas < surface < surfaceTint < surfaceTint2
+  // is still the depth ladder; depth now reads as "more jelly layers",
+  // and stacked layers deepen naturally because of the alpha.
+
+  static let canvas = dynamic(light: (0.918, 0.980, 0.973, 1), dark: (0.043, 0.125, 0.141, 1))
+  static let surface = dynamic(light: (1.0, 1.0, 1.0, 0.72), dark: (1.0, 1.0, 1.0, 0.07))
+  static let surfaceTint = dynamic(light: (0.804, 0.945, 0.937, 0.55), dark: (0.290, 0.871, 0.824, 0.08))
+  static let surfaceTint2 = dynamic(light: (0.729, 0.914, 0.902, 0.65), dark: (0.290, 0.871, 0.824, 0.13))
   /// Editable controls need stronger separation than passive settings rows.
-  static let fieldFill = Color(red: 0.992, green: 0.996, blue: 1.0)
-  static let fieldStroke = Color(red: 0.655, green: 0.745, blue: 0.816)
+  static let fieldFill = dynamic(light: (1.0, 1.0, 1.0, 0.85), dark: (1.0, 1.0, 1.0, 0.06))
+  static let fieldStroke = dynamic(light: (0.573, 0.769, 0.749, 1), dark: (0.290, 0.871, 0.824, 0.35))
 
-  /// Sidebar background — a hair off `canvas`, closer to a recessed neutral
-  /// panel than a "colored block".
-  static let sidebarBg = Color(red: 0.953, green: 0.973, blue: 0.984)
-  static let sidebarSelected = Color(red: 0.886, green: 0.933, blue: 0.965)
+  /// Sidebar background — a thinner wash than content cards, so the sea
+  /// canvas shows through strongest at the window's edge.
+  static let sidebarBg = dynamic(light: (1.0, 1.0, 1.0, 0.40), dark: (1.0, 1.0, 1.0, 0.03))
+  static let sidebarSelected = dynamic(light: (0.678, 0.898, 0.882, 0.75), dark: (0.290, 0.871, 0.824, 0.18))
 
-  // MARK: Accent — one clear sky-blue family. `accent` is the text/icon
-  // step (deep enough to read on the light washes), `accentBright` is
-  // reserved for running/selected indicators, `accentWash` is the light
-  // fill behind the primary action — filled controls stay light-bodied,
-  // only their label carries the color.
+  /// The sea itself — a soft vertical drift behind everything. Views that
+  /// paint the window floor should prefer this over flat `canvas`.
+  static let canvasGradient = LinearGradient(
+    colors: [
+      dynamic(light: (0.941, 0.992, 0.984, 1), dark: (0.055, 0.153, 0.169, 1)),
+      dynamic(light: (0.851, 0.957, 0.961, 1), dark: (0.031, 0.098, 0.118, 1)),
+    ],
+    startPoint: .top, endPoint: .bottom)
 
-  static let accent = Color(red: 0.055, green: 0.435, blue: 0.663)
-  static let accentBright = Color(red: 0.153, green: 0.627, blue: 0.871)
-  /// Light sky fill for the primary action — pairs with `accent` foreground.
-  static let accentWash = Color(red: 0.812, green: 0.914, blue: 0.969)
-  static let accentSoft = Color(red: 0.890, green: 0.953, blue: 0.988)
+  // MARK: Accent — clear lagoon turquoise. `accent` is the text/icon step
+  // (deep enough to read on the light washes), `accentBright` is reserved
+  // for running/selected indicators, `accentWash` is the translucent
+  // aqua fill behind the primary action — filled controls stay light-
+  // bodied, only their label carries the color.
+
+  static let accent = dynamic(light: (0.039, 0.494, 0.463, 1), dark: (0.427, 0.898, 0.847, 1))
+  static let accentBright = dynamic(light: (0.173, 0.773, 0.722, 1), dark: (0.376, 0.925, 0.871, 1))
+  /// Translucent aqua fill for the primary action — pairs with `accent` foreground.
+  static let accentWash = dynamic(light: (0.565, 0.898, 0.859, 0.60), dark: (0.290, 0.871, 0.824, 0.20))
+  static let accentSoft = dynamic(light: (0.702, 0.933, 0.906, 0.45), dark: (0.290, 0.871, 0.824, 0.12))
 
   // MARK: Semantic — attention / destructive, kept distinct from the accent hue.
 
-  static let warm = Color(red: 0.820, green: 0.573, blue: 0.196)
-  static let warmSoft = Color(red: 0.996, green: 0.953, blue: 0.878)
-  static let coral = Color(red: 0.851, green: 0.416, blue: 0.369)
-  static let coralSoft = Color(red: 0.992, green: 0.925, blue: 0.914)
+  static let warm = dynamic(light: (0.851, 0.604, 0.169, 1), dark: (0.937, 0.757, 0.404, 1))
+  static let warmSoft = dynamic(light: (0.980, 0.878, 0.596, 0.45), dark: (0.937, 0.757, 0.404, 0.14))
+  static let coral = dynamic(light: (0.886, 0.439, 0.373, 1), dark: (0.945, 0.604, 0.541, 1))
+  static let coralSoft = dynamic(light: (0.973, 0.749, 0.702, 0.40), dark: (0.945, 0.604, 0.541, 0.14))
 }
 
 /// Four-step corner radius scale — every rounded shape in the app should

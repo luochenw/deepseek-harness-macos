@@ -14,12 +14,6 @@ private let defaultModel = "gpt-5.6-terra"
 struct DSHNativeApp: App {
   @StateObject private var controller = HarnessController()
 
-  init() {
-    // 全 app 强制浅色外观（含 sheet/alert）：清新明亮浅色主题，深色模式
-    // 不再支持 — 见 .agents/notes/implemented/architecture/2026-08-17-fresh-light-palette.md
-    NSApplication.shared.appearance = NSAppearance(named: .aqua)
-  }
-
   var body: some Scene {
     WindowGroup(appName) {
       ContentView()
@@ -1575,12 +1569,13 @@ struct ContentView: View {
         Composer()
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(DSHTheme.canvas)
       if harness.showDetails {
         DetailsPanel().frame(width: 330).background(DSHTheme.surfaceTint)
       }
     }
-    .background(DSHTheme.canvas)
+    // 果冻海：窗口底是一整片海水渐变，上面的侧栏/卡片全是半透明薄层，
+    // 让海水透出来 — 见 2026-08-17-jelly-sea-theme.md
+    .background(DSHTheme.canvasGradient)
     .sheet(isPresented: $harness.showSettings) { SettingsView() }
     .sheet(isPresented: $harness.showSettingsEditor) {
       if let namespace = harness.selectedSettingsNamespace { SettingsEditorView(namespace: namespace) }
