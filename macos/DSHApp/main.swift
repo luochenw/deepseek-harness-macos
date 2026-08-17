@@ -732,6 +732,16 @@ final class HarnessController: ObservableObject {
       retryNotice = "\(provider) 请求失败，正在第 \(retry) 次重试（等待 \(delay)ms）"
     case "llm/retry-started":
       retryNotice = nil
+    case "turn/start":
+      // The Host opens a fresh turn for every model round — including ones
+      // no local send() initiated: a queued followup draining, a goal round
+      // driver advancing, plan-mode confirmation. Arm the running flag from
+      // the stream so those turns animate and offer the stop button; before
+      // this, only send() ever set it, and a Host-initiated turn rendered
+      // the settled (static) tail while streaming.
+      isRunning = true
+      sessions[index].isRunning = true
+      runNotice = nil
     case "turn/end":
       let kind = (data["reason"] as? [String: Any])?["kind"] as? String
       switch kind {
@@ -786,6 +796,8 @@ final class HarnessController: ObservableObject {
       if let text = liveMessageText(data["message"]) { subagentTranscript?.messages.append(Message(role: .assistant, text: text)) }
     case "user/message":
       if let text = liveMessageText(data["message"]) { subagentTranscript?.messages.append(Message(role: .user, text: text)) }
+    case "turn/start":
+      subagentTranscript?.isRunning = true
     case "turn/end":
       subagentTranscript?.isRunning = false
     default:
@@ -1153,6 +1165,12 @@ final class HarnessController: ObservableObject {
     )
     sessions.insert(local, at: 0)
     selectedSessionID = local.id
+    // Attaching to a session that is already mid-turn (app relaunch, or
+    // opening a running session from the sidebar) must arm the *global*
+    // running flag too — the composer's stop button and the transcript
+    // tail's animation both read it, and until now only a local send()
+    // ever set it, so a resumed run showed the settled UI while streaming.
+    isRunning = summary.running
     todos = summary.projections?.values.todos ?? []
     hostPlanActive = summary.projections?.values.plan?.active ?? false
     goal = summary.projections?.values.goal
