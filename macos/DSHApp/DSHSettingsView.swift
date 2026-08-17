@@ -103,23 +103,42 @@ struct SettingsView: View {
   }
 }
 
+// 真正"通用"的客户端行为开关。默认 Agent preset 的选择挪回「Agent 预设」
+// 页（此前两处展示同一状态，改哪个生效说不清）。
 private struct GeneralSettingsSection: View {
-  @EnvironmentObject private var harness: HarnessController
+  @ObservedObject private var bubble = FloatingBubbleManager.shared
+  @AppStorage(AppPrefs.enterToSendKey) private var enterToSend = true
+  @AppStorage(AppPrefs.notifyTurnEndKey) private var notifyTurnEnd = true
+  @AppStorage(AppPrefs.notifyAttentionKey) private var notifyAttention = true
 
   var body: some View {
     VStack(alignment: .leading, spacing: DSHSpace.s3) {
-      Text("新会话").dshSectionLabel()
-      Picker("默认 Agent preset", selection: $harness.preset) {
-        ForEach(HarnessController.Preset.allCases) { preset in
-          Text(preset.label).tag(preset)
-        }
-      }
-      .onChange(of: harness.preset) { _, preset in harness.setPreset(preset) }
+      Text("窗口").dshSectionLabel()
+      Toggle("显示悬浮圈", isOn: Binding(
+        get: { bubble.enabled },
+        set: { if $0 != bubble.enabled { bubble.toggle() } }
+      ))
+      Text("置顶的小圆窗，随时看到会话运行状态；后台完成会亮红点。快捷键 ⌥⌘Y。")
+        .font(.caption)
+        .foregroundStyle(DSHTheme.inkFaint)
 
-      Text("当前会话保持原有 preset；新会话使用新的默认配置。")
+      Text("通知").dshSectionLabel()
+      Toggle("回合完成时发送系统通知", isOn: $notifyTurnEnd)
+      Toggle("需要审批或提问时提醒", isOn: $notifyAttention)
+      Text("横幅只在 app 不在前台时弹出；菜单栏图标始终显示实时状态，不受此开关影响。")
+        .font(.caption)
+        .foregroundStyle(DSHTheme.inkFaint)
+
+      Text("输入").dshSectionLabel()
+      Toggle("回车直接发送", isOn: $enterToSend)
+      Text(enterToSend
+        ? "Shift+回车换行。关闭后：回车换行，⌘回车发送。"
+        : "当前：回车换行，⌘回车发送。")
         .font(.caption)
         .foregroundStyle(DSHTheme.inkFaint)
     }
+    .toggleStyle(.switch)
+    .controlSize(.small)
   }
 }
 

@@ -544,8 +544,8 @@ final class VoiceController: NSObject, ObservableObject {
   /// don't truncate mid-sentence.
   private var silenceEndpoint: TimeInterval { VoiceSettings.silenceEndpoint }
   /// 完全没等到语音的最长等待：超时整段放弃并恢复输入框。比静音定稿窗口
-  /// 长得多——热身空分段不算语音，真实语音一到就换成静音定稿计时。
-  private let noSpeechWindow: TimeInterval = 8.0
+  /// 长——热身空分段不算语音，真实语音一到就换成静音定稿计时。
+  private let noSpeechWindow: TimeInterval = 5.0
 
   init(transcriber: VoiceTranscriber? = nil, synthesizer: VoiceSpeechSynthesizer? = nil) {
     self.enginesInjected = transcriber != nil || synthesizer != nil

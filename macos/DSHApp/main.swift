@@ -2998,6 +2998,8 @@ private struct Composer: View {
             .onKeyPress(.return, phases: .down) { press in
               if press.modifiers.contains(.shift) { return .ignored }
               if let entry = selectedPaletteEntry { harness.pickSlashEntry(entry); return .handled }
+              // 回车发送可关（设置→通用）：关掉后回车换行，⌘回车发送。
+              if !AppPrefs.enterToSend, !press.modifiers.contains(.command) { return .ignored }
               guard harness.canSend else { return .ignored }
               harness.send()
               return .handled
@@ -3098,7 +3100,7 @@ private struct Composer: View {
           } else {
             Button(action: harness.send) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
               .buttonStyle(.dshPrimary).disabled(!harness.canSend)
-              .help("发送（回车）")
+              .help(AppPrefs.enterToSend ? "发送（回车）" : "发送（⌘回车）")
           }
         }
       }

@@ -61,23 +61,26 @@ final class NativeAlerts: NSObject {
     UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
   }
 
+  // 横幅可在 设置→通用 里关掉（AppPrefs）；菜单栏状态图标不受开关
+  // 影响，始终反映实时状态。
+
   func notifyApprovalNeeded(toolName: String) {
     setBadge(running: true, needsAttention: true)
-    guard !NSApp.isActive else { return }
+    guard !NSApp.isActive, AppPrefs.notifyAttention else { return }
     NSApp.requestUserAttention(.informationalRequest)
     post(id: "approval", title: "DSH 需要你的许可", body: "请求执行：\(toolName)")
   }
 
   func notifyQuestionNeeded() {
     setBadge(running: true, needsAttention: true)
-    guard !NSApp.isActive else { return }
+    guard !NSApp.isActive, AppPrefs.notifyAttention else { return }
     NSApp.requestUserAttention(.informationalRequest)
     post(id: "question", title: "DSH 有问题要问你", body: "点击查看并回答")
   }
 
   func notifyTurnFinished(summary: String) {
     setBadge(running: false, needsAttention: false)
-    guard !NSApp.isActive else { return }
+    guard !NSApp.isActive, AppPrefs.notifyTurnEnd else { return }
     post(id: "turn-end", title: "DSH 已完成", body: summary)
   }
 }
