@@ -1814,6 +1814,7 @@ private struct Sidebar: View {
                 ForEach(harness.sessions) { session in SidebarLocalSessionRow(session: session) }
               }
             }
+            .dshHiddenScrollers()
           }
           .scrollIndicators(.hidden)
         }
@@ -1888,32 +1889,75 @@ private struct SidebarSessionRow: View {
       isActive: harness.hostCurrentSessionID == session.sessionId,
       action: { harness.openHostSession(session) }
     )
-    // Hover-revealed ⋯ trigger for the row actions; the overlay Menu owns
-    // its own clicks, so opening it never also opens the session. Right-click
-    // context menu stays as the keyboard-free alternative.
+    // Hover-revealed ⋯ trigger; clicking opens an app-styled action panel
+    // (popover with our own rows) rather than a system NSMenu, which can't
+    // be themed. Right-click keeps a system context menu as a shortcut.
     .overlay(alignment: .trailing) {
-      if hovering {
-        Menu {
-          rowActions
-        } label: {
+      if hovering || showActions {
+        Button(action: { showActions.toggle() }) {
           Image(systemName: "ellipsis")
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(DSHTheme.inkSoft)
             .frame(width: 24, height: 22)
             .background(DSHTheme.surface, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .buttonStyle(.plain)
+        .popover(isPresented: $showActions, arrowEdge: .bottom) {
+          SessionActionPanel(session: session) { showActions = false }
+        }
         .padding(.trailing, 6)
       }
     }
     .onHover { hovering = $0 }
     .contextMenu { rowActions }
   }
+  @State private var showActions = false
   @ViewBuilder private var rowActions: some View {
     Button("创建分支") { harness.forkSession(session.sessionId) }
     Button("复制会话 ID") { harness.copySessionID(session.sessionId) }
     Divider()
     Button("删除", role: .destructive) { harness.deleteSession(session.sessionId) }
+  }
+}
+
+/// App-styled row-action panel for a sidebar session — same type scale,
+/// hover treatment, and palette as the rest of the chrome.
+private struct SessionActionPanel: View {
+  @EnvironmentObject var harness: HarnessController
+  let session: DSHSessionSummary
+  let dismiss: () -> Void
+  var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      PanelActionRow(icon: "arrow.triangle.branch", title: "创建分支") { dismiss(); harness.forkSession(session.sessionId) }
+      PanelActionRow(icon: "doc.on.doc", title: "复制会话 ID") { dismiss(); harness.copySessionID(session.sessionId) }
+      PanelActionRow(icon: "trash", title: "删除", destructive: true) { dismiss(); harness.deleteSession(session.sessionId) }
+    }
+    .padding(6)
+    .frame(width: 172)
+  }
+}
+
+private struct PanelActionRow: View {
+  let icon: String
+  let title: String
+  var destructive = false
+  let action: () -> Void
+  @State private var hovering = false
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 8) {
+        Image(systemName: icon).font(.system(size: 11.5)).frame(width: 16)
+        Text(title).font(.system(size: 12.5))
+        Spacer(minLength: 0)
+      }
+      .foregroundStyle(destructive ? DSHTheme.coral : DSHTheme.ink)
+      .padding(.horizontal, 8).padding(.vertical, 6)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .contentShape(Rectangle())
+      .background(hovering ? DSHTheme.sidebarSelected : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
   }
 }
 
@@ -2040,6 +2084,9 @@ private struct ConversationView: View {
             }
           }
         }.frame(maxWidth: .infinity).padding(DSHSpace.s6)
+          // AppKit-level removal too — .scrollIndicators(.hidden) alone
+          // still shows the thick legacy bar under "始终显示滚动条".
+          .dshHiddenScrollers()
       }
       // No visible scrollbar in the transcript (Claude Code / Codex style) —
       // the always-on system bar reads as chrome; scrolling still works.
