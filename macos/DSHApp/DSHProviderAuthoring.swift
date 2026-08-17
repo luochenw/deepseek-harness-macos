@@ -138,22 +138,60 @@ struct ProviderAuthoringView: View {
       return
     }
     let path = provider?.settingsPath ?? ["providers", normalizedRoute]
-    var profile: [String: DSHJSONPatchValue] = [
-      "baseURL": .string(baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
-      "api": .string(api),
-      "models": .array(modelIDs.map { .object(["id": .string($0)]) }),
-    ]
-    let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !name.isEmpty { profile["displayName"] = .string(name) }
+    let ops = profileOperations(path: path)
     let key = credential.trimmingCharacters(in: .whitespacesAndNewlines)
-    // Retain an existing reference when rotating nothing; its secret value stays
-    // exclusively behind the Host credential API.
-    if let existingRef = self.profile?.apiKeyEnv { profile["apiKeyEnv"] = .string(existingRef) }
-    if !key.isEmpty { profile["apiKeyEnv"] = .string(keyRef) }
-    harness.saveProviderProfile(namespace: namespace, path: path, profile: profile, credentialRef: key.isEmpty ? nil : keyRef, credentialValue: key) { result in
+    var profileOps = ops
+    if !key.isEmpty, profile?.apiKeyEnv != keyRef {
+      profileOps.append(.set(path: path + ["apiKeyEnv"], value: .string(keyRef)))
+    }
+    harness.saveProviderProfile(namespace: namespace, ops: profileOps, credentialRef: key.isEmpty ? nil : keyRef, credentialValue: key) { result in
       if case let .failure(saveError) = result { error = saveError.localizedDescription }
     }
     credential = ""
+  }
+
+  /// Existing profiles can carry gateway-specific fields the native form does
+  /// not expose. Update only the keys this form owns so those fields survive.
+  private func profileOperations(path: [String]) -> [DSHSettingsPathOperation] {
+    let normalizedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let modelsValue = DSHJSONPatchValue.array(modelIDs.map(modelPatchValue))
+
+    guard let profile else {
+      var created: [String: DSHJSONPatchValue] = [
+        "baseURL": .string(normalizedBaseURL),
+        "api": .string(api),
+        "models": modelsValue,
+      ]
+      if !normalizedDisplayName.isEmpty { created["displayName"] = .string(normalizedDisplayName) }
+      return [.set(path: path, value: .object(created))]
+    }
+
+    var ops: [DSHSettingsPathOperation] = []
+    if profile.string("baseURL") != normalizedBaseURL {
+      ops.append(.set(path: path + ["baseURL"], value: .string(normalizedBaseURL)))
+    }
+    if profile.string("api") != api {
+      ops.append(.set(path: path + ["api"], value: .string(api)))
+    }
+    if profile.modelIDs != modelIDs {
+      ops.append(.set(path: path + ["models"], value: modelsValue))
+    }
+    if normalizedDisplayName.isEmpty {
+      if profile.string("displayName") != nil { ops.append(.unset(path: path + ["displayName"])) }
+    } else if profile.string("displayName") != normalizedDisplayName {
+      ops.append(.set(path: path + ["displayName"], value: .string(normalizedDisplayName)))
+    }
+    return ops
+  }
+
+  private func modelPatchValue(_ id: String) -> DSHJSONPatchValue {
+    guard case let .array(values)? = profile?["models"],
+          let existing = values.first(where: { $0.object?["id"]?.string == id }),
+          case let .object(object) = existing else {
+      return .object(["id": .string(id)])
+    }
+    return .object(object.mapValues(\.patchValue))
   }
 }
 
@@ -171,5 +209,16 @@ extension DSHJSONValue {
   subscript(_ key: String) -> DSHJSONValue? {
     guard case let .object(object) = self else { return nil }
     return object[key]
+  }
+
+  var patchValue: DSHJSONPatchValue {
+    switch self {
+    case .string(let value): .string(value)
+    case .number(let value): .number(value)
+    case .bool(let value): .bool(value)
+    case .object(let value): .object(value.mapValues(\.patchValue))
+    case .array(let value): .array(value.map(\.patchValue))
+    case .null: .null
+    }
   }
 }

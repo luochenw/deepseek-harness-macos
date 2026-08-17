@@ -28,35 +28,42 @@ extension HarnessController {
   /// a nonempty credential through the write-only credentials API.
   func saveProviderProfile(
     namespace: DSHSettingsNamespace,
-    path: [String],
-    profile: [String: DSHJSONPatchValue],
+    ops: [DSHSettingsPathOperation],
     credentialRef: String?,
     credentialValue: String,
     completion: @escaping (Result<Void, Error>) -> Void,
   ) {
     guard let hostClient else { completion(.failure(NSError(domain: "DSH", code: 1, userInfo: [NSLocalizedDescriptionKey: "Host 未连接"]))); return }
-    // The editor owns this complete profile representation. Writing the profile
-    // at its directory path avoids leaving fields from an older draft behind.
+    let finish: () -> Void = {
+      self.status = "自定义配置已保存"
+      self.showProviderAuthoring = false
+      completion(.success(()))
+      self.refreshModelConfiguration()
+    }
+    let writeCredential: () -> Void = {
+      Task {
+        do {
+          if let credentialRef, !credentialValue.isEmpty {
+            try await hostClient.setCredential(ref: credentialRef, value: credentialValue)
+          }
+          await MainActor.run { finish() }
+        } catch {
+          await MainActor.run { completion(.failure(error)) }
+        }
+      }
+    }
+
+    guard !ops.isEmpty else {
+      writeCredential()
+      return
+    }
+
     mutateSettings(
       ns: namespace.ns,
-      ops: [DSHSettingsPathOperation.set(path, .object(profile))],
+      ops: ops,
       revision: namespace.revision,
       success: { _ in
-        Task {
-          do {
-            if let credentialRef, !credentialValue.isEmpty {
-              try await hostClient.setCredential(ref: credentialRef, value: credentialValue)
-            }
-            await MainActor.run {
-              self.status = "自定义配置已保存"
-              self.showProviderAuthoring = false
-              completion(.success(()))
-              self.refreshModelConfiguration()
-            }
-          } catch {
-            await MainActor.run { completion(.failure(error)) }
-          }
-        }
+        writeCredential()
       },
       conflict: {
         self.refreshProviderConfiguration()

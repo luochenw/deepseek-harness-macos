@@ -408,7 +408,7 @@ final class HarnessController: ObservableObject {
       let suffix = match.reasoning == nil ? "" : " · \(reasoningEffort)"
       return "\(group.nativeDisplayName) / \(match.name)\(suffix)"
     }
-    return "\(provider) / \(model)"
+    return "\(provider == "relay" ? "自定义配置" : provider) / \(model)"
   }
   /// Clamp a requested effort to what the target model actually advertises:
   /// the requested level when offered, else the adapter default, else the
@@ -1477,7 +1477,7 @@ final class HarnessController: ObservableObject {
           // own default when we omitted one) so the composer label doesn't
           // keep showing a stale effort the switch didn't actually request.
           if let resolved = selected.reasoningEffort { self.reasoningEffort = resolved }
-          self.status = "已切换到 \(nextProvider) / \(nextModel)"
+          self.status = "已切换到 \(self.nativeProviderDisplayName(nextProvider)) / \(nextModel)"
         }
       } catch { await MainActor.run { self.appendSystem("模型切换失败：\(error.localizedDescription)") } }
     }
@@ -1487,6 +1487,11 @@ final class HarnessController: ObservableObject {
     preset = next
     UserDefaults.standard.set(next.rawValue, forKey: presetKey)
     appendSystem("新会话将使用\(next.label)。当前运行中的会话不受影响。")
+  }
+
+  private func nativeProviderDisplayName(_ provider: String) -> String {
+    availableModels.first(where: { $0.id == provider })?.nativeDisplayName
+      ?? (provider == "relay" ? "自定义配置" : provider)
   }
 
   func toolDetail(_ tool: ToolActivity) { selectedTool = tool; showDetails = true }

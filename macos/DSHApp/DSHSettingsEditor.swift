@@ -49,9 +49,36 @@ struct SettingsEditorView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: DSHSpace.s3) {
-      Text("编辑配置：\(namespace.ns)").font(.title2.weight(.bold)).foregroundStyle(DSHTheme.ink)
-      Text("applies: \(namespace.applies) · revision \(currentNamespace.revision)").font(.caption).foregroundStyle(DSHTheme.inkSoft)
+      VStack(alignment: .leading, spacing: DSHSpace.s1) {
+        Text("编辑配置：\(namespace.ns)").font(.title2.weight(.bold)).foregroundStyle(DSHTheme.ink)
+        Text("applies: \(namespace.applies) · revision \(currentNamespace.revision)").font(.caption).foregroundStyle(DSHTheme.inkSoft)
+      }
 
+      ScrollView {
+        VStack(alignment: .leading, spacing: DSHSpace.s3) {
+          editorContent
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.trailing, DSHSpace.s2)
+      }
+      .scrollIndicators(.visible, axes: .vertical)
+      .frame(maxHeight: .infinity)
+
+      HStack {
+        Spacer()
+        Button("关闭") { harness.showSettingsEditor = false }
+          .buttonStyle(.dshSecondary)
+          .keyboardShortcut(.cancelAction)
+      }
+    }
+    .padding(DSHSpace.s5)
+    .frame(width: 600, height: 560)
+    .background(DSHTheme.surface)
+    .onAppear { load(namespace) }
+  }
+
+  private var editorContent: some View {
+    Group {
       if conflict {
         VStack(alignment: .leading, spacing: DSHSpace.s2) {
           Label("配置已被其他客户端修改（当前 revision \(currentNamespace.revision)）", systemImage: "exclamationmark.triangle.fill")
@@ -60,7 +87,9 @@ struct SettingsEditorView: View {
             Button("放弃我的修改，载入最新") { load(currentNamespace); conflict = false }.buttonStyle(.dshSecondary)
             Button("保留我的修改，基于最新版本重试保存") { conflict = false; save() }.buttonStyle(.dshPrimary)
           }
-        }.padding(DSHSpace.s3).dshCard(tint: DSHTheme.warmSoft, radius: DSHRadius.md)
+        }
+        .padding(DSHSpace.s3)
+        .dshCard(tint: DSHTheme.warmSoft, radius: DSHRadius.md)
       }
 
       TextEditor(text: $jsonText)
@@ -87,31 +116,37 @@ struct SettingsEditorView: View {
         Button("保存") { save() }.buttonStyle(.dshPrimary)
       }
 
-      VStack(alignment: .leading, spacing: DSHSpace.s3) {
-        Text("凭据").font(.headline).foregroundStyle(DSHTheme.ink)
-        Text("凭据引用").dshSectionLabel()
-        TextField("例如 CUSTOM_API_KEY", text: $credentialRef)
-          .dshField()
-        Text("新凭据").dshSectionLabel()
-        SecureField("写入新值（留空保持不变）", text: $credentialValue)
-          .dshField()
-        HStack(spacing: DSHSpace.s2) {
-          Button("写凭据") { saveCredential() }
-            .buttonStyle(.dshPrimary)
-            .disabled(normalizedCredentialRef.isEmpty || credentialValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          Button("清除凭据") { unsetCredential() }
-            .buttonStyle(.dshSecondary)
-            .disabled(normalizedCredentialRef.isEmpty)
-          Spacer()
-          Text(harness.status).font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(1)
-          Button("关闭") { harness.showSettingsEditor = false }.buttonStyle(.dshSecondary).keyboardShortcut(.cancelAction)
-        }
-      }.padding(DSHSpace.s4).dshCard(tint: DSHTheme.surfaceTint2, radius: DSHRadius.md)
+      credentialSection
     }
-    .padding(DSHSpace.s5)
-    .frame(width: 600, height: 560)
-    .background(DSHTheme.surface)
-    .onAppear { load(namespace) }
+  }
+
+  private var credentialSection: some View {
+    VStack(alignment: .leading, spacing: DSHSpace.s3) {
+      Text("凭据").font(.headline).foregroundStyle(DSHTheme.ink)
+      Text("凭据引用").dshSectionLabel()
+      TextField("例如 CUSTOM_API_KEY", text: $credentialRef)
+        .dshField()
+      if credentialReferences.count > 1 {
+        Text("此命名空间声明了多个凭据引用；请输入要写入或清除的名称。")
+          .font(.caption)
+          .foregroundStyle(DSHTheme.inkFaint)
+      }
+      Text("新凭据").dshSectionLabel()
+      SecureField("写入新值（留空保持不变）", text: $credentialValue)
+        .dshField()
+      HStack(spacing: DSHSpace.s2) {
+        Button("写凭据") { saveCredential() }
+          .buttonStyle(.dshPrimary)
+          .disabled(normalizedCredentialRef.isEmpty || credentialValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        Button("清除凭据") { unsetCredential() }
+          .buttonStyle(.dshSecondary)
+          .disabled(normalizedCredentialRef.isEmpty)
+        Spacer()
+        Text(harness.status).font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(1)
+      }
+    }
+    .padding(DSHSpace.s4)
+    .dshCard(tint: DSHTheme.surfaceTint2, radius: DSHRadius.md)
   }
 
   /// Fill the editor buffer from a namespace value and reset the diff baseline
@@ -119,9 +154,14 @@ struct SettingsEditorView: View {
   private func load(_ source: DSHSettingsNamespace) {
     jsonText = Self.prettyJSON(source.value)
     baseline = Self.plainValue(source.value) as? [String: Any] ?? [:]
-    if credentialRef.isEmpty {
-      credentialRef = source.value.credentialReferences().first ?? ""
+    let references = Array(Set(source.value.credentialReferences())).sorted()
+    if credentialRef.isEmpty, references.count == 1 {
+      credentialRef = references[0]
     }
+  }
+
+  private var credentialReferences: [String] {
+    Array(Set(currentNamespace.value.credentialReferences())).sorted()
   }
 
   private func save() {
