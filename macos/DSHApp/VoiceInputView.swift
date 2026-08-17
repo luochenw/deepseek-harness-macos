@@ -148,7 +148,11 @@ struct VoiceInputButton: View {
       }
     }
     .onChange(of: voice.partialText) { _, partial in
-      if isActive, !partial.isEmpty { onPartial?(partial) }
+      // 唤醒 + 自动派发的听写不进输入框（任务去独立会话，输入框不该被
+      // 碰）；麦克风脉冲/悬浮圈涟漪已是"正在听"的反馈。手动听写、或
+      // 关掉自动派发的唤醒听写，照旧实时流入。
+      let dispatching = voice.sessionViaWake && VoiceSettings.wakeAutoSend
+      if isActive, !partial.isEmpty, !dispatching { onPartial?(partial) }
     }
   }
 

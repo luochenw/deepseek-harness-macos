@@ -1,4 +1,22 @@
 import AppKit
+
+/// 语音链路诊断：NSLog 在统一日志里检索不可靠，落文件最稳
+/// （~/Library/Application Support/DeepSeek Harness/dsh/voice-diag.log）。
+func voiceDiag(_ line: String) {
+  let dir = ProcessInfo.processInfo.environment["DSH_APP_HOME"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+    ?? FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Application Support/DeepSeek Harness/dsh", isDirectory: true)
+  let url = dir.appendingPathComponent("voice-diag.log")
+  let stamp = ISO8601DateFormatter().string(from: Date())
+  guard let data = "\(stamp) \(line)\n".data(using: .utf8) else { return }
+  if let handle = try? FileHandle(forWritingTo: url) {
+    defer { try? handle.close() }
+    _ = try? handle.seekToEnd()
+    try? handle.write(contentsOf: data)
+  } else {
+    try? data.write(to: url)
+  }
+}
 import AVFoundation
 import Foundation
 import Speech
@@ -68,6 +86,15 @@ enum VoiceSettings {
     UserDefaults.standard.object(forKey: wakeAutoSendKey) == nil ? true : UserDefaults.standard.bool(forKey: wakeAutoSendKey)
   }
   static let wakePhraseKey = "dsh.voice.wakePhrase"
+
+  /// 唤醒任务的默认工作区路径（设置→语音）。空 = 跟随当前工作区；
+  /// "~default~" = Host 默认目录；其余为已引入工作区的绝对路径。
+  /// 话里点名的工作区永远优先于这里的设定。
+  static let dispatchWorkspaceKey = "dsh.voice.dispatchWorkspace"
+  static var dispatchWorkspacePath: String {
+    UserDefaults.standard.string(forKey: dispatchWorkspaceKey) ?? ""
+  }
+  static let dispatchHostDefaultToken = "~default~"
 
   /// 静音自动定稿秒数（设置→语音；1–10s，默认 2s）。
   static let silenceEndpointKey = "dsh.voice.silenceEndpoint"
@@ -158,10 +185,15 @@ final class AppleSpeechTranscriber: VoiceTranscriber {
   private var request: SFSpeechAudioBufferRecognitionRequest?
   private var task: SFSpeechRecognitionTask?
   private var lastTranscript = ""
+  /// 识别器在长停顿处会另起新段（bestTranscription 整个重置为新段），
+  /// 旧段在这里累积，定稿 = 各段拼接——否则停顿 1 秒前面说的全丢。
+  private var committedPrefix = ""
   private var finalized = false
   private var finalizeFallback: DispatchWorkItem?
   private var receivedAnyResult = false
   private var retriedOnline = false
+  /// 诊断：确认音频是否真的流进了识别请求（空定稿的头号嫌疑是无声输入）。
+  private var tapBufferCount = 0
 
   func startStreaming() throws {
     retriedOnline = false
@@ -174,6 +206,7 @@ final class AppleSpeechTranscriber: VoiceTranscriber {
     }
     self.recognizer = recognizer
     lastTranscript = ""
+    committedPrefix = ""
     finalized = false
     receivedAnyResult = false
     let request = SFSpeechAudioBufferRecognitionRequest()
@@ -196,8 +229,21 @@ final class AppleSpeechTranscriber: VoiceTranscriber {
     self.request = request
     let input = audioEngine.inputNode
     let format = input.outputFormat(forBus: 0)
+    voiceDiag("[stt] start mode=\(engineNote) format=\(Int(format.sampleRate))Hz ch=\(format.channelCount)")
+    tapBufferCount = 0
     input.removeTap(onBus: 0)
-    input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
+    input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+      request.append(buffer)
+      guard let self else { return }
+      self.tapBufferCount += 1
+      if self.tapBufferCount == 1 || self.tapBufferCount == 100 {
+        var peak: Float = 0
+        if let data = buffer.floatChannelData?[0] {
+          for i in 0..<Int(buffer.frameLength) { peak = max(peak, abs(data[i])) }
+        }
+        voiceDiag("[stt] buffer#\(self.tapBufferCount) peak=\(peak)")
+      }
+    }
     audioEngine.prepare()
     try audioEngine.start()
     task = recognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -205,10 +251,26 @@ final class AppleSpeechTranscriber: VoiceTranscriber {
         guard let self, !self.finalized, self.request === request else { return }
         if let result {
           self.receivedAnyResult = true
-          self.lastTranscript = result.bestTranscription.formattedString
-          self.onPartialText?(self.lastTranscript)
+          let text = result.bestTranscription.formattedString
+          voiceDiag("[stt] result isFinal=\(result.isFinal) text='\(String(text.prefix(40)))'")
+          if !text.isEmpty {
+            // 停顿后识别器另起新段：新文本既不延续旧段、也不是旧段的
+            // 修订（修订只改尾部，前缀关系仍在），且明显更短 → 把旧段
+            // 计入前缀累积，别让它丢。
+            if !self.lastTranscript.isEmpty,
+               !text.hasPrefix(self.lastTranscript), !self.lastTranscript.hasPrefix(text),
+               text.count < self.lastTranscript.count {
+              self.committedPrefix += self.lastTranscript
+              voiceDiag("[stt] segment reset — committed '\(String(self.committedPrefix.suffix(40)))'")
+            }
+            self.lastTranscript = text
+            self.onPartialText?(self.committedPrefix + text)
+          }
+          // 本地中文识别在 endAudio 后常回一个 text 为空的 isFinal 结果；
+          // 空结果不覆盖非空累积（否则整句被抹成空，表现为"说完没反应"）。
           if result.isFinal { self.deliverFinal() }
-        } else if error != nil {
+        } else if let error {
+          voiceDiag("[stt] task error (anyResult=\(self.receivedAnyResult) retried=\(self.retriedOnline)): \(error.localizedDescription)")
           if !self.receivedAnyResult, !self.retriedOnline, request.requiresOnDeviceRecognition {
             // Died before producing anything — one-shot online fallback.
             self.retriedOnline = true
@@ -252,7 +314,7 @@ final class AppleSpeechTranscriber: VoiceTranscriber {
   private func deliverFinal() {
     guard !finalized else { return }
     finalized = true
-    let text = lastTranscript
+    let text = committedPrefix + lastTranscript
     cleanup()
     onFinalText?(text)
   }
@@ -609,6 +671,7 @@ final class VoiceController: NSObject, ObservableObject {
     case .idle, .denied: break
     default: return
     }
+    voiceDiag("[voice] startListening viaWake=\(viaWake)")
     sessionViaWake = viaWake
     state = .requestingPermission
     Task { [weak self] in
@@ -618,6 +681,12 @@ final class VoiceController: NSObject, ObservableObject {
       guard speechGranted, micGranted else {
         self.state = .denied("请在系统设置授权麦克风与语音识别")
         return
+      }
+      // 唤醒路径：常驻监听的音频引擎刚被拆掉，立刻抢启会拿到无声输入流
+      // （识别器收不到任何结果，几秒后空定稿——表现为"说了没反应"）。
+      // 给设备释放留一拍再启动。
+      if viaWake {
+        try? await Task.sleep(nanoseconds: 300_000_000)
       }
       self.beginStreaming()
     }
@@ -636,6 +705,7 @@ final class VoiceController: NSObject, ObservableObject {
     case .listening, .transcribing: break
     default: return
     }
+    voiceDiag("[voice] cancelListening state=\(state)")
     clearSilenceTimer()
     transcriber.cancelStreaming()
     partialText = ""
@@ -713,6 +783,7 @@ final class VoiceController: NSObject, ObservableObject {
     // 输入框，静默返回会把它留在那里。
     let stripped = VoiceSettings.strippingTrailingEndPhrase(text).stripped
     let trimmed = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+    voiceDiag("[voice] final raw='\(text)' stripped='\(trimmed)' viaWake=\(sessionViaWake)")
     guard !trimmed.isEmpty else { onDiscarded?(); return }
     onFinalText?(trimmed)
   }
@@ -804,6 +875,7 @@ final class WakeWordListener: NSObject, ObservableObject {
       let speechGranted = await VoiceController.requestSpeechAuthorization()
       let micGranted = await VoiceController.requestMicrophoneAccess()
       guard let self, self.enabled else { return }
+      voiceDiag("[wake] start speech=\(speechGranted) mic=\(micGranted)")
       guard speechGranted, micGranted else {
         self.enabled = false
         self.statusNote = "唤醒词监听需要麦克风与语音识别权限"
@@ -905,6 +977,7 @@ final class WakeWordListener: NSObject, ObservableObject {
     // trigger, so old chatter cannot re-match late in a long session.
     let window = VoiceSettings.normalizedForWakeMatch(transcript).suffix(phrase.count * 4)
     guard window.contains(phrase) else { return }
+    voiceDiag("[wake] phrase hit in '\(transcript)'")
     suspend()
     onWake?()
   }

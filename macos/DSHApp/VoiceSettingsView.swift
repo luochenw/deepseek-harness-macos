@@ -7,9 +7,11 @@ import SwiftUI
 /// per-machine client preferences, so they live outside the Host's revisioned
 /// settings namespaces.
 struct VoiceSettingsView: View {
+  @EnvironmentObject private var harness: HarnessController
   @AppStorage(VoiceSettings.wakeEnabledKey) private var wakeEnabled = false
   @AppStorage(VoiceSettings.wakeAutoEnableKey) private var wakeAutoEnable = true
   @AppStorage(VoiceSettings.wakeAutoSendKey) private var wakeAutoSend = true
+  @AppStorage(VoiceSettings.dispatchWorkspaceKey) private var dispatchWorkspace = ""
   @AppStorage(VoiceSettings.wakePhraseKey) private var wakePhrase = VoiceSettings.defaultWakePhrase
   @AppStorage(VoiceSettings.silenceEndpointKey) private var silenceSeconds = 2.0
   @AppStorage(VoiceSettings.engineKey) private var engine = "apple"
@@ -31,6 +33,24 @@ struct VoiceSettingsView: View {
           title: "唤醒识别的内容自动发送",
           caption: "开启时唤醒任务派发到独立后台会话执行；关闭则只填进输入框。手动点麦克风的听写从不自动发送。",
           isOn: $wakeAutoSend)
+        HStack(spacing: DSHSpace.s3) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("唤醒任务默认工作区").font(.system(size: 13)).foregroundStyle(DSHTheme.ink)
+            Text("话里点到工作区名字时永远去点名的那个；没点名时用这里的设定。")
+              .font(.system(size: 11)).foregroundStyle(DSHTheme.inkFaint)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          Spacer(minLength: DSHSpace.s3)
+          Picker("", selection: $dispatchWorkspace) {
+            Text("跟随当前工作区").tag("")
+            Text("Host 默认目录").tag(VoiceSettings.dispatchHostDefaultToken)
+            ForEach(harness.hostWorkspaces.filter { !$0.title.isEmpty }, id: \.path) { workspace in
+              Text(workspace.title).tag(workspace.path)
+            }
+          }
+          .labelsHidden()
+          .fixedSize()
+        }
         HStack(spacing: DSHSpace.s3) {
           Text("唤醒短语").font(.system(size: 13)).foregroundStyle(DSHTheme.ink)
           Spacer(minLength: DSHSpace.s3)

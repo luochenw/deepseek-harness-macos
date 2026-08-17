@@ -6,7 +6,9 @@ import Foundation
 /// （本地名称匹配，未命中回落当前工作区）；模型判定留给后续版本。
 extension HarnessController {
   func dispatchVoiceTask(_ instruction: String) {
+    voiceDiag("[dispatch] instruction='\(instruction)' hostClient=\(hostClient == nil ? "nil" : "ok")")
     guard let hostClient else {
+      status = "Host 未连接，语音任务未派发"
       appendSystem("Host 未连接，语音任务未派发：\(instruction)")
       return
     }
@@ -14,12 +16,24 @@ extension HarnessController {
     let target = hostWorkspaces.first { workspace in
       !workspace.title.isEmpty && instruction.localizedCaseInsensitiveContains(workspace.title)
     }
-    // 派活不依赖工作区：没选工作区、或目录已被删掉，都回退到 Host 的
-    // 默认目录建会话（cwd 传 nil 是合法的；带一个不存在的路径反而会
-    // 让 session.create 直接失败，派发就"无声无息没反应"了）。
-    let candidate = target?.path ?? workspace?.path
+    // 目的地优先级：话里点名 > 设置的默认工作区（设置→语音）> 当前
+    // 工作区。目录不存在或选了"Host 默认目录"就不带 cwd 建会话（合法；
+    // 带失效路径反而让 session.create 直接失败，表现为"说了没反应"）。
+    let preferred = VoiceSettings.dispatchWorkspacePath
+    let candidate: String?
+    if let target {
+      candidate = target.path
+    } else if preferred == VoiceSettings.dispatchHostDefaultToken {
+      candidate = nil
+    } else if !preferred.isEmpty {
+      candidate = preferred
+    } else {
+      candidate = workspace?.path
+    }
     let cwd = candidate.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }
-    let targetName = target?.title ?? (cwd != nil ? workspaceName : "默认目录")
+    let targetName = target?.title
+      ?? cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
+      ?? "默认目录"
     if candidate != nil, cwd == nil {
       appendSystem("原工作区目录已不存在，语音任务改在默认目录执行。")
     }
@@ -45,12 +59,18 @@ extension HarnessController {
         }
         try await hostClient.prompt(sessionId: created.sessionId, content: [.text(outgoing)])
         await MainActor.run {
+          voiceDiag("[dispatch] created \(created.sessionId) cwd=\(cwd ?? "nil")")
           self.voiceTaskSessions[created.sessionId] = String(instruction.prefix(24))
+          self.status = "语音任务已派发到「\(targetName)」"
           self.appendSystem("语音任务已派发到「\(targetName)」，后台执行中：\(String(instruction.prefix(48)))")
           self.refreshHostSnapshots()
         }
       } catch {
         await MainActor.run {
+          voiceDiag("[dispatch] FAILED: \(error.localizedDescription)")
+          // App 在前台时系统通知会被抑制、未选中会话时系统备注无处可写
+          // ——失败必须在状态条上直接可见，否则表现为"说完没反应"。
+          self.status = "语音任务派发失败：\(error.localizedDescription)"
           self.appendSystem("语音任务派发失败：\(error.localizedDescription)")
           self.nativeAlerts.notifyTurnFinished(summary: "语音任务派发失败")
         }
