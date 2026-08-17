@@ -156,6 +156,7 @@ struct ConversationView: View {
             }
           }
         }
+        .frame(maxWidth: .infinity)
         .padding(28)
       }
       .onChange(of: harness.displayedSession?.messages) { _, messages in
@@ -225,5 +226,12 @@ struct MessageBubble: View {
         Spacer(minLength: 180)
       }
     }
+    // The row itself has to claim the full available width before the
+    // Spacer above can push content to a real screen edge — without this,
+    // the HStack only ever sizes to its own content (spacer minimum + text
+    // width), so the ScrollView centers that undersized row instead of
+    // letting it sit flush left/right, which is what was reported as
+    // messages reading as centered.
+    .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
   }
 }
