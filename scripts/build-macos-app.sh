@@ -25,6 +25,7 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/Runtime"
 swiftc -parse-as-library "$ROOT"/macos/DSHApp/*.swift -o "$STAGE/Contents/MacOS/DSH" -framework AppKit -framework SwiftUI
 cp "$ROOT/macos/DSHApp/Info.plist" "$STAGE/Contents/Info.plist"
+cp "$ROOT/macos/DSHApp/AppIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns"
 cp "$NODE_SOURCE" "$STAGE/Contents/MacOS/node"
 chmod 755 "$STAGE/Contents/MacOS/node"
 ditto "$DSH_SOURCE" "$STAGE/Contents/Resources/Runtime/dsh"

@@ -4,6 +4,7 @@
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleDisplayName</key><string>DeepSeek Harness</string>
   <key>CFBundleExecutable</key><string>DSH</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIdentifier</key><string>com.github.deepseek-harness-macos.app</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
   <key>NSHumanReadableCopyright</key><string>Local DeepSeek Harness native client</string>
