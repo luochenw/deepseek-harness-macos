@@ -1875,6 +1875,7 @@ private struct SidebarRowChrome: View {
 private struct SidebarSessionRow: View {
   @EnvironmentObject var harness: HarnessController
   let session: DSHSessionSummary
+  @State private var hovering = false
   var body: some View {
     // Host sessions carry no "seen/unread" flag (unlike the local fallback
     // `Session.hasUnread` below) — only the running state is real signal
@@ -1887,12 +1888,32 @@ private struct SidebarSessionRow: View {
       isActive: harness.hostCurrentSessionID == session.sessionId,
       action: { harness.openHostSession(session) }
     )
-    .contextMenu {
-      Button("创建分支") { harness.forkSession(session.sessionId) }
-      Button("复制会话 ID") { harness.copySessionID(session.sessionId) }
-      Divider()
-      Button("删除", role: .destructive) { harness.deleteSession(session.sessionId) }
+    // Hover-revealed ⋯ trigger for the row actions; the overlay Menu owns
+    // its own clicks, so opening it never also opens the session. Right-click
+    // context menu stays as the keyboard-free alternative.
+    .overlay(alignment: .trailing) {
+      if hovering {
+        Menu {
+          rowActions
+        } label: {
+          Image(systemName: "ellipsis")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(DSHTheme.inkSoft)
+            .frame(width: 24, height: 22)
+            .background(DSHTheme.surface, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .padding(.trailing, 6)
+      }
     }
+    .onHover { hovering = $0 }
+    .contextMenu { rowActions }
+  }
+  @ViewBuilder private var rowActions: some View {
+    Button("创建分支") { harness.forkSession(session.sessionId) }
+    Button("复制会话 ID") { harness.copySessionID(session.sessionId) }
+    Divider()
+    Button("删除", role: .destructive) { harness.deleteSession(session.sessionId) }
   }
 }
 
