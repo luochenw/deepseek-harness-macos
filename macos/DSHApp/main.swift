@@ -298,7 +298,7 @@ final class HarnessController: ObservableObject {
   @Published var renameDraft = ""
   @Published var searchResults: [DSHSessionSearchItem] = []
   @Published var searchHasMore = false
-  @Published var showDetails = true
+  @Published var showDetails = false
   @Published var selectedTool: ToolActivity?
   @Published var apiKey = ""
   @Published var baseURL = ""
@@ -347,9 +347,25 @@ final class HarnessController: ObservableObject {
   private var forceStopDeadline: DispatchWorkItem?
   private var runningSessionID: UUID?
 
+  /// `~/Documents/DeepSeek Harness`, created on first use. Used only when no
+  /// workspace has ever been chosen — keeps `workspace` non-nil (and `canSend`
+  /// usable) without forcing a file-picker dialog before the very first
+  /// message. The Host registers it as a real workspace the first time
+  /// `newSession()` creates a session with this cwd, same as it already does
+  /// for a workspace restored from UserDefaults.
+  private static func defaultWorkspaceURL() -> URL? {
+    guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+    let url = documents.appendingPathComponent("DeepSeek Harness", isDirectory: true)
+    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+  }
+
   init() {
     if let path = UserDefaults.standard.string(forKey: workspaceKey), FileManager.default.fileExists(atPath: path) {
       workspace = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+    } else if let defaultURL = Self.defaultWorkspaceURL() {
+      workspace = defaultURL
+      UserDefaults.standard.set(defaultURL.path, forKey: workspaceKey)
     }
     apiKey = ProcessInfo.processInfo.environment["RELAY_API_KEY"] ?? ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"] ?? ""
     baseURL = ProcessInfo.processInfo.environment["DEEPSEEK_BASE_URL"] ?? ""
@@ -801,6 +817,7 @@ final class HarnessController: ObservableObject {
           if let index = self.selectedSessionIndex {
             self.sessions[index].messages = [Message(role: .system, text: "已连接到持久 DSH 会话。")]}
           self.refreshHostSnapshots()
+          self.refreshSessionModels()
         }
       } catch {
         await MainActor.run { self.appendSystem("持久会话创建失败：\(error.localizedDescription)") }
@@ -1000,6 +1017,16 @@ final class HarnessController: ObservableObject {
   func deleteWorkspace(_ workspace: DSHWorkspaceView) {
     guard let hostClient else { return }
     Task { do { try await hostClient.deleteWorkspace(id: workspace.workspaceId); await MainActor.run { self.refreshHostSnapshots() } } catch { await MainActor.run { self.status = "工作区删除失败：\(error.localizedDescription)" } } }
+  }
+
+  /// Switch to an already-registered workspace — no file picker, no Host
+  /// round-trip needed, it's already in `hostWorkspaces` so the Host already
+  /// knows about it.
+  func selectWorkspace(_ ws: DSHWorkspaceView) {
+    let url = URL(fileURLWithPath: ws.path, isDirectory: true).standardizedFileURL
+    workspace = url
+    UserDefaults.standard.set(url.path, forKey: workspaceKey)
+    status = "已切换到工作区：\(ws.title)"
   }
 
   func registerWorkspace(_ url: URL) {
@@ -1478,127 +1505,6 @@ struct ContentView: View {
   }
 }
 
-private struct Sidebar: View {
-  @EnvironmentObject var harness: HarnessController
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack { Label("DeepSeek Harness", systemImage: "sparkles").font(.headline); Spacer(); Button(action: harness.newSession) { Image(systemName: "square.and.pencil") }.help("新会话") }
-      Button(action: harness.newSession) { Label("新会话", systemImage: "plus") }.buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
-      HStack { Text("工作区").font(.caption.weight(.bold)).foregroundStyle(.secondary); Spacer(); Button(action: { harness.showSessionSearch = true }) { Image(systemName: "magnifyingglass") }.buttonStyle(.borderless) }
-      Button(action: harness.chooseWorkspace) { Label(harness.workspaceName, systemImage: "folder") }.buttonStyle(.bordered).lineLimit(1).help(harness.workspace?.path ?? "选择工作区")
-      Divider()
-      HStack { Text("会话").font(.caption.weight(.bold)).foregroundStyle(.secondary); Spacer(); Button(action: harness.refreshHostSnapshots) { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless); Text("\(harness.hostSessions.count > 0 ? harness.hostSessions.count : harness.sessions.count)").font(.caption).foregroundStyle(.secondary) }
-      List {
-        if !harness.hostSessions.isEmpty {
-          ForEach(harness.hostSessions.filter { $0.origin != "subagent" }) { session in
-            Button(action: { harness.openHostSession(session) }) {
-              HStack(spacing: 8) {
-                Circle().fill(session.running ? .blue : session.blank ? .clear : .green).frame(width: 7, height: 7)
-                VStack(alignment: .leading, spacing: 3) {
-                  Text(session.title).lineLimit(1)
-                  Text(Date(timeIntervalSince1970: session.updatedAt / 1000), style: .relative).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-              }
-            }.buttonStyle(.plain)
-          }
-        } else {
-          ForEach(harness.sessions) { session in
-            Button(action: { harness.selectSession(session.id) }) {
-              HStack(spacing: 8) {
-                Circle().fill(session.isRunning ? .blue : session.hasUnread ? .green : .clear).frame(width: 7, height: 7)
-                VStack(alignment: .leading, spacing: 3) { Text(session.title).lineLimit(1); Text(session.updatedAt, style: .relative).font(.caption).foregroundStyle(.secondary) }
-                Spacer()
-              }
-            }.buttonStyle(.plain)
-          }
-        }
-      }.listStyle(.sidebar)
-      Spacer()
-      WorkspaceManagerView()
-      Button(action: { harness.showSettings = true }) { Label("设置", systemImage: "gearshape") }
-      Text(harness.hostStatus).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-      Text("本机运行 · \(harness.permission.label)").font(.caption).foregroundStyle(.secondary)
-    }.padding(16)
-  }
-}
-
-private struct ConversationHeader: View {
-  @EnvironmentObject var harness: HarnessController
-  var body: some View {
-    HStack(spacing: 10) {
-      VStack(alignment: .leading, spacing: 2) {
-        if !harness.subagentPath.isEmpty {
-          HStack(spacing: 6) {
-            Button(action: harness.navigateUpSubagent) { Image(systemName: "chevron.left") }.buttonStyle(.borderless).help("返回上一级")
-            Text(harness.subagentPath.map(\.title).joined(separator: " › ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-          }
-        }
-        Text(harness.displayedSession?.title ?? "新会话").font(.headline)
-        Text(harness.workspace?.path ?? "选择工作区后开始").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-      }
-      Spacer()
-      Menu { if harness.hostPresets.isEmpty { ForEach(HarnessController.Preset.allCases) { p in Button(p.label) { harness.setPreset(p) } } } else { ForEach(harness.hostPresets.filter { $0.broken == nil }) { p in Button(p.name ?? p.id) { harness.selectCurrentPreset(p.id) } } } } label: { Label(harness.preset.label, systemImage: "cpu") }.menuStyle(.borderlessButton)
-      Menu { ForEach(HarnessController.PermissionMode.allCases) { p in Button(p.label) { harness.setPermission(p) } } } label: { Label(harness.permission.label, systemImage: "lock.shield") }.menuStyle(.borderlessButton)
-      Menu { if let sessionModels = harness.currentSessionModels { if !sessionModels.routable { Text("当前会话没有可用模型路由") }; ForEach(sessionModels.groups) { group in ForEach(group.models) { item in Button("\(group.name) / \(item.name)") { harness.selectCurrentModel(provider: group.id, model: item.id) } } } } else { Button("刷新会话模型") { harness.refreshSessionModels() }; Button("Relay / GPT-5.6 Terra") { harness.selectCurrentModel(provider: "relay", model: "gpt-5.6-terra") } } } label: { Label(harness.model, systemImage: "brain") }.menuStyle(.borderlessButton)
-      Button(action: { harness.showDetails.toggle() }) { Image(systemName: harness.showDetails ? "sidebar.right" : "sidebar.right") }.buttonStyle(.borderless)
-    }.padding(.horizontal, 22).padding(.vertical, 12)
-  }
-}
-
-private struct ConversationView: View {
-  @EnvironmentObject var harness: HarnessController
-  var body: some View {
-    ScrollViewReader { proxy in
-      ScrollView { LazyVStack(alignment: .leading, spacing: 16) { if harness.historyHasMore && harness.subagentTranscript == nil { Button("载入更早消息", action: harness.loadOlderHistory).buttonStyle(.bordered).frame(maxWidth: .infinity) }; ForEach(harness.displayedSession?.messages ?? []) { MessageBubble(message: $0).id($0.id) } } .padding(28) }
-      .onChange(of: harness.displayedSession?.messages) { _, messages in if let last = messages?.last { proxy.scrollTo(last.id, anchor: .bottom) } }
-    }
-  }
-}
-
-private struct MessageBubble: View {
-  @EnvironmentObject var harness: HarnessController
-  let message: HarnessController.Message
-  var body: some View {
-    HStack { if message.role == .user { Spacer(minLength: 180) }; VStack(alignment: .leading, spacing: 7) { Text(label).font(.caption.weight(.bold)).foregroundStyle(tint); if let reasoning = message.reasoning { DisclosureGroup("推理过程") { Text(reasoning).font(.caption.monospaced()).textSelection(.enabled).foregroundStyle(.secondary) } }; Text(message.text.isEmpty ? "正在思考…" : message.text).textSelection(.enabled).font(.system(.body, design: .rounded)).frame(maxWidth: 760, alignment: .leading); if let attachment = message.attachment { AttachmentPreview(ref: attachment) } }.padding(15).background(background, in: RoundedRectangle(cornerRadius: 14, style: .continuous)); if message.role != .user { Spacer(minLength: 180) } }
-  }
-  private var label: String { switch message.role { case .user: "你"; case .assistant: "DSH"; case .system: "系统" } }
-  private var tint: Color { message.role == .user ? .cyan : message.role == .assistant ? .mint : .secondary }
-  private var background: Color { message.role == .user ? .cyan.opacity(0.12) : message.role == .assistant ? .mint.opacity(0.10) : .secondary.opacity(0.08) }
-}
-
-private struct Composer: View {
-  @EnvironmentObject var harness: HarnessController
-  var body: some View {
-    if harness.isViewingReadOnlySubagent {
-      HStack { Image(systemName: "lock.fill"); Text("只读：此子代理已结束，历史不可续写。返回上一级可继续操作。"); Spacer() }
-        .font(.caption).foregroundStyle(.secondary).padding(18)
-    } else {
-    VStack(spacing: 8) {
-      HStack { if harness.planMode { Button("计划模式 ×", action: harness.togglePlanMode).buttonStyle(.bordered).tint(.orange) }; if !harness.queuedPrompts.isEmpty { Label("已排队 \(harness.queuedPrompts.count)", systemImage: "list.number") .font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(harness.status).font(.caption).foregroundStyle(harness.isRunning ? .orange : .secondary) }
-      QueueDockView()
-      HStack(alignment: .bottom, spacing: 10) {
-        TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).frame(minHeight: 54, maxHeight: 140).padding(7).overlay(RoundedRectangle(cornerRadius: 12).stroke(.secondary.opacity(0.25)))
-        if harness.isRunning { VStack(spacing: 7) { Button("停止", action: harness.stop).buttonStyle(.bordered); Button("排队", action: harness.queueDraft).buttonStyle(.bordered).disabled(harness.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) } } else { Button("发送", action: harness.send).buttonStyle(.borderedProminent).disabled(!harness.canSend) }
-      }
-      HStack { Menu { Button("添加图片", action: harness.pickImage); Button("进入计划模式", action: harness.togglePlanMode); Button("重命名当前会话", action: harness.beginRenameCurrentSession); Button("创建会话分支", action: harness.forkCurrentSession); Button("归档当前会话", action: harness.archiveCurrentSession); Button("新会话", action: harness.newSession); Button("打开工作区", action: harness.openWorkspace) } label: { Image(systemName: "plus") }; if let image = harness.draftImage { Label(image.url.lastPathComponent, systemImage: "photo").font(.caption).lineLimit(1); Button(action: { harness.draftImage = nil }) { Image(systemName: "xmark.circle.fill") }.buttonStyle(.borderless) }; Text(harness.planMode ? "描述任务以生成计划" : "描述你想要构建的内容").font(.caption).foregroundStyle(.secondary); Spacer(); Menu { Button("关闭推理") { harness.reasoningEffort = "off"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "off") }; Button("高") { harness.reasoningEffort = "high"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "high") }; Button("最大") { harness.reasoningEffort = "max"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "max") } } label: { Text("\(harness.provider) / \(harness.model) · \(harness.reasoningEffort)").font(.caption.monospaced()).foregroundStyle(.secondary) } }
-    }.padding(18)
-    }
-  }
-}
-
-private struct DetailsPanel: View {
-  @EnvironmentObject var harness: HarnessController
-  var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      HStack { Text("详情").font(.headline); Spacer(); Button(action: { harness.showDetails = false }) { Image(systemName: "xmark") }.buttonStyle(.borderless) }
-      NativeDashboard()
-      if let tool = harness.selectedTool { VStack(alignment: .leading, spacing: 10) { Label(tool.name, systemImage: icon(for: tool.state)); Text(tool.summary).font(.caption).foregroundStyle(.secondary); Divider(); ScrollView { NativeToolPresentationView(tool: tool).frame(maxWidth: .infinity, alignment: .leading) } } } else { Spacer(); VStack(spacing: 10) { Image(systemName: "sidebar.right").font(.title2).foregroundStyle(.secondary); Text("点击消息流中的工具行查看详情").multilineTextAlignment(.center).foregroundStyle(.secondary) }; Spacer() }
-    }.padding(18)
-  }
-  private func icon(for state: HarnessController.ToolActivity.State) -> String { switch state { case .running: "hourglass"; case .succeeded: "checkmark.circle"; case .failed: "exclamationmark.triangle" } }
-}
-
 private struct SessionSearchView: View {
   @EnvironmentObject var harness: HarnessController
   @State private var query = ""
@@ -1622,16 +1528,4 @@ private struct SessionSearchView: View {
       HStack { Spacer(); Button("关闭") { harness.showSessionSearch = false } }
     }.padding(24).frame(width: 520, height: 520)
   }
-}
-
-private struct SettingsView: View {
-  @EnvironmentObject var harness: HarnessController
-  @State private var section = "通用"
-  private let sections = ["通用", "模型", "提供方", "插件", "Agent 预设"]
-  var body: some View { HStack(spacing: 0) { List(sections, id: \.self, selection: $section) { Text($0) }.frame(width: 150); Divider(); VStack(alignment: .leading, spacing: 16) { Text(section).font(.title2.weight(.bold)); settingsBody; Spacer(); HStack { Button("打开配置文件", action: harness.openHostSettingsDocument); Spacer(); Button("关闭") { harness.showSettings = false }.keyboardShortcut(.defaultAction) } }.padding(24).frame(width: 600, height: 480) } }
-  @ViewBuilder private var settingsBody: some View { switch section { case "通用": Picker("默认 Agent preset", selection: $harness.preset) { ForEach(HarnessController.Preset.allCases) { Text($0.label).tag($0) } }.onChange(of: harness.preset) { _, v in harness.setPreset(v) }; Picker("默认权限", selection: $harness.permission) { ForEach(HarnessController.PermissionMode.allCases) { Text($0.label).tag($0) } }.onChange(of: harness.permission) { _, v in harness.setPermission(v) }; Text("当前会话保持原有 preset；新会话使用新的默认配置。").font(.caption).foregroundStyle(.secondary)
-  case "模型": Picker("提供方", selection: $harness.provider) { Text("Relay（本机）").tag("relay"); Text("DeepSeek 官方").tag("deepseek") }.pickerStyle(.segmented); Picker("模型", selection: $harness.model) { ForEach(harness.availableModels) { group in ForEach(group.models) { model in Text("\(group.name) / \(model.name)").tag(model.id) } }; if harness.availableModels.isEmpty { Text("GPT-5.6 Terra").tag("gpt-5.6-terra") } }; Button("刷新 Host 模型目录", action: harness.refreshModelConfiguration).buttonStyle(.bordered); SecureField(harness.provider == "relay" ? "Relay API Key（写入 DSH Host）" : "DeepSeek API Key（写入 DSH Host）", text: $harness.apiKey); Button("保存凭据", action: harness.saveCredential).buttonStyle(.bordered).disabled(harness.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty); TextField("可选 API Base URL", text: $harness.baseURL); Text(harness.hasCredential ? "凭据已可用" : "请提供 API Key").font(.caption).foregroundStyle(harness.hasCredential ? .green : .orange)
-  case "提供方": Button("刷新提供方配置", action: harness.refreshProviderConfiguration).buttonStyle(.bordered); if let settings = harness.settingsDescription, let pi = settings.namespaces.first(where: { $0.ns == "llm-pi-ai" }) { Text(settings.writable ? "配置可写 · revision \(pi.revision)" : "配置只读").font(.caption).foregroundStyle(settings.writable ? .green : .orange); ForEach(harness.configurableProviders.filter { $0.settingsNs == pi.ns }) { provider in HStack { Text(provider.displayName); Spacer(); Button("编辑") { harness.openProviderAuthoring(provider) }.buttonStyle(.bordered).disabled(!settings.writable) } }; Button("添加自定义提供方") { harness.openProviderAuthoring() }.buttonStyle(.borderedProminent).disabled(!settings.writable) } else { Text("llm-pi-ai 未由当前 Host 提供。").foregroundStyle(.secondary) }
-  case "插件": Text("已安装插件由内置 DSH runtime 管理。").foregroundStyle(.secondary); Button("刷新真实 Host 设置", action: harness.refreshSettings).buttonStyle(.bordered); if let settings = harness.settingsDescription { Text(settings.writable ? "配置可写" : "配置只读").font(.caption).foregroundStyle(settings.writable ? .green : .orange); ForEach(settings.namespaces) { ns in HStack { Label("\(ns.ns) · \(ns.applies)", systemImage: "puzzlepiece"); Spacer(); Button("编辑") { harness.openSettingsEditor(ns: ns) }.buttonStyle(.bordered).disabled(!settings.writable) } }; Divider(); Text("凭据").font(.headline); ForEach(Array(Set(harness.configurableProviders.compactMap { provider in harness.providerCredentialReference(provider) } + ["DEEPSEEK_API_KEY"])).sorted(), id: \.self) { ref in HStack { Text(ref).font(.system(.body, design: .monospaced)); Spacer(); Text((harness.credentialStates[ref]?.configured ?? false) ? "已配置" : "未配置").font(.caption).foregroundStyle((harness.credentialStates[ref]?.configured ?? false) ? .green : .orange) } }; Text("在命名空间编辑器里可写入或清除 API Key。").font(.caption).foregroundStyle(.secondary) } else { Text("正在读取 Host 设置…").font(.caption).foregroundStyle(.secondary) }
-  default: Text("选择新会话使用的 Agent 能力组合。").foregroundStyle(.secondary); ForEach(HarnessController.Preset.allCases) { p in Button(action: { harness.setPreset(p) }) { VStack(alignment: .leading) { Text(p.label).font(.headline); Text(p.detail).font(.caption).foregroundStyle(.secondary) } }.buttonStyle(.plain).padding(.vertical, 4) } } }
 }

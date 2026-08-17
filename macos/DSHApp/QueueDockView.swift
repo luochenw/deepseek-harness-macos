@@ -10,12 +10,28 @@ struct QueueDockView: View {
         Label("排队消息", systemImage: "list.number").font(.caption.weight(.bold))
         ForEach(harness.queueItems) { item in
           HStack(spacing: 8) {
-            Text(item.placement == "steering" ? "Steer" : "Queue").font(.caption2.weight(.bold)).foregroundStyle(item.placement == "steering" ? .orange : .secondary)
-            Text(item.text).font(.caption).lineLimit(2)
+            Text(item.placement == "steering" ? "Steer" : "Queue")
+              .font(.caption2.weight(.bold))
+              .foregroundStyle(item.placement == "steering" ? .orange : .secondary)
+            Text(item.text)
+              .font(.caption)
+              .lineLimit(2)
             Spacer()
-            Button(action: { text = item.text; editing = item }) { Image(systemName: "pencil") }.buttonStyle(.borderless)
-            Button(action: { harness.mutateQueue(item, action: .steer) }) { Image(systemName: "arrow.turn.down.right") }.buttonStyle(.borderless)
-            Button(action: { harness.mutateQueue(item, action: .remove) }) { Image(systemName: "trash") }.buttonStyle(.borderless)
+            Button(action: { text = item.text; editing = item }) {
+              Image(systemName: "pencil")
+            }
+            .buttonStyle(.borderless)
+            .help("编辑排队消息")
+            Button(action: { harness.mutateQueue(item, action: .steer) }) {
+              Image(systemName: "arrow.turn.down.right")
+            }
+            .buttonStyle(.borderless)
+            .help("转为立即插入")
+            Button(action: { harness.mutateQueue(item, action: .remove) }) {
+              Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("移除")
           }
         }
       }

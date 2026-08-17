@@ -18,8 +18,10 @@ extension DSHJSONValue: Encodable {
 
 /// Sheet editor for one settings namespace. Shows the redacted value as
 /// editable JSON text, saves it back through settings.update with the revision
-/// it was read at, and manages the Relay / DeepSeek API keys through
-/// credentials.set / credentials.unset.
+/// it was read at, and writes/clears an arbitrary credential ref through
+/// credentials.set / credentials.unset — free text, not limited to the two
+/// built-in refs, since Host deployments can wire a provider's `apiKeyEnv`
+/// to any name (e.g. a local relay override).
 struct SettingsEditorView: View {
   @EnvironmentObject var harness: HarnessController
   let namespace: DSHSettingsNamespace
@@ -71,14 +73,18 @@ struct SettingsEditorView: View {
       Divider()
 
       Text("凭据").font(.headline)
-      Picker("凭据引用", selection: $credentialRef) {
-        Text("RELAY_API_KEY").tag("RELAY_API_KEY")
-        Text("DEEPSEEK_API_KEY").tag("DEEPSEEK_API_KEY")
-      }.pickerStyle(.segmented)
+      TextField("凭据引用（如 RELAY_API_KEY、LOCAL_RELAY_API_KEY）", text: $credentialRef)
+      HStack(spacing: 6) {
+        ForEach(["RELAY_API_KEY", "DEEPSEEK_API_KEY"], id: \.self) { ref in
+          Button(ref) { credentialRef = ref }.buttonStyle(.bordered).font(.caption)
+        }
+      }
       SecureField("写入新值（留空保持不变）", text: $credentialValue)
       HStack {
-        Button("写凭据") { saveCredential() }.disabled(credentialValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        Button("写凭据") { saveCredential() }
+          .disabled(credentialRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || credentialValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         Button("清除凭据") { unsetCredential() }
+          .disabled(credentialRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         Spacer()
         Text(harness.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
         Button("关闭") { harness.showSettingsEditor = false }.keyboardShortcut(.cancelAction)
