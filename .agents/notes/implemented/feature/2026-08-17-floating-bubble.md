@@ -29,6 +29,12 @@ Status: implemented — 用户需求："把现在的 icon 变成一个收起的�
    （海水渐变、三层 WaveBand、月亮升落弧线 + 海平面遮罩）按 44pt
    重排：运行中走 TimelineView 逐帧动画；静止态渲染一张固定帧——
    月亮停在弧线顶点、浪形定格，红点负责传达"有结果"。
+4. **语音唤醒动画**（用户追加需求）：`VoiceWakeSignal` 单例做语音→
+   悬浮圈的最小桥，VoiceInputButton 在听写状态变化时单向写入一个
+   Bool。听写进行中（唤醒词触发或手动按下）：三圈水青声呐涟漪从
+   圆边向外扩散消散（84pt 画布，圆本体 44pt 居中留出扩散空间），
+   海浪流速 ×2.1，描边提亮——"海面听到了你的声音"；结束即收束回
+   常态。语音模块对悬浮圈零感知。
 
 main.swift 只动三处：WaveBand 去掉 `private`（复用波形）、菜单栏加
 一个开关命令、WindowGroup 的 ContentView `.onAppear` 挂载 manager。

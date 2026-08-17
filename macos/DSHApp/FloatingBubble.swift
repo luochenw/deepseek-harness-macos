@@ -7,6 +7,16 @@ import Combine
 /// 后凝固成静态帧并亮起红点，点击唤起主窗口。
 /// 状态全部自持（订阅推导），不给 HarnessController 增加任何字段 ——
 /// 见 .agents/notes/implemented/feature/2026-08-17-floating-bubble.md。
+/// 语音状态 → 悬浮圈的最小桥：听写（唤醒词触发或手动按下）进行中时
+/// 为 true，悬浮圈据此播放声呐涟漪。由 VoiceInputButton 的状态变化
+/// 单向写入，语音模块不需要知道悬浮圈的存在。
+@MainActor
+final class VoiceWakeSignal: ObservableObject {
+  static let shared = VoiceWakeSignal()
+  @Published var listening = false
+  private init() {}
+}
+
 @MainActor
 final class FloatingBubbleManager: ObservableObject {
   static let shared = FloatingBubbleManager()
@@ -62,8 +72,9 @@ final class FloatingBubbleManager: ObservableObject {
   private func show() {
     guard let harness else { return }
     if panel == nil {
+      // 84pt 画布：中间 44pt 的圆，四周留给声呐涟漪扩散（唤醒动画）。
       let p = NSPanel(
-        contentRect: NSRect(x: 0, y: 0, width: 52, height: 52),
+        contentRect: NSRect(x: 0, y: 0, width: 84, height: 84),
         styleMask: [.borderless, .nonactivatingPanel],
         backing: .buffered, defer: false)
       p.level = .floating
@@ -76,9 +87,12 @@ final class FloatingBubbleManager: ObservableObject {
       p.isReleasedWhenClosed = false
       p.contentView = NSHostingView(rootView: FloatingBubbleView(harness: harness, manager: self))
       p.setFrameAutosaveName("dsh.floatingBubble")
+      // autosave 会连尺寸一起恢复（可能是旧版的 52pt），画布尺寸以
+      // 当前代码为准。
+      p.setContentSize(NSSize(width: 84, height: 84))
       // 首次出现：主屏右上角，避开菜单栏。
       if p.frame.origin == .zero, let screen = NSScreen.main {
-        p.setFrameOrigin(NSPoint(x: screen.visibleFrame.maxX - 76, y: screen.visibleFrame.maxY - 84))
+        p.setFrameOrigin(NSPoint(x: screen.visibleFrame.maxX - 104, y: screen.visibleFrame.maxY - 112))
       }
       panel = p
     }
@@ -91,26 +105,45 @@ final class FloatingBubbleManager: ObservableObject {
 struct FloatingBubbleView: View {
   @ObservedObject var harness: HarnessController
   @ObservedObject var manager: FloatingBubbleManager
+  @ObservedObject private var voice = VoiceWakeSignal.shared
 
   /// 任一会话在跑都算"动态"，不只当前选中的那一个。
   private var running: Bool { harness.isRunning || harness.sessions.contains { $0.isRunning } }
 
   var body: some View {
-    ZStack(alignment: .topTrailing) {
-      SeaBubbleScene(animated: running)
-        .frame(width: 44, height: 44)
-        .clipShape(Circle())
-        .overlay(Circle().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
-      if manager.unseenCompletion && !running {
-        Circle().fill(Color(red: 0.914, green: 0.290, blue: 0.235))
-          .frame(width: 11, height: 11)
-          .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
+    ZStack {
+      // 唤醒动画：听写进行中，三圈声呐涟漪从圆边向外扩散消散 ——
+      // 海面"听到了你的声音"。
+      if voice.listening {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+          let t = context.date.timeIntervalSinceReferenceDate
+          ZStack {
+            ForEach(0..<3, id: \.self) { ring in
+              let p = ((t / 1.6) + Double(ring) / 3).truncatingRemainder(dividingBy: 1)
+              Circle()
+                .strokeBorder(Color(red: 0.376, green: 0.925, blue: 0.871).opacity((1 - p) * 0.55), lineWidth: 1.5)
+                .frame(width: 44, height: 44)
+                .scaleEffect(1 + p * 0.85)
+            }
+          }
+        }
       }
+      ZStack(alignment: .topTrailing) {
+        SeaBubbleScene(animated: running || voice.listening, waveSpeed: voice.listening ? 2.1 : 1.0)
+          .frame(width: 44, height: 44)
+          .clipShape(Circle())
+          .overlay(Circle().strokeBorder(Color.white.opacity(voice.listening ? 0.6 : 0.35), lineWidth: 1))
+        if manager.unseenCompletion && !running {
+          Circle().fill(Color(red: 0.914, green: 0.290, blue: 0.235))
+            .frame(width: 11, height: 11)
+            .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
+        }
+      }
+      .contentShape(Circle())
+      .onTapGesture { manager.bubbleClicked() }
     }
-    .padding(4)
-    .contentShape(Circle())
-    .onTapGesture { manager.bubbleClicked() }
-    .help(running ? "会话运行中 — 点击回到 DeepSeek Harness" : "点击回到 DeepSeek Harness")
+    .frame(width: 84, height: 84)
+    .help(voice.listening ? "正在聆听…" : running ? "会话运行中 — 点击回到 DeepSeek Harness" : "点击回到 DeepSeek Harness")
   }
 }
 
@@ -119,12 +152,14 @@ struct FloatingBubbleView: View {
 /// 不再空转 TimelineView。
 private struct SeaBubbleScene: View {
   let animated: Bool
+  /// 听写中海浪加速涌动（唤醒动画的一部分）；常态 1.0。
+  var waveSpeed: Double = 1.0
   var body: some View {
     if animated {
       TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
         let t = context.date.timeIntervalSinceReferenceDate
         let cycle = (t / 5.0).truncatingRemainder(dividingBy: 1)
-        scene(wavePhase: t, moonArc: min(cycle / 0.82, 1.0))
+        scene(wavePhase: t * waveSpeed, moonArc: min(cycle / 0.82, 1.0))
       }
     } else {
       scene(wavePhase: 0, moonArc: 0.5)
