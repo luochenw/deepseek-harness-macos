@@ -2327,14 +2327,12 @@ private struct ConversationView: View {
             // The transcript tail row: the rolling-wave miniature animates
             // for the whole running turn (it also fills the send→first-token
             // gap), then freezes into the static icon once the turn settles.
-            // Both states share one id so follow-mode can anchor the true
-            // bottom of the transcript — scrolling to the last *message*
-            // left this row cut off just below the viewport.
-            if harness.isRunning {
-              WaitingWaveIndicator().id("transcript-tail")
-            } else {
-              TranscriptEndMarker().id("transcript-tail")
-            }
+            // One row view with a parameter — NOT an if/else of two view
+            // types sharing this id: inside a LazyVStack that shape reuses
+            // the cached static row on branch swap, so the TimelineView
+            // never mounts and the icon sits frozen through the whole run
+            // (reproduced in isolation; see the transcript-tail Agent Note).
+            TranscriptTailIcon(running: harness.isRunning).id("transcript-tail")
           }
         }.frame(maxWidth: .infinity).padding(DSHSpace.s6)
           // Thin overlay scroller (appears while scrolling, no gutter) —
@@ -2572,6 +2570,17 @@ private struct WaitingWaveIndicator: View {
       WaveIconArt(t: context.date.timeIntervalSinceReferenceDate)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+/// The transcript tail in one row view: animated while the turn runs,
+/// frozen once it settles. Deliberately a single view type whose parameter
+/// flips — two sibling view types alternating under one explicit id makes
+/// LazyVStack reuse the cached row and the animation never mounts.
+private struct TranscriptTailIcon: View {
+  let running: Bool
+  var body: some View {
+    if running { WaitingWaveIndicator() } else { TranscriptEndMarker() }
   }
 }
 

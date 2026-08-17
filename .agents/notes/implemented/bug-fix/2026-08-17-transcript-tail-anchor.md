@@ -19,6 +19,10 @@ Status: implemented
 - **结束后彻底移除末尾行**（维持原状，只修滚动）——不选：用户明确要结束后的静态落款；而且末尾行常驻让锚点 id 恒存在，三处 scrollTo 不用再按状态挑目标。
 - **动画维持"仅等首 token"窗口**——不选：用户的诉求就是"回答过程中看到执行中的动画"；cc/codex 也是整轮显示 spinner。26px 小图标在流式文本下方不构成干扰。
 
+## 追记：同 id 双视图在 LazyVStack 里冻结动画（已修复）
+
+首版实现把两态写成 `if isRunning { WaitingWaveIndicator().id("transcript-tail") } else { TranscriptEndMarker().id("transcript-tail") }`——两个**不同视图类型**共用同一显式 id。在 `LazyVStack` 里状态翻转时懒容器按 id 复用已渲染的行，动画视图从未挂载，用户看到"运行全程静态图标"。最小复现台证实：同 id 双视图形态 = 冻结；单视图带 `running` 参数形态 = 正常动画。已改为 `TranscriptTailIcon(running:)` 单行视图内部分支。教训：懒容器内**行级身份不要跨视图类型复用**；行的状态变化用参数表达，别用结构分支。
+
 ## Consequences
 
 - 运行中视口底部始终是滚动的波浪动画（跟随未被用户上滚打断时）；结束后原位淡为静态图标，历史会话和子代理转录的末尾也带落款。
