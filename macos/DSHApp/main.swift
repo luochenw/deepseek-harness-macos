@@ -2095,9 +2095,6 @@ private struct ConversationHeader: View {
       // With content in the transcript the workspace context docks up here,
       // compact (blank conversations show it above the composer instead).
       if !harness.isNewConversation { WorkspaceChips(compact: true) }
-      // Session figures (context / tokens / turns) live up here now — they
-      // are session state, not compose-time controls.
-      StatusStrip()
       Button(action: { harness.showDetails.toggle() }) { Image(systemName: "sidebar.right") }.buttonStyle(.dshGhost)
     }.padding(.horizontal, DSHSpace.s5).padding(.vertical, DSHSpace.s3)
   }
@@ -2559,6 +2556,7 @@ private struct CommandPaletteView: View {
 private struct Composer: View {
   @EnvironmentObject var harness: HarnessController
   @FocusState private var editorFocused: Bool
+  @State private var editorContentHeight: CGFloat = 22
   var body: some View {
     if harness.isViewingReadOnlySubagent {
       HStack { Image(systemName: "lock.fill"); Text("只读：此子代理已结束，历史不可续写。返回上一级可继续操作。"); Spacer() }
@@ -2578,24 +2576,29 @@ private struct Composer: View {
       GoalBar()
       QueueDockView()
       if harness.draft.hasPrefix("/") { CommandPaletteView() }
-      // Codex-style workspace chips above the box while the conversation is
-      // still blank; once it has content they live in the page header.
-      if harness.isNewConversation {
-        HStack { WorkspaceChips(); Spacer() }
+      // Above the box: workspace chips (blank conversation) on the left,
+      // session figures (context / tokens / turns) on the right.
+      HStack {
+        if harness.isNewConversation { WorkspaceChips() }
+        Spacer()
+        StatusStrip()
       }
       // Text field and every compose-time control (attachments, voice,
       // model picker, send/stop) share one bordered box, matching the
       // consolidated-composer redesign — see
       // .agents/notes/implemented/bug-fix/2026-08-17-composer-consolidation.md.
       VStack(alignment: .leading, spacing: DSHSpace.s2) {
-        // Auto-growing editor: an invisible mirror of the draft sets the
-        // height (one line by default, up to the max), the editor fills it.
+        // Auto-growing editor: an invisible mirror of the draft is measured
+        // and the editor's height is pinned to it — TextEditor itself is
+        // greedy (no intrinsic height) and would otherwise expand straight
+        // to the max, which is exactly the "还是那么高" bug.
         ZStack(alignment: .topLeading) {
           Text(harness.draft.isEmpty ? " " : (harness.draft.hasSuffix("\n") ? harness.draft + " " : harness.draft))
             .font(.system(.body, design: .rounded))
             .padding(.horizontal, 5)
             .opacity(0)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { editorContentHeight = $0 }
           TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).scrollContentBackground(.hidden)
             .focused($editorFocused)
             // The editor's own scroll view: thin overlay scroller, never the
@@ -2609,8 +2612,9 @@ private struct Composer: View {
               harness.send()
               return .handled
             }
+            .frame(height: min(max(editorContentHeight + 2, 24), 140))
         }
-        .frame(minHeight: 24, maxHeight: 140)
+        .frame(minHeight: 24)
         .overlay(alignment: .leading) {
           // Hidden while focused, not just while non-empty: IME marked text
           // (pinyin composition) never reaches the SwiftUI binding, so a
