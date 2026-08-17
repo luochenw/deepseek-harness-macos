@@ -263,7 +263,9 @@ private struct FilePathActions: View {
 // `.equatable()` at the call site skips re-running the O(n·m) LCS diff below
 // on every unrelated `@EnvironmentObject` change from an ancestor — only an
 // actual old/new text change invalidates the view.
-private struct DiffLines: View, Equatable {
+// Not `private`: the transcript's inline tool rows (ToolCallRow in
+// main.swift) reuse this to show edit diffs Claude Code-style.
+struct DiffLines: View, Equatable {
   let old: String?
   let new: String
 

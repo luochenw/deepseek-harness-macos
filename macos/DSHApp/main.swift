@@ -2064,15 +2064,20 @@ private struct ConversationView: View {
           if messages.isEmpty {
             ConversationEmptyState()
           } else {
-            ForEach(messages) { message in
-              VStack(alignment: .leading, spacing: DSHSpace.s2) {
-                if let reasoning = message.reasoning {
-                  // "live" = this thought is still streaming: last row of a
-                  // running turn with no answer text yet.
-                  ReasoningBlock(text: reasoning, live: harness.isRunning && message.id == messages.last?.id && message.text.isEmpty)
-                }
-                MessageBubble(message: message)
-              }.id(message.id)
+            ForEach(Self.foldTranscript(messages)) { item in
+              switch item {
+              case .message(let message):
+                VStack(alignment: .leading, spacing: DSHSpace.s2) {
+                  if let reasoning = message.reasoning {
+                    // "live" = this thought is still streaming: last row of a
+                    // running turn with no answer text yet.
+                    ReasoningBlock(text: reasoning, live: harness.isRunning && message.id == messages.last?.id && message.text.isEmpty)
+                  }
+                  MessageBubble(message: message)
+                }.id(message.id)
+              case .toolGroup(let group):
+                ToolGroupRow(messages: group).id(group[0].id)
+              }
             }
             // Waiting indicator between send and the first streamed token —
             // the send path no longer seeds a placeholder assistant bubble
@@ -2090,6 +2095,78 @@ private struct ConversationView: View {
       }
       .onChange(of: harness.displayedSession?.messages) { _, messages in if let last = messages?.last { proxy.scrollTo(last.id, anchor: .bottom) } }
     }
+  }
+
+  /// A transcript row after folding: plain message, or a run of consecutive
+  /// same-tool calls merged into one group ("run_code ×3") so repeated steps
+  /// read as one status instead of a ladder of identical rows.
+  fileprivate enum TranscriptItem: Identifiable {
+    case message(HarnessController.Message)
+    case toolGroup([HarnessController.Message])
+    var id: UUID {
+      switch self {
+      case .message(let message): message.id
+      case .toolGroup(let group): group[0].id
+      }
+    }
+  }
+
+  private static func foldTranscript(_ messages: [HarnessController.Message]) -> [TranscriptItem] {
+    var items: [TranscriptItem] = []
+    for message in messages {
+      if message.role == .tool, case .toolGroup(var group) = items.last, group[0].text == message.text {
+        group.append(message)
+        items[items.count - 1] = .toolGroup(group)
+        continue
+      }
+      if message.role == .tool, case .message(let previous) = items.last, previous.role == .tool, previous.text == message.text {
+        items[items.count - 1] = .toolGroup([previous, message])
+        continue
+      }
+      items.append(.message(message))
+    }
+    return items
+  }
+}
+
+/// Merged view of consecutive same-tool calls: one header with a count and a
+/// live (pulsing) dot while any member is still running; expanding lists the
+/// individual calls with their own inline detail.
+private struct ToolGroupRow: View {
+  @EnvironmentObject var harness: HarnessController
+  let messages: [HarnessController.Message]
+  @State private var expanded = false
+  private var activities: [HarnessController.ToolActivity] {
+    messages.compactMap { message in
+      guard let id = message.toolCallId else { return nil }
+      return harness.activeTools.last { $0.callId == id }
+    }
+  }
+  private var anyRunning: Bool { activities.contains { $0.state == .running } }
+  private var anyFailed: Bool { activities.contains { $0.state == .failed } }
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Button(action: { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }) {
+        HStack(spacing: 7) {
+          ToolStateDot(color: anyRunning ? DSHTheme.warm : anyFailed ? Color.red.opacity(0.75) : DSHTheme.accent, pulsing: anyRunning)
+          Text("\(messages[0].text) ×\(messages.count)")
+            .font(.system(size: 12.5, design: .monospaced)).foregroundStyle(DSHTheme.ink)
+          Text(anyRunning ? "运行中…" : anyFailed ? "有失败" : "完成")
+            .font(.system(size: 11, design: .monospaced)).foregroundStyle(anyRunning ? DSHTheme.warm : anyFailed ? DSHTheme.coral : DSHTheme.inkFaint)
+          Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
+            .foregroundStyle(DSHTheme.inkFaint).rotationEffect(.degrees(expanded ? 90 : 0))
+        }
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      if expanded {
+        VStack(alignment: .leading, spacing: 6) {
+          ForEach(messages) { message in ToolCallRow(message: message) }
+        }
+        .padding(.leading, 13)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -2248,37 +2325,85 @@ private struct MessageBubble: View {
 }
 
 /// Claude Code-style inline tool row: a state dot plus `Name(argument)` in
-/// monospace, with a dim `⎿ result` line once the result lands. The heavy
-/// rendering (diffs, file lines, search matches) stays in the details panel —
-/// clicking the row opens it via the existing toolDetail() path.
+/// monospace, a dim `⎿ result` summary, and click-to-expand inline detail —
+/// terminal output as a folded code block, file edits as real ± diff lines
+/// (diff cards start expanded, CC-style: the change IS the content there).
 private struct ToolCallRow: View {
   @EnvironmentObject var harness: HarnessController
   let message: HarnessController.Message
+  /// nil until the user toggles; the default is open only for diff cards.
+  @State private var userToggled: Bool?
   private var activity: HarnessController.ToolActivity? {
     guard let id = message.toolCallId else { return nil }
     return harness.activeTools.last { $0.callId == id }
   }
+  private var isDiffCard: Bool { activity?.presentation?.card == "diff" }
+  private var expanded: Bool { userToggled ?? isDiffCard }
   var body: some View {
-    Button(action: { if let activity { harness.toolDetail(activity) } }) {
-      VStack(alignment: .leading, spacing: 3) {
-        HStack(spacing: 7) {
-          Circle().fill(dotColor).frame(width: 7, height: 7)
-          Text(headline).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(DSHTheme.ink).lineLimit(1)
-        }
-        if let detail {
-          HStack(alignment: .top, spacing: 6) {
-            Text("⎿").font(.system(size: 11, design: .monospaced))
-            Text(detail).font(.system(size: 11.5, design: .monospaced)).lineLimit(2).multilineTextAlignment(.leading)
+    VStack(alignment: .leading, spacing: 3) {
+      Button(action: { userToggled = !expanded }) {
+        VStack(alignment: .leading, spacing: 3) {
+          HStack(spacing: 7) {
+            ToolStateDot(color: dotColor, pulsing: activity?.state == .running)
+            Text(headline).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(DSHTheme.ink).lineLimit(1)
+            Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
+              .foregroundStyle(DSHTheme.inkFaint).rotationEffect(.degrees(expanded ? 90 : 0))
           }
-          .foregroundStyle(DSHTheme.inkFaint)
-          .padding(.leading, 13)
+          if !expanded, let detail {
+            HStack(alignment: .top, spacing: 6) {
+              Text("⎿").font(.system(size: 11, design: .monospaced))
+              Text(detail).font(.system(size: 11.5, design: .monospaced)).lineLimit(2).multilineTextAlignment(.leading)
+            }
+            .foregroundStyle(DSHTheme.inkFaint)
+            .padding(.leading, 13)
+          }
         }
+        .contentShape(Rectangle())
       }
-      .contentShape(Rectangle())
+      .buttonStyle(.plain)
+      if expanded, let activity {
+        expandedBody(activity)
+          .padding(.leading, 13)
+          .frame(maxWidth: 760, alignment: .leading)
+      }
     }
-    .buttonStyle(.plain)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
+
+  @ViewBuilder private func expandedBody(_ activity: HarnessController.ToolActivity) -> some View {
+    if let presentation = activity.presentation {
+      switch presentation.card {
+      case "diff":
+        VStack(alignment: .leading, spacing: 6) {
+          ForEach(presentation.diffs) { item in
+            VStack(alignment: .leading, spacing: 3) {
+              Text(item.path).font(.system(size: 11, design: .monospaced)).foregroundStyle(DSHTheme.inkSoft)
+              DiffLines(old: item.oldText, new: item.newText).equatable()
+            }
+          }
+        }
+      case "read":
+        CollapsibleCodeBlock(content: presentation.lines.map { "\($0.number)  \($0.text)" }.joined(separator: "\n"))
+      case "search":
+        CollapsibleCodeBlock(content: presentation.files.flatMap { file in
+          file.matches.map { "\(file.path):\($0.lineNumber)  \($0.line)" }
+        }.joined(separator: "\n"))
+      default:
+        if !activity.output.isEmpty, activity.output != "工具已完成" {
+          CollapsibleCodeBlock(content: activity.output)
+        } else if activity.state == .running {
+          Text("运行中…").font(.system(size: 11.5, design: .monospaced)).foregroundStyle(DSHTheme.inkFaint)
+        }
+      }
+      if let exitCode = presentation.exitCode, exitCode != 0 {
+        Text("退出码 \(exitCode)\(presentation.signal.map { " · \($0)" } ?? "")")
+          .font(.system(size: 11, design: .monospaced)).foregroundStyle(DSHTheme.coral)
+      }
+    } else if !activity.output.isEmpty {
+      CollapsibleCodeBlock(content: activity.output)
+    }
+  }
+
   /// `Name(argument)` — the argument is the presentation's own title when the
   /// adapter supplied one (command line, file path, search query), else bare name.
   private var headline: String {
@@ -2287,13 +2412,15 @@ private struct ToolCallRow: View {
     if let argument, !argument.isEmpty, argument != name { return "\(name)(\(argument))" }
     return name
   }
-  /// One dim line under the headline: first non-empty output line while the
-  /// tool has produced one, else the running placeholder.
+  /// Collapsed summary: first output line plus a "+N 行" tail when more
+  /// follows; the running placeholder while in flight.
   private var detail: String? {
     guard let activity else { return nil }
     if activity.state == .running { return "运行中…" }
-    let firstLine = activity.output.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init)
-    if let firstLine, !firstLine.isEmpty, firstLine != "工具已完成" { return firstLine }
+    let lines = activity.output.split(separator: "\n", omittingEmptySubsequences: true)
+    if let first = lines.first.map(String.init), !first.isEmpty, first != "工具已完成" {
+      return lines.count > 1 ? "\(first) … +\(lines.count - 1) 行" : first
+    }
     if activity.state == .failed { return activity.summary }
     return nil
   }
@@ -2303,6 +2430,31 @@ private struct ToolCallRow: View {
     case .failed: Color.red.opacity(0.75)
     default: DSHTheme.accent
     }
+  }
+}
+
+/// The tool row's state dot; a running tool pulses (opacity breathing plus a
+/// soft expanding halo) so "in progress" is visible motion, not just amber.
+private struct ToolStateDot: View {
+  let color: Color
+  let pulsing: Bool
+  @State private var pulse = false
+  var body: some View {
+    ZStack {
+      if pulsing {
+        Circle().fill(color.opacity(0.35))
+          .frame(width: 13, height: 13)
+          .scaleEffect(pulse ? 1.0 : 0.4)
+          .opacity(pulse ? 0 : 0.9)
+      }
+      Circle().fill(color)
+        .frame(width: 7, height: 7)
+        .opacity(pulsing && pulse ? 0.55 : 1)
+    }
+    .frame(width: 13, height: 13)
+    .animation(pulsing ? .easeInOut(duration: 0.9).repeatForever(autoreverses: false) : .default, value: pulse)
+    .onAppear { if pulsing { pulse = true } }
+    .onChange(of: pulsing) { _, active in pulse = active }
   }
 }
 
@@ -2361,11 +2513,15 @@ private struct Composer: View {
         .font(.caption).foregroundStyle(DSHTheme.inkFaint).padding(DSHSpace.s5)
     } else {
     VStack(spacing: DSHSpace.s2) {
-      HStack {
-        if harness.hostPlanActive { Button("计划模式 ×", action: harness.exitPlanMode).buttonStyle(.dshSecondary) }
-        if !harness.queueItems.isEmpty { DSHBadge(text: "已排队 \(harness.queueItems.count)", tone: .warm) }
-        Spacer()
-        Text(harness.status).font(.caption).foregroundStyle(harness.isRunning ? DSHTheme.warm : DSHTheme.inkFaint)
+      // No status readout here — the transcript itself (waiting wave, tool
+      // rows, system notes) already narrates what's happening; a second
+      // ticker in the corner was noise. Plan/queue chips stay.
+      if harness.hostPlanActive || !harness.queueItems.isEmpty {
+        HStack {
+          if harness.hostPlanActive { Button("计划模式 ×", action: harness.exitPlanMode).buttonStyle(.dshSecondary) }
+          if !harness.queueItems.isEmpty { DSHBadge(text: "已排队 \(harness.queueItems.count)", tone: .warm) }
+          Spacer()
+        }
       }
       GoalBar()
       QueueDockView()

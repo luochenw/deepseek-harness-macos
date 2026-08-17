@@ -187,8 +187,9 @@ struct MarkdownText: View {
 
 /// Fenced code with Claude Code-style folding: long blocks default to their
 /// first lines plus an expand toggle, so a pasted script doesn't swallow the
-/// conversation. Short blocks render in full with no chrome.
-private struct CollapsibleCodeBlock: View {
+/// conversation. Short blocks render in full with no chrome. Not `private`:
+/// the transcript's inline tool rows reuse it for terminal/read/search output.
+struct CollapsibleCodeBlock: View {
   let content: String
   @State private var expanded = false
   private static let collapseThreshold = 14
