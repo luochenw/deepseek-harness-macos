@@ -202,10 +202,6 @@ struct MessageBubble: View {
       }
 
       VStack(alignment: .leading, spacing: 7) {
-        Text(label)
-          .font(.caption.weight(.bold))
-          .foregroundStyle(tint)
-
         if let reasoning = message.reasoning {
           DisclosureGroup("推理过程") {
             Text(reasoning)
@@ -224,36 +220,10 @@ struct MessageBubble: View {
           AttachmentPreview(ref: attachment)
         }
       }
-      .padding(15)
-      .background(background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
       if message.role != .user {
         Spacer(minLength: 180)
       }
-    }
-  }
-
-  private var label: String {
-    switch message.role {
-    case .user: "你"
-    case .assistant: "DSH"
-    case .system: "系统"
-    }
-  }
-
-  private var tint: Color {
-    switch message.role {
-    case .user: .cyan
-    case .assistant: .mint
-    case .system: .secondary
-    }
-  }
-
-  private var background: Color {
-    switch message.role {
-    case .user: .cyan.opacity(0.12)
-    case .assistant: .mint.opacity(0.10)
-    case .system: .secondary.opacity(0.08)
     }
   }
 }
