@@ -14,8 +14,15 @@ extension HarnessController {
     let target = hostWorkspaces.first { workspace in
       !workspace.title.isEmpty && instruction.localizedCaseInsensitiveContains(workspace.title)
     }
-    let cwd = target?.path ?? workspace?.path
-    let targetName = target?.title ?? workspaceName
+    // 派活不依赖工作区：没选工作区、或目录已被删掉，都回退到 Host 的
+    // 默认目录建会话（cwd 传 nil 是合法的；带一个不存在的路径反而会
+    // 让 session.create 直接失败，派发就"无声无息没反应"了）。
+    let candidate = target?.path ?? workspace?.path
+    let cwd = candidate.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }
+    let targetName = target?.title ?? (cwd != nil ? workspaceName : "默认目录")
+    if candidate != nil, cwd == nil {
+      appendSystem("原工作区目录已不存在，语音任务改在默认目录执行。")
+    }
     let presetId = pendingHostPresetID ?? (preset == .creator ? "cordis" : preset.rawValue)
     let (chosenProvider, chosenModel) = (provider, model)
     let chosenEffort = advertisedEffort(provider: chosenProvider, model: chosenModel, requested: reasoningEffort)
