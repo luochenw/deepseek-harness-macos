@@ -255,6 +255,8 @@ final class HarnessController: ObservableObject {
   @Published var subagentTreeTruncated = false
   @Published var selectedWorkflowRunID: String?
   @Published var draftImage: DraftImage?
+  /// `/model` 的原生落点：composer 模型选择 popover（SwiftUI Menu 无法编程打开）。
+  @Published var showModelPicker = false
   @Published private(set) var isRunning = false {
     didSet { nativeAlerts.setRunning(isRunning) }
   }
@@ -1437,6 +1439,16 @@ final class HarnessController: ObservableObject {
       }
       return
     }
+    // Native command plane for the two lines the web client owns
+    // browser-side: the registry's `/export` handler is a web-plugin stub
+    // (the real download is a browser effect), so it routes to the carrier's
+    // session.export download; `/model` is a client-plane popup upstream and
+    // opens the composer's picker here. Bare lines only — with arguments the
+    // web adapter wouldn't claim these either.
+    if image == nil {
+      if text == "/export" { draft = ""; exportCurrentSessionLog(); return }
+      if text == "/model" { draft = ""; showModelPicker = true; return }
+    }
     guard workspace != nil else { status = "请选择工作区"; chooseWorkspace(); return }
     guard hasCredential else { status = "需要配置 API Key"; showSettings = true; return }
     guard !isRunning else { return }
@@ -2587,37 +2599,28 @@ private struct FeedbackBar: View {
   }
 }
 
-/// Slash-command autocomplete, shown above the input row while the draft
-/// starts with "/" — backed by the Typert `commands/list` roster.
-private struct CommandPaletteView: View {
-  @EnvironmentObject var harness: HarnessController
-  var body: some View {
-    let query = String(harness.draft.dropFirst()).trimmingCharacters(in: .whitespaces).lowercased()
-    let matches = harness.hostCommands.filter { query.isEmpty || normalized($0.name).lowercased().contains(query) }.prefix(6)
-    if !matches.isEmpty {
-      VStack(alignment: .leading, spacing: 2) {
-        ForEach(Array(matches)) { command in
-          Button(action: { harness.draft = "\(normalized(command.name)) " }) {
-            HStack(spacing: DSHSpace.s2) {
-              Text(normalized(command.name)).font(.system(size: 11.5, weight: .semibold, design: .monospaced)).foregroundStyle(DSHTheme.accent)
-              Text(command.description).font(.caption2).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
-              Spacer()
-              if let hint = command.input?.hint { Text(hint).font(.caption2).foregroundStyle(DSHTheme.inkFaint) }
-            }.padding(.vertical, 3).padding(.horizontal, DSHSpace.s2)
-          }.buttonStyle(.plain)
-        }
-      }
-      .padding(DSHSpace.s2)
-      .dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
-    }
-  }
-  private func normalized(_ name: String) -> String { name.hasPrefix("/") ? name : "/" + name }
-}
-
 private struct Composer: View {
   @EnvironmentObject var harness: HarnessController
   @FocusState private var editorFocused: Bool
   @State private var editorContentHeight: CGFloat = 22
+  // Slash-palette view state: keyboard selection plus the Esc dismissal that
+  // holds until the next edit. The roster itself derives from the draft.
+  @State private var paletteSelection = 0
+  @State private var paletteDismissed = false
+
+  /// The palette roster for the current draft — commands, native locals, and
+  /// skills, matched by NativeCommandPalette's mirror of the web `/` menu.
+  /// Empty while the draft is not a bare `/token` or after Esc.
+  private var paletteEntries: [DSHSlashEntry] {
+    guard !paletteDismissed, !harness.isViewingReadOnlySubagent,
+          let query = DSHSlashMatcher.bareToken(of: harness.draft) else { return [] }
+    return DSHSlashMatcher.entries(commands: harness.hostCommands, skills: harness.skills, query: query)
+  }
+  private var selectedPaletteEntry: DSHSlashEntry? {
+    let entries = paletteEntries
+    guard !entries.isEmpty else { return nil }
+    return entries[min(paletteSelection, entries.count - 1)]
+  }
   var body: some View {
     if harness.isViewingReadOnlySubagent {
       HStack { Image(systemName: "lock.fill"); Text("只读：此子代理已结束，历史不可续写。返回上一级可继续操作。"); Spacer() }
@@ -2636,7 +2639,9 @@ private struct Composer: View {
       }
       GoalBar()
       QueueDockView()
-      if harness.draft.hasPrefix("/") { CommandPaletteView() }
+      if !paletteEntries.isEmpty {
+        CommandPaletteView(entries: paletteEntries, selection: min(paletteSelection, paletteEntries.count - 1), onPick: { harness.pickSlashEntry($0) })
+      }
       // Above the box: workspace chips (blank conversation) on the left,
       // session figures (context / tokens / turns) on the right.
       HStack {
@@ -2670,10 +2675,36 @@ private struct Composer: View {
             .dshNoTextScrollers()
             // 回车直接发送；Shift+回车换行。Intercepted before the newline is
             // inserted, so a sent draft doesn't leave a stray empty line.
+            // 面板打开时回车改为执行选中项（cc/codex 的菜单语义）。
             .onKeyPress(.return, phases: .down) { press in
               if press.modifiers.contains(.shift) { return .ignored }
+              if let entry = selectedPaletteEntry { harness.pickSlashEntry(entry); return .handled }
               guard harness.canSend else { return .ignored }
               harness.send()
+              return .handled
+            }
+            // Palette keys claim ↑/↓/Tab/Esc only while the palette shows;
+            // otherwise `.ignored` keeps caret movement and focus traversal.
+            .onKeyPress(.upArrow, phases: .down) { _ in
+              let count = paletteEntries.count
+              guard count > 0 else { return .ignored }
+              paletteSelection = (min(paletteSelection, count - 1) - 1 + count) % count
+              return .handled
+            }
+            .onKeyPress(.downArrow, phases: .down) { _ in
+              let count = paletteEntries.count
+              guard count > 0 else { return .ignored }
+              paletteSelection = (min(paletteSelection, count - 1) + 1) % count
+              return .handled
+            }
+            .onKeyPress(.tab, phases: .down) { _ in
+              guard let entry = selectedPaletteEntry else { return .ignored }
+              harness.draft = "/\(entry.name) "
+              return .handled
+            }
+            .onKeyPress(.escape, phases: .down) { _ in
+              guard !paletteEntries.isEmpty else { return .ignored }
+              paletteDismissed = true
               return .handled
             }
             .frame(height: min(max(editorContentHeight + 2, 24), 140))
@@ -2722,6 +2753,12 @@ private struct Composer: View {
       .padding(DSHSpace.s3)
       .dshCard(tint: DSHTheme.surface, radius: DSHRadius.lg)
     }.padding(DSHSpace.s5)
+    // Any edit re-arms the palette: selection returns to the top hit and an
+    // Esc dismissal lasts only until the user types again.
+    .onChange(of: harness.draft) { _, _ in
+      paletteSelection = 0
+      paletteDismissed = false
+    }
     }
   }
 }
@@ -2772,6 +2809,8 @@ private struct ComposerModelMenu: View {
       Text(harness.currentModelLabel).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(DSHTheme.inkFaint)
     }
     .menuStyle(.borderlessButton).fixedSize()
+    // `/model` 的落点：同一目录的 popover 形态（Menu 无法编程打开）。
+    .popover(isPresented: $harness.showModelPicker, arrowEdge: .top) { ModelPickerPanel().environmentObject(harness) }
   }
 }
 
