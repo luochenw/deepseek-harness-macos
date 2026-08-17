@@ -1141,6 +1141,16 @@ final class HarnessController: ObservableObject {
     Task { if let commands = try? await hostClient.listCommands(sessionId: sessionId) { await MainActor.run { self.hostCommands = commands } } }
   }
 
+  /// Re-pull the slash palette's two catalogs for the current session.
+  /// Fired when the user types the leading `/` so a skill installed (or a
+  /// command registered) mid-session shows up without re-attaching — the
+  /// native stand-in for the web client's `commands/change` invalidation.
+  func refreshSlashCatalog() {
+    guard let sessionId = hostCurrentSessionID else { return }
+    loadSkills(sessionId: sessionId)
+    loadCommands(sessionId: sessionId)
+  }
+
   func loadMessageFeedback(sessionId: String) {
     guard let hostClient else { return }
     Task {
@@ -2749,13 +2759,15 @@ private struct Composer: View {
             }
             // Palette keys claim ↑/↓/Tab/Esc only while the palette shows;
             // otherwise `.ignored` keeps caret movement and focus traversal.
-            .onKeyPress(.upArrow, phases: .down) { _ in
+            // ↑/↓ include the `.repeat` phase so holding the key keeps
+            // walking the list at the system key-repeat rate.
+            .onKeyPress(.upArrow, phases: [.down, .repeat]) { _ in
               let count = paletteEntries.count
               guard count > 0 else { return .ignored }
               paletteSelection = (min(paletteSelection, count - 1) - 1 + count) % count
               return .handled
             }
-            .onKeyPress(.downArrow, phases: .down) { _ in
+            .onKeyPress(.downArrow, phases: [.down, .repeat]) { _ in
               let count = paletteEntries.count
               guard count > 0 else { return .ignored }
               paletteSelection = (min(paletteSelection, count - 1) + 1) % count
@@ -2818,10 +2830,13 @@ private struct Composer: View {
       .dshCard(tint: DSHTheme.surface, radius: DSHRadius.lg)
     }.padding(DSHSpace.s5)
     // Any edit re-arms the palette: selection returns to the top hit and an
-    // Esc dismissal lasts only until the user types again.
-    .onChange(of: harness.draft) { _, _ in
+    // Esc dismissal lasts only until the user types again. Opening the menu
+    // (the draft becoming a lone "/") also refreshes both catalogs so newly
+    // installed skills appear without re-attaching the session.
+    .onChange(of: harness.draft) { _, newValue in
       paletteSelection = 0
       paletteDismissed = false
+      if newValue == "/" { harness.refreshSlashCatalog() }
     }
     }
   }

@@ -17,9 +17,10 @@ composer 此前已有 `/` 行的发送分发（`commands/execute`，未解析回
 ## Decision
 
 - `NativeCommandPalette.swift` 承载统一的菜单条目模型（指令组 + 本地指令 + 技能组）、匹配器、面板视图、pick 分发（`extension HarnessController`）和 `/model` 的模型选择 popover。
-  - 指令匹配 = 大小写不敏感的有序子序列，前缀命中排在前（上游 fuzzy-discovery 的简化版，组内保持目录序）；技能匹配 = 前缀（上游 skill source 就是 `startsWith`）；与指令重名的技能被指令遮蔽（上游明确「a name shared with a host command still resolves to the command」）。总行数封顶 10，面板不出内滚。
+  - 指令匹配 = 大小写不敏感的有序子序列，前缀命中排在前（上游 fuzzy-discovery 的简化版，组内保持目录序）；技能匹配 = 前缀（上游 skill source 就是 `startsWith`）；与指令重名的技能被指令遮蔽（上游明确「a name shared with a host command still resolves to the command」）。已安装技能全量列出：8 行以内面板贴内容高度，超过则固定高度内滚并跟随键盘选中（scrollTo 不加动画，避免按住方向键时高亮跑在滚动前面）。
   - 面板渲染选中高亮、组标题（两组同时存在才显示）、参数 hint、`modelInvocable: false` 技能的「仅手动」徽标、快捷键提示行。
-- `Composer`（main.swift）键盘：↑/↓ 循环选中，Tab 补全名字（落 `/name `），回车按 Web 的三类分发处理选中项——无参指令直接执行、带 hint 指令落 `/name `、技能落 `/name `（上游「a pick lands the literal `/name ` text」，展开由 Host 的 `dsh-tool-skill` pre-step 手势边界完成）；Esc 关闭面板至下次编辑。
+- `Composer`（main.swift）键盘：↑/↓ 循环选中（含 `.repeat` 相位，按住即按系统重复速率连走），Tab 补全名字（落 `/name `），回车按 Web 的三类分发处理选中项——无参指令直接执行、带 hint 指令落 `/name `、技能落 `/name `（上游「a pick lands the literal `/name ` text」，展开由 Host 的 `dsh-tool-skill` pre-step 手势边界完成）；Esc 关闭面板至下次编辑。
+- 目录新鲜度：草稿变成单独的 `/` 时重拉 `skill.list` + `commands/list`（`refreshSlashCatalog`）——会话中途安装的技能不用重挂会话即可出现，等价于 Web 端 `commands/change` 失效重拉的原生替身。
 - 面板只在「裸 token」阶段显示（`/xxx` 且无空白），出现空白即收起；发送路径不动。
 - 两条原生特判（`send()` 入口 + pick 分发双覆盖，仅裸行）：`/export` 走 carrier 的 `GET /api/session.export` 原生下载——注册表里的 export handler 是 Web 插件桩，只回一句固定文本，真下载是浏览器效果；`/model` 打开 composer 模型选择 popover（`HarnessController.showModelPicker`）。
 

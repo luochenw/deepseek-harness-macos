@@ -46,8 +46,8 @@ enum DSHSlashMatcher {
   /// ordered-subsequence hits, catalog order within each band. Skills use
   /// prefix-only matching (the upstream skill source filters by
   /// `startsWith(query)`) and a name shared with a command resolves to the
-  /// command — deliberate upstream precedence. Row count stays bounded so the
-  /// palette never needs an inner scroller.
+  /// command — deliberate upstream precedence. Every matching installed
+  /// skill is listed; the palette view scrolls past its visible window.
   static func entries(commands: [DSHCommandDescriptor], skills: [DSHSkillEntry], query: String) -> [DSHSlashEntry] {
     var commandEntries = commands.map { command in
       DSHSlashEntry(name: bare(command.name), description: command.description, kind: .command(hint: command.input?.hint))
@@ -68,12 +68,10 @@ enum DSHSlashMatcher {
     let rankedCommands = prefixHits + subsequenceHits
 
     let commandNames = Set(rankedCommands.map(\.name))
-    let skillSlots = max(0, 10 - rankedCommands.count)
-    let skillEntries = skills.lazy
+    let skillEntries = skills
       .filter { !commandNames.contains($0.name) && $0.name.lowercased().hasPrefix(query) }
       .map { DSHSlashEntry(name: $0.name, description: $0.description, kind: .skill(userOnly: !$0.modelInvocable)) }
-      .prefix(skillSlots)
-    return rankedCommands + Array(skillEntries)
+    return rankedCommands + skillEntries
   }
 
   private static func bare(_ name: String) -> String {
@@ -103,7 +101,36 @@ struct CommandPaletteView: View {
   let selection: Int
   let onPick: (DSHSlashEntry) -> Void
 
+  /// Rows beyond this render inside a fixed-height scroller that follows the
+  /// keyboard selection; at or below it the palette hugs its content.
+  private static let inlineRowLimit = 8
+
   var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      if entries.count <= Self.inlineRowLimit {
+        rows
+      } else {
+        ScrollViewReader { proxy in
+          ScrollView(showsIndicators: false) { rows }
+            .frame(height: 236)
+            // No animation: holding ↑/↓ repeats at the system key rate and
+            // an eased scroll would lag several rows behind the highlight.
+            .onChange(of: selection) { _, index in
+              guard entries.indices.contains(index) else { return }
+              proxy.scrollTo(entries[index].id)
+            }
+            .onAppear { if entries.indices.contains(selection) { proxy.scrollTo(entries[selection].id) } }
+        }
+      }
+      Text("↑↓ 选择 · Tab 补全 · 回车执行 · Esc 关闭")
+        .font(.caption2).foregroundStyle(DSHTheme.inkFaint)
+        .padding(.horizontal, DSHSpace.s2).padding(.top, 2)
+    }
+    .padding(DSHSpace.s2)
+    .dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
+  }
+
+  @ViewBuilder private var rows: some View {
     let firstSkillIndex = entries.firstIndex(where: \.isSkill)
     let showHeaders = firstSkillIndex.map { $0 > 0 } ?? false
     VStack(alignment: .leading, spacing: 2) {
@@ -112,12 +139,7 @@ struct CommandPaletteView: View {
         if showHeaders, index == firstSkillIndex { header("技能") }
         row(entry, selected: index == selection)
       }
-      Text("↑↓ 选择 · Tab 补全 · 回车执行 · Esc 关闭")
-        .font(.caption2).foregroundStyle(DSHTheme.inkFaint)
-        .padding(.horizontal, DSHSpace.s2).padding(.top, 2)
     }
-    .padding(DSHSpace.s2)
-    .dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
   }
 
   private func header(_ title: String) -> some View {
