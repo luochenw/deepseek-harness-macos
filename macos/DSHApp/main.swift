@@ -18,6 +18,7 @@ struct DSHNativeApp: App {
       ContentView()
         .environmentObject(controller)
         .frame(minWidth: 1180, minHeight: 760)
+        .onAppear { FloatingBubbleManager.shared.attach(controller) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
           controller.stopForTermination()
         }
@@ -34,6 +35,7 @@ struct DSHNativeApp: App {
       CommandGroup(after: .toolbar) {
         Button("搜索会话") { controller.showSessionSearch = true }.keyboardShortcut("f", modifiers: [.command, .shift])
         Button("打开工作区") { controller.openWorkspace() }.keyboardShortcut("o", modifiers: .command)
+        Button("显示/隐藏悬浮圈") { FloatingBubbleManager.shared.toggle() }.keyboardShortcut("y", modifiers: [.command, .option])
         Button("设置…") { controller.showSettings = true }.keyboardShortcut(",", modifiers: .command)
       }
     }
@@ -2455,7 +2457,7 @@ private struct ToolGroupRow: View {
 
 /// One rolling wave band of the waiting indicator — top edge is a cosine
 /// curve whose phase the caller advances per frame.
-private struct WaveBand: Shape {
+struct WaveBand: Shape {
   let baseY: CGFloat
   let amplitude: CGFloat
   let phase: CGFloat
@@ -2936,7 +2938,12 @@ private struct Composer: View {
           Menu { Button("进入计划模式", action: harness.enterPlanMode); Button("设定目标") { harness.draft = "/goal " }; Divider(); Button("重命名当前会话", action: harness.beginRenameCurrentSession); Button("创建会话分支", action: harness.forkCurrentSession); Button("归档当前会话", action: harness.archiveCurrentSession); Button("导出会话日志", action: harness.exportCurrentSessionLog); Button("查看归档会话") { harness.showArchivedSessions = true }; Divider(); Button("新会话", action: harness.newSession); Button("打开工作区", action: harness.openWorkspace) } label: { Image(systemName: "ellipsis.circle") }
             .menuStyle(.borderlessButton).fixedSize().foregroundStyle(DSHTheme.inkSoft).help("更多操作")
           Button(action: harness.pickImage) { Image(systemName: "paperclip") }.buttonStyle(.borderless).foregroundStyle(DSHTheme.inkSoft).help("添加图片")
-          VoiceInputButton { text in harness.draft += (harness.draft.isEmpty ? "" : " ") + text; if harness.canSend { harness.send() } }
+          // Manual dictation only fills the composer for review; only a
+          // wake-word-initiated utterance auto-sends.
+          VoiceInputButton { text, viaWake in
+            harness.draft += (harness.draft.isEmpty ? "" : " ") + text
+            if viaWake, harness.canSend { harness.send() }
+          }
           Spacer()
           ComposerModelMenu()
           if harness.isRunning {

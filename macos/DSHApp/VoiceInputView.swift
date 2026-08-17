@@ -1,10 +1,10 @@
 import SwiftUI
 
 /// Composer microphone button (V1 push-to-talk): tap to start listening, tap
-/// again — or ~1.2s of silence — to finalize; the transcript is handed to
-/// `onCommit`. While listening the button pulses and a compact bubble shows
-/// the live partial transcript. When the host passes `speakReplies`, a small
-/// speaker toggle controls automatic reply playback.
+/// again — or a pause after speaking — to finalize; the transcript is handed
+/// to `onCommit` with a via-wake flag. The pulsing icon itself is the whole
+/// listening indicator (no floating bubble). When the host passes
+/// `speakReplies`, a small speaker toggle controls automatic reply playback.
 ///
 /// V2: when the wake word is enabled (VoiceSettings.wakeEnabled, default off)
 /// the button also hosts a resident WakeWordListener — an orange dot shows the
@@ -13,7 +13,11 @@ import SwiftUI
 /// suspended for the whole talk session and resumed when it ends.
 struct VoiceInputButton: View {
   var speakReplies: Binding<Bool>?
-  var onCommit: (String) -> Void
+  /// Final transcript plus how the session started: `viaWake == true` only
+  /// for wake-word-initiated dictation — the caller auto-sends那条, while a
+  /// manual click just fills the composer.
+  var onCommit: (String, _ viaWake: Bool) -> Void
+  @State private var viaWake = false
   @StateObject private var voice = VoiceController()
   @StateObject private var wake = WakeWordListener()
   @State private var pulsing = false
@@ -23,7 +27,7 @@ struct VoiceInputButton: View {
     return nil
   }
 
-  init(speakReplies: Binding<Bool>? = nil, onCommit: @escaping (String) -> Void) {
+  init(speakReplies: Binding<Bool>? = nil, onCommit: @escaping (String, _ viaWake: Bool) -> Void) {
     self.speakReplies = speakReplies
     self.onCommit = onCommit
   }
@@ -91,9 +95,10 @@ struct VoiceInputButton: View {
         .help("自动播报回复")
       }
     }
-    .overlay(alignment: .bottom) { transcriptBubble }
+    // No floating transcript bubble — the pulsing icon is the listening
+    // indicator, and the text lands in the composer where you can edit it.
     .onAppear {
-      voice.onFinalText = { text in onCommit(text) }
+      voice.onFinalText = { text in onCommit(text, viaWake); viaWake = false }
       syncWakeListener()
     }
     // Covers both the settings pane and the context menu writing the defaults.
@@ -123,24 +128,6 @@ struct VoiceInputButton: View {
       } else {
         pulsing = false
       }
-    }
-  }
-
-  @ViewBuilder private var transcriptBubble: some View {
-    if isActive {
-      VStack(alignment: .leading, spacing: 4) {
-        Label(voice.state == .transcribing ? "正在识别…" : "正在聆听…", systemImage: "waveform")
-          .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-        if !voice.partialText.isEmpty { Text(voice.partialText).font(.caption).lineLimit(3) }
-      }
-      .padding(10)
-      .frame(minWidth: 160, maxWidth: 280, alignment: .leading)
-      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-      .overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.2)))
-      .fixedSize(horizontal: false, vertical: true)
-      .offset(y: -44)
-      .allowsHitTesting(false)
-      .transition(.opacity)
     }
   }
 
@@ -174,7 +161,8 @@ struct VoiceInputButton: View {
   private func syncWakeListener() {
     if VoiceSettings.wakeEnabled {
       wake.onWake = {
-        voice.onFinalText = { text in onCommit(text) }
+        viaWake = true
+        voice.onFinalText = { text in onCommit(text, viaWake); viaWake = false }
         voice.startListening()
       }
       wake.start()
@@ -184,7 +172,8 @@ struct VoiceInputButton: View {
   }
 
   private func toggle() {
-    voice.onFinalText = { text in onCommit(text) }
+    viaWake = false
+    voice.onFinalText = { text in onCommit(text, viaWake); viaWake = false }
     switch voice.state {
     case .listening: voice.stopListening()
     case .transcribing, .requestingPermission: break
