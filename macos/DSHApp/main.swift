@@ -22,6 +22,10 @@ struct DSHNativeApp: App {
           controller.stopForTermination()
         }
     }
+    // Custom chrome: the in-app header (ConversationHeader + sidebar top) IS
+    // the top of the page; the native title bar only duplicated the app name.
+    // Traffic lights float over the sidebar's padded top row.
+    .windowStyle(.hiddenTitleBar)
     .commands {
       CommandGroup(after: .newItem) {
         Button("新会话") { controller.newSession() }.keyboardShortcut("n", modifiers: .command)
@@ -390,6 +394,11 @@ final class HarnessController: ObservableObject {
   /// What the conversation pane actually shows: an open subagent transcript
   /// overlays the selected top-level session, never replaces it in `sessions`.
   var displayedSession: Session? { subagentTranscript ?? selectedSession }
+  /// True while the shown conversation has no user/assistant content yet —
+  /// drives where the workspace chips render (above the composer vs header).
+  var isNewConversation: Bool {
+    !(displayedSession?.messages.contains { $0.role == .user || $0.role == .assistant } ?? false)
+  }
   var hasCredential: Bool {
     guard let settings = settingsDescription else { return false }
     return Self.llmCredentialReferences(in: settings).contains { credentialStates[$0]?.configured == true }
@@ -1746,7 +1755,9 @@ final class HarnessController: ObservableObject {
     if pendingApproval == nil && pendingQuestion == nil { nativeAlerts.clearAttention() }
   }
 
-  private func appendSystem(_ text: String) {
+  // Internal, not private: the workspace chips (NativeWorkspaceChips.swift)
+  // surface git checkout/worktree outcomes through the same channel.
+  func appendSystem(_ text: String) {
     guard let index = selectedSessionIndex else { return }
     sessions[index].messages.append(Message(role: .system, text: text))
     sessions[index].updatedAt = Date()
@@ -1813,21 +1824,18 @@ private struct Sidebar: View {
         Spacer()
         Button(action: harness.newSession) { Image(systemName: "square.and.pencil") }.buttonStyle(.dshGhost).help("新会话")
       }
+      // Room for the traffic lights, which float over the sidebar now that
+      // the native title bar is hidden.
+      .padding(.top, 26)
       Button(action: harness.newSession) { Label("新会话", systemImage: "plus").frame(maxWidth: .infinity) }.buttonStyle(.dshPrimary)
 
-      VStack(alignment: .leading, spacing: DSHSpace.s2) {
-        HStack {
-          Text("工作区").dshSectionLabel()
-          Spacer()
-          Button(action: { harness.showSessionSearch = true }) { Image(systemName: "magnifyingglass") }.buttonStyle(.dshGhost)
-        }
-        WorkspaceSwitcherButton()
-      }
-
+      // Workspace lives with the conversation now (WorkspaceChips above the
+      // composer / in the header), not in the sidebar — single job: sessions.
       VStack(alignment: .leading, spacing: DSHSpace.s2) {
         HStack {
           Text("会话").dshSectionLabel()
           Spacer()
+          Button(action: { harness.showSessionSearch = true }) { Image(systemName: "magnifyingglass") }.buttonStyle(.dshGhost)
           Button(action: harness.refreshHostSnapshots) { Image(systemName: "arrow.clockwise") }.buttonStyle(.dshGhost)
           Text("\(harness.hostSessions.count > 0 ? harness.hostSessions.count : harness.sessions.count)").font(.system(size: 10.5)).foregroundStyle(DSHTheme.inkFaint)
         }
@@ -2084,6 +2092,9 @@ private struct ConversationHeader: View {
           else { ForEach(harness.hostPresets.filter { $0.broken == nil }) { p in Button(p.name ?? p.id) { harness.selectCurrentPreset(p.id) } } }
         }
       }
+      // With content in the transcript the workspace context docks up here,
+      // compact (blank conversations show it above the composer instead).
+      if !harness.isNewConversation { WorkspaceChips(compact: true) }
       // Session figures (context / tokens / turns) live up here now — they
       // are session state, not compose-time controls.
       StatusStrip()
@@ -2567,39 +2578,51 @@ private struct Composer: View {
       GoalBar()
       QueueDockView()
       if harness.draft.hasPrefix("/") { CommandPaletteView() }
+      // Codex-style workspace chips above the box while the conversation is
+      // still blank; once it has content they live in the page header.
+      if harness.isNewConversation {
+        HStack { WorkspaceChips(); Spacer() }
+      }
       // Text field and every compose-time control (attachments, voice,
       // model picker, send/stop) share one bordered box, matching the
       // consolidated-composer redesign — see
       // .agents/notes/implemented/bug-fix/2026-08-17-composer-consolidation.md.
       VStack(alignment: .leading, spacing: DSHSpace.s2) {
-        TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).scrollContentBackground(.hidden)
-          .frame(minHeight: 54, maxHeight: 140)
-          .focused($editorFocused)
-          // The editor's own scroll view: thin overlay scroller, never the
-          // always-on gutter bar (background placement — see NativeScrollbars).
-          .dshThinScrollers()
-          // 回车直接发送；Shift+回车换行。Intercepted before the newline is
-          // inserted, so a sent draft doesn't leave a stray empty line.
-          .onKeyPress(.return, phases: .down) { press in
-            if press.modifiers.contains(.shift) { return .ignored }
-            guard harness.canSend else { return .ignored }
-            harness.send()
-            return .handled
-          }
-          .overlay(alignment: .topLeading) {
-            // Hidden while focused, not just while non-empty: IME marked text
-            // (pinyin composition) never reaches the SwiftUI binding, so a
-            // focused-empty placeholder would sit under the composition
-            // underline text. Focus is the only reliable signal we have.
-            if harness.draft.isEmpty && !editorFocused {
-              // Insets must mirror TextEditor's own text origin (NSTextView:
-              // textContainerInset 0, lineFragmentPadding 5) or the insertion
-              // point and this placeholder sit visibly misaligned.
-              Text(harness.hostPlanActive ? "描述任务以生成计划" : "描述你想要构建的内容")
-                .font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
-                .padding(.leading, 5).allowsHitTesting(false)
+        // Auto-growing editor: an invisible mirror of the draft sets the
+        // height (one line by default, up to the max), the editor fills it.
+        ZStack(alignment: .topLeading) {
+          Text(harness.draft.isEmpty ? " " : (harness.draft.hasSuffix("\n") ? harness.draft + " " : harness.draft))
+            .font(.system(.body, design: .rounded))
+            .padding(.horizontal, 5)
+            .opacity(0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).scrollContentBackground(.hidden)
+            .focused($editorFocused)
+            // The editor's own scroll view: thin overlay scroller, never the
+            // always-on gutter bar (background placement — see NativeScrollbars).
+            .dshThinScrollers()
+            // 回车直接发送；Shift+回车换行。Intercepted before the newline is
+            // inserted, so a sent draft doesn't leave a stray empty line.
+            .onKeyPress(.return, phases: .down) { press in
+              if press.modifiers.contains(.shift) { return .ignored }
+              guard harness.canSend else { return .ignored }
+              harness.send()
+              return .handled
             }
+        }
+        .frame(minHeight: 24, maxHeight: 140)
+        .overlay(alignment: .leading) {
+          // Hidden while focused, not just while non-empty: IME marked text
+          // (pinyin composition) never reaches the SwiftUI binding, so a
+          // focused-empty placeholder would sit under the composition
+          // underline text. Focus is the only reliable signal we have.
+          // Vertically centered — the box is a single line when empty.
+          if harness.draft.isEmpty && !editorFocused {
+            Text(harness.hostPlanActive ? "描述任务以生成计划" : "描述你想要构建的内容")
+              .font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
+              .padding(.leading, 5).allowsHitTesting(false)
           }
+        }
         if let image = harness.draftImage {
           HStack(spacing: 6) {
             Label(image.url.lastPathComponent, systemImage: "photo").font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(1)
