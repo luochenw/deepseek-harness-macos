@@ -23,8 +23,9 @@ extension HarnessController {
     }
   }
 
-  /// Store profile fields through revisioned path operations, then separately
-  /// send a nonempty credential through the write-only credentials API.
+  /// Store profile fields through the shared revisioned mutation path
+  /// (`mutateSettings`, including its conflict handling), then separately send
+  /// a nonempty credential through the write-only credentials API.
   func saveProviderProfile(
     namespace: DSHSettingsNamespace,
     path: [String],
@@ -36,57 +37,47 @@ extension HarnessController {
     guard let hostClient else { completion(.failure(NSError(domain: "DSH", code: 1, userInfo: [NSLocalizedDescriptionKey: "Host 未连接"]))); return }
     // The editor owns this complete profile representation. Writing the profile
     // at its directory path avoids leaving fields from an older draft behind.
-    let ops = [DSHSettingsPathOperation.set(path, .object(profile))]
-    Task {
-      do {
-        let updated = try await hostClient.mutateSettings(ns: namespace.ns, ops: ops, revision: namespace.revision)
-        if let credentialRef, !credentialValue.isEmpty {
-          try await hostClient.setCredential(ref: credentialRef, value: credentialValue)
-        }
-        await MainActor.run {
-          if var settings = self.settingsDescription, let index = settings.namespaces.firstIndex(where: { $0.ns == updated.ns }) {
-            settings.namespaces[index] = updated
-            self.settingsDescription = settings
-          }
-          self.status = "提供方已保存"
-          self.showProviderAuthoring = false
-          completion(.success(()))
-          self.refreshProviderConfiguration()
-        }
-      } catch {
-        await MainActor.run {
-          if let rpc = error as? DSHRPCError, rpc.code == "settings-conflict" {
-            self.status = "设置已被其他客户端修改；已重新载入，请重新应用更改。"
-            self.refreshProviderConfiguration()
-            completion(.failure(NSError(domain: "DSH", code: 2, userInfo: [NSLocalizedDescriptionKey: "设置冲突：请在最新配置上重新编辑。"])))
-          } else {
-            completion(.failure(error))
+    mutateSettings(
+      ns: namespace.ns,
+      ops: [DSHSettingsPathOperation.set(path, .object(profile))],
+      revision: namespace.revision,
+      success: { _ in
+        Task {
+          do {
+            if let credentialRef, !credentialValue.isEmpty {
+              try await hostClient.setCredential(ref: credentialRef, value: credentialValue)
+            }
+            await MainActor.run {
+              self.status = "提供方已保存"
+              self.showProviderAuthoring = false
+              completion(.success(()))
+              self.refreshProviderConfiguration()
+            }
+          } catch {
+            await MainActor.run { completion(.failure(error)) }
           }
         }
-      }
-    }
+      },
+      conflict: {
+        self.refreshProviderConfiguration()
+        completion(.failure(NSError(domain: "DSH", code: 2, userInfo: [NSLocalizedDescriptionKey: "设置冲突：请在最新配置上重新编辑。"])))
+      },
+      failure: { error in completion(.failure(error)) }
+    )
   }
 
   private static func credentialRefs(providers: [DSHConfigurableProvider], settings: DSHSettingsDescription) -> [String] {
     let namespaces = Dictionary(uniqueKeysWithValues: settings.namespaces.map { ($0.ns, $0) })
     let refs = providers.compactMap { provider -> String? in
       guard let namespace = namespaces[provider.settingsNs],
-            let profile = namespace.value.providerProfile(at: provider.settingsPath),
-            case let .string(ref)? = profile["apiKeyEnv"], !ref.isEmpty else { return nil }
+            let profile = namespace.value.objectValue(at: provider.settingsPath),
+            let ref = profile.apiKeyEnv, !ref.isEmpty else { return nil }
       return ref
     }
-    return Array(Set(refs)).sorted()
-  }
-}
-
-private extension DSHJSONValue {
-  func providerProfile(at path: [String]) -> [String: DSHJSONValue]? {
-    var current = self
-    for key in path {
-      guard case let .object(object) = current, let next = object[key] else { return nil }
-      current = next
-    }
-    guard case let .object(object) = current else { return nil }
-    return object
+    // LOCAL_RELAY_API_KEY/RELAY_API_KEY/DEEPSEEK_API_KEY are the built-in
+    // default route's credential refs. No provider profile references them
+    // explicitly, so without hardcoding them here the default route's
+    // credential-configured badge never lights up in the UI.
+    return Array(Set(refs + ["LOCAL_RELAY_API_KEY", "RELAY_API_KEY", "DEEPSEEK_API_KEY"])).sorted()
   }
 }

@@ -60,6 +60,9 @@ struct DSHSessionProjectionValues: Decodable {
   let todos: [DSHTodoItem]?
   let plan: DSHPlanState?
   let goal: DSHGoalProjection?
+  let tokenUsage: DSHTokenUsage?
+  let contextPressure: DSHContextPressure?
+  let sessionStats: DSHSessionStats?
 }
 
 struct DSHGoalProjection: Decodable {

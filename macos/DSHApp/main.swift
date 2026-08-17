@@ -7,7 +7,6 @@ private let workspaceKey = "dsh.workspace"
 private let modelKey = "dsh.model"
 private let providerKey = "dsh.provider"
 private let presetKey = "dsh.preset"
-private let permissionKey = "dsh.permission"
 private let defaultProvider = "relay"
 private let defaultModel = "gpt-5.6-terra"
 
@@ -40,16 +39,6 @@ struct DSHNativeApp: App {
 
 @MainActor
 final class HarnessController: ObservableObject {
-  enum PermissionMode: String, CaseIterable, Identifiable {
-    case readOnly = "read-only"
-    case workspaceWrite = "workspace-write"
-    case fullAccess = "danger-full-access"
-    var id: String { rawValue }
-    var label: String {
-      switch self { case .readOnly: "只读"; case .workspaceWrite: "工作区写入"; case .fullAccess: "完全访问" }
-    }
-  }
-
   enum Preset: String, CaseIterable, Identifiable {
     case standard, code, minimal, creator
     var id: String { rawValue }
@@ -74,6 +63,8 @@ final class HarnessController: ObservableObject {
     var timestamp = Date()
     var attachment: DSHAttachmentRef?
     var reasoning: String?
+    /// Host durable message id — the key for per-message Typert feedback.
+    var hostMessageId: String?
   }
 
   struct Session: Identifiable, Equatable {
@@ -257,7 +248,9 @@ final class HarnessController: ObservableObject {
   @Published var subagentTreeTruncated = false
   @Published var selectedWorkflowRunID: String?
   @Published var draftImage: DraftImage?
-  @Published private(set) var isRunning = false
+  @Published private(set) var isRunning = false {
+    didSet { nativeAlerts.setRunning(isRunning) }
+  }
   @Published var status = "准备就绪"
   @Published private(set) var workspace: URL?
   @Published var showSettingsEditor = false
@@ -295,19 +288,17 @@ final class HarnessController: ObservableObject {
   @Published var showSettings = false
   @Published var showSessionSearch = false
   @Published var showRenameSession = false
+  @Published var showArchivedSessions = false
   @Published var renameDraft = ""
   @Published var searchResults: [DSHSessionSearchItem] = []
   @Published var searchHasMore = false
   @Published var showDetails = true
   @Published var selectedTool: ToolActivity?
   @Published var apiKey = ""
-  @Published var baseURL = ""
   @Published var provider = defaultProvider
   @Published var model = defaultModel
   @Published var reasoningEffort = "high"
   @Published var preset: Preset = .code
-  @Published var permission: PermissionMode = .workspaceWrite
-  @Published var planMode = false
   @Published var activeTools: [ToolActivity] = []
   @Published var todos: [DSHTodoItem] = []
   @Published var subagents: [DSHSubagentEntry] = []
@@ -325,10 +316,23 @@ final class HarnessController: ObservableObject {
   @Published var hostPresets: [DSHAgentPreset] = []
   @Published var hostPlanActive = false
   @Published var goal: DSHGoalProjection?
-  @Published var queuedPrompts: [String] = []
+  @Published var tokenUsage: DSHTokenUsage?
+  @Published var contextPressure: DSHContextPressure?
+  @Published var sessionStats: DSHSessionStats?
+  @Published var hostCommands: [DSHCommandDescriptor] = []
+  @Published var messageFeedback: [String: DSHMessageFeedbackItem] = [:]
+  @Published var pluginEntries: [DSHPluginInventoryEntry] = []
   @Published var queueItems: [DSHQueueItem] = []
   @Published var pendingApproval: PendingApproval?
   @Published var pendingQuestion: PendingQuestion?
+  /// Backlog behind the currently-shown `pendingApproval`/`pendingQuestion` —
+  /// a second concurrent request no longer overwrites (and orphans) the first.
+  @Published var queuedApprovals: [PendingApproval] = []
+  @Published var queuedQuestions: [PendingQuestion] = []
+  /// "本会话总是允许" — `"sessionId::toolName"` keys auto-answered without
+  /// ever surfacing a sheet. Cleared implicitly when the session changes
+  /// (nothing persists this across sessions by design).
+  @Published var alwaysAllowedTools: Set<String> = []
   @Published private(set) var hostStatus = "正在启动持久 DSH Host…"
   @Published private(set) var hostSessions: [DSHSessionSummary] = []
   @Published private(set) var hostWorkspaces: [DSHWorkspaceView] = []
@@ -341,11 +345,6 @@ final class HarnessController: ObservableObject {
   var hostClient: DSHHostClient?
   private var hostEvents: DSHEventSocket?
   private var muxEvents: DSHEventSocket?
-  private var task: Process?
-  private var outputBuffer = ""
-  private var errorBuffer = ""
-  private var forceStopDeadline: DispatchWorkItem?
-  private var runningSessionID: UUID?
 
   /// `~/Documents/DeepSeek Harness`, created on first use. Used only when no
   /// workspace has ever been chosen — keeps `workspace` non-nil (and
@@ -368,11 +367,9 @@ final class HarnessController: ObservableObject {
       UserDefaults.standard.set(defaultURL.path, forKey: workspaceKey)
     }
     apiKey = ProcessInfo.processInfo.environment["RELAY_API_KEY"] ?? ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"] ?? ""
-    baseURL = ProcessInfo.processInfo.environment["DEEPSEEK_BASE_URL"] ?? ""
     provider = UserDefaults.standard.string(forKey: providerKey) ?? defaultProvider
     model = UserDefaults.standard.string(forKey: modelKey) ?? defaultModel
     preset = Preset(rawValue: UserDefaults.standard.string(forKey: presetKey) ?? Preset.code.rawValue) ?? .code
-    permission = PermissionMode(rawValue: UserDefaults.standard.string(forKey: permissionKey) ?? PermissionMode.workspaceWrite.rawValue) ?? .workspaceWrite
     seedConfigurationFromUserDSHIfNeeded()
     nativeAlerts.attach()
     newSession()
@@ -516,6 +513,10 @@ final class HarnessController: ObservableObject {
       } else if sessionID == hostCurrentSessionID {
         applyLiveEvent(event, view: frame["view"] as? [String: Any])
       }
+    case "session/projection":
+      guard let sessionId = frame["sessionId"] as? String, sessionId == hostCurrentSessionID,
+            let key = frame["key"] as? String, let value = frame["value"] else { return }
+      applyProjection(key: key, value: value)
     case "session/queue":
       if let items = frame["items"] as? [[String: Any]] {
         queueItems = items.compactMap { item in
@@ -525,15 +526,30 @@ final class HarnessController: ObservableObject {
           let text = content?.compactMap { $0["text"] as? String }.joined() ?? ""
           return DSHQueueItem(id: id, placement: item["placement"] as? String ?? "queued", text: text)
         }
-        queuedPrompts = queueItems.map(\.text)
       }
     case "session/jobs":
       if let jobs = frame["jobs"] as? [[String: Any]] { activeTools = jobs.map { ToolActivity(callId: $0["id"] as? String ?? UUID().uuidString, name: $0["label"] as? String ?? "后台任务", summary: $0["detail"] as? String ?? $0["status"] as? String ?? "", state: ($0["status"] as? String) == "failed" ? .failed : .running, output: "", presentation: nil) } }
     case "approval/requested":
       guard let rpcId = frame["_rpcId"] as? String, let sessionId = frame["sessionId"] as? String, let approvalId = frame["approvalId"] as? String else { return }
       let toolName = frame["toolName"] as? String ?? "工具"
-      pendingApproval = PendingApproval(id: approvalId, rpcId: rpcId, sessionId: sessionId, toolName: toolName, reason: frame["reason"] as? String)
+      if alwaysAllowedTools.contains(Self.alwaysAllowKey(sessionId: sessionId, toolName: toolName)), let hostClient {
+        Task { try? await hostClient.respond(rpcId: rpcId, value: DSHApprovalAnswer(sessionId: sessionId, approvalId: approvalId, outcome: "allowed-once")) }
+        return
+      }
+      let approval = PendingApproval(id: approvalId, rpcId: rpcId, sessionId: sessionId, toolName: toolName, reason: frame["reason"] as? String)
+      // A second request while one is already showing used to silently
+      // overwrite `pendingApproval`, leaving the first's RPC unanswered
+      // forever — queue instead, see the reconcile-parallel-redesigns note.
+      if pendingApproval == nil { pendingApproval = approval } else { queuedApprovals.append(approval) }
       nativeAlerts.notifyApprovalNeeded(toolName: toolName)
+    case "approval/resolved":
+      // Another client (or a Host-side timeout) settled it — retract it
+      // from whichever of the shown slot / backlog it's sitting in.
+      if let approvalId = frame["approvalId"] as? String {
+        if pendingApproval?.id == approvalId { pendingApproval = queuedApprovals.isEmpty ? nil : queuedApprovals.removeFirst() }
+        else { queuedApprovals.removeAll { $0.id == approvalId } }
+        refreshAttentionBadge()
+      }
     case "question/requested":
       guard let rpcId = frame["_rpcId"] as? String, let sessionId = frame["sessionId"] as? String, let questions = frame["questions"] as? [[String: Any]] else { return }
       let items = questions.compactMap { value -> PendingQuestion.Item? in
@@ -541,8 +557,15 @@ final class HarnessController: ObservableObject {
         let options = (value["options"] as? [[String: Any]] ?? []).compactMap { $0["label"] as? String }
         return PendingQuestion.Item(id: id, question: question, options: options)
       }
-      pendingQuestion = PendingQuestion(id: rpcId, rpcId: rpcId, sessionId: sessionId, items: items)
+      let question = PendingQuestion(id: rpcId, rpcId: rpcId, sessionId: sessionId, items: items)
+      if pendingQuestion == nil { pendingQuestion = question } else { queuedQuestions.append(question) }
       nativeAlerts.notifyQuestionNeeded()
+    case "question/resolved":
+      if let rpcId = (frame["_rpcId"] as? String) ?? (frame["rpcId"] as? String) {
+        if pendingQuestion?.id == rpcId { pendingQuestion = queuedQuestions.isEmpty ? nil : queuedQuestions.removeFirst() }
+        else { queuedQuestions.removeAll { $0.id == rpcId } }
+        refreshAttentionBadge()
+      }
     default:
       break
     }
@@ -557,7 +580,11 @@ final class HarnessController: ObservableObject {
         else { sessions[index].messages.append(Message(role: .assistant, text: delta)) }
       }
     case "assistant/message":
-      if let text = liveMessageText(data["message"]) { sessions[index].messages.append(Message(role: .assistant, text: text)) }
+      if let text = liveMessageText(data["message"]) {
+        var message = Message(role: .assistant, text: text)
+        message.hostMessageId = (data["message"] as? [String: Any])?["id"] as? String
+        sessions[index].messages.append(message)
+      }
     case "user/message":
       if let text = liveMessageText(data["message"]) { sessions[index].messages.append(Message(role: .user, text: text)) }
     case "tool/call":
@@ -606,6 +633,12 @@ final class HarnessController: ObservableObject {
       case "aborted": runNotice = "本轮已中断"
       default: break
       }
+      // Host turns end async; nothing previously reset these for the Host
+      // path (only the removed legacy one-shot process's completion handler
+      // did), so the composer stayed stuck on "停止/排队" after the first
+      // message — see .agents/notes/implemented/feature/2026-08-17-port-feature-completeness-branch.md.
+      isRunning = false
+      sessions[index].isRunning = false
       nativeAlerts.notifyTurnFinished(summary: sessions[index].title)
     case "compaction/start":
       runNotice = "正在压缩历史上下文…"
@@ -895,11 +928,16 @@ final class HarnessController: ObservableObject {
     todos = summary.projections?.values.todos ?? []
     hostPlanActive = summary.projections?.values.plan?.active ?? false
     goal = summary.projections?.values.goal
+    tokenUsage = summary.projections?.values.tokenUsage
+    contextPressure = summary.projections?.values.contextPressure
+    sessionStats = summary.projections?.values.sessionStats
     status = summary.running ? "持久会话正在运行" : "正在载入持久会话"
     loadHistory(sessionId: summary.sessionId, localSessionID: local.id)
     loadSubagents(parentSessionId: summary.sessionId)
     refreshSessionModels()
     loadSkills(sessionId: summary.sessionId)
+    loadCommands(sessionId: summary.sessionId)
+    loadMessageFeedback(sessionId: summary.sessionId)
   }
 
 
@@ -911,6 +949,47 @@ final class HarnessController: ObservableObject {
         let result = try await hostClient.skills(sessionId: sessionId)
         await MainActor.run { self.skills = result }
       } catch { await MainActor.run { self.skills = [] } }
+    }
+  }
+
+  /// Typert-layer session context: the slash-command roster and per-message
+  /// feedback state. Both are structurally unreachable over the legacy
+  /// ApiProxy layer — see DSHTypertGateway.swift.
+  func loadCommands(sessionId: String) {
+    guard let hostClient else { return }
+    Task { if let commands = try? await hostClient.listCommands(sessionId: sessionId) { await MainActor.run { self.hostCommands = commands } } }
+  }
+
+  func loadMessageFeedback(sessionId: String) {
+    guard let hostClient else { return }
+    Task {
+      if let items = try? await hostClient.messageFeedback(sessionId: sessionId) {
+        await MainActor.run { self.messageFeedback = Dictionary(uniqueKeysWithValues: items.map { ($0.messageId, $0) }) }
+      }
+    }
+  }
+
+  func loadPluginInventory() {
+    guard let hostClient else { return }
+    Task { if let entries = try? await hostClient.pluginInventory() { await MainActor.run { self.pluginEntries = entries } } }
+  }
+
+  /// Thumb feedback on one assistant message; `rating` nil removes it.
+  func setFeedback(messageId: String, rating: String?) {
+    guard let hostClient, let sessionId = hostCurrentSessionID else { return }
+    let existing = messageFeedback[messageId]
+    Task {
+      do {
+        if let rating {
+          let item = try await hostClient.putMessageFeedback(sessionId: sessionId, messageId: messageId, rating: rating, note: nil, ifVersion: existing?.version)
+          await MainActor.run { self.messageFeedback[messageId] = item }
+        } else if let existing {
+          try await hostClient.deleteMessageFeedback(sessionId: sessionId, messageId: messageId, ifVersion: existing.version)
+          await MainActor.run { self.messageFeedback[messageId] = nil }
+        }
+      } catch {
+        await MainActor.run { self.status = "反馈提交失败：\(error.localizedDescription)"; self.loadMessageFeedback(sessionId: sessionId) }
+      }
     }
   }
 
@@ -970,7 +1049,11 @@ final class HarnessController: ObservableObject {
       case "user/message":
         if let text = textFromMessage(data["message"]) { result.append(Message(role: .user, text: text, timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(data["message"]))) }
       case "assistant/message":
-        if let text = textFromMessage(data["message"]) { result.append(Message(role: .assistant, text: text, timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(data["message"]), reasoning: reasoningFromMessage(data["message"]))) }
+        if let text = textFromMessage(data["message"]) {
+          var message = Message(role: .assistant, text: text, timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(data["message"]), reasoning: reasoningFromMessage(data["message"]))
+          message.hostMessageId = data["message"]?.object?["id"]?.string
+          result.append(message)
+        }
       case "tool/call":
         let name = data["name"]?.string ?? "tool"
         let id = data["callId"]?.string ?? "\(event.seq)"
@@ -1167,29 +1250,42 @@ final class HarnessController: ObservableObject {
     }
     guard workspace != nil else { status = "请选择工作区"; chooseWorkspace(); return }
     guard hasCredential else { status = "需要配置 API Key"; showSettings = true; return }
-    guard workspace != nil, hasCredential, !isRunning, let workspace, let sessionIndex = selectedSessionIndex else { return }
-    guard persistRuntimeConfiguration() else { return }
+    guard !isRunning, let sessionIndex = selectedSessionIndex else { return }
+    guard let hostClient, let hostSessionID = hostCurrentSessionID else {
+      status = "Host 未连接，无法发送；请点击重新连接后再试"
+      return
+    }
 
-    if let hostClient, let hostSessionID = hostCurrentSessionID {
+    // Slash commands dispatch through the Typert command registry with a
+    // typed result; an unresolvable line falls back to a normal prompt.
+    if text.hasPrefix("/"), image == nil {
       draft = ""
-      draftImage = nil
-      let preview = image == nil ? text : "\(text)\n[图片附件：\(image!.url.lastPathComponent)]"
-      sessions[sessionIndex].messages.append(Message(role: .user, text: preview))
-      sessions[sessionIndex].messages.append(Message(role: .assistant, text: "正在由持久 DSH Host 处理…"))
-      sessions[sessionIndex].isRunning = true
+      sessions[sessionIndex].messages.append(Message(role: .user, text: text))
+      // Gate re-entry the same way the normal-prompt path below does — a
+      // fallback to `prompt(...)` starts a real turn, and without this the
+      // `guard !isRunning` above never engages, letting a second send fire
+      // into the same session while the first is still in flight.
       isRunning = true
-      status = "持久 Host 正在处理"
+      sessions[sessionIndex].isRunning = true
       Task {
         do {
-          var content: [DSHPromptContent] = text.isEmpty ? [] : [.text(text)]
-          if let image, let bytes = try? Data(contentsOf: image.url) { content.append(.image(data: bytes.base64EncodedString(), mediaType: image.mediaType, name: image.url.lastPathComponent)) }
-          try await hostClient.prompt(sessionId: hostSessionID, content: content)
-          await MainActor.run { self.status = "已交给持久 Host；等待事件流接入" }
+          if let execution = try await hostClient.executeCommand(sessionId: hostSessionID, line: text) {
+            await MainActor.run {
+              if let output = execution.result.text, !output.isEmpty { self.appendSystem(execution.succeeded ? output : "命令失败：\(output)") }
+              else { self.status = execution.succeeded ? "命令已执行" : "命令执行失败" }
+              // Command execution isn't a turn — no `turn/end` event will
+              // arrive to reset this, unlike the `prompt(...)` fallback below.
+              self.isRunning = false
+              if let current = self.selectedSessionIndex { self.sessions[current].isRunning = false }
+            }
+          } else {
+            try await hostClient.prompt(sessionId: hostSessionID, content: [.text(text)])
+          }
         } catch {
           await MainActor.run {
             self.isRunning = false
             if let current = self.selectedSessionIndex { self.sessions[current].isRunning = false }
-            self.appendSystem("Host prompt 失败：\(error.localizedDescription)")
+            self.appendSystem("命令执行失败：\(error.localizedDescription)")
           }
         }
       }
@@ -1197,60 +1293,26 @@ final class HarnessController: ObservableObject {
     }
 
     draft = ""
-    sessions[sessionIndex].messages.append(Message(role: .user, text: text))
-    sessions[sessionIndex].updatedAt = Date()
-    if sessions[sessionIndex].title == "新会话" { sessions[sessionIndex].title = String(text.prefix(42)) }
-    sessions[sessionIndex].messages.append(Message(role: .assistant, text: ""))
+    draftImage = nil
+    let preview = image == nil ? text : "\(text)\n[图片附件：\(image!.url.lastPathComponent)]"
+    sessions[sessionIndex].messages.append(Message(role: .user, text: preview))
+    sessions[sessionIndex].messages.append(Message(role: .assistant, text: "正在由持久 DSH Host 处理…"))
     sessions[sessionIndex].isRunning = true
     isRunning = true
-    runningSessionID = sessions[sessionIndex].id
-    status = "\(provider) / \(model) 正在工作"
-    activeTools = [ToolActivity(callId: "headless-runtime", name: "DSH runtime", summary: "在 \(workspace.lastPathComponent) 中执行任务", state: .running, output: "", presentation: nil)]
-    selectedTool = activeTools.first
-    outputBuffer = ""
-    errorBuffer = ""
-
-    let process = Process()
-    process.executableURL = bundledNode
-    process.arguments = [bundledDSH.path, "--profile", "headless", text]
-    process.currentDirectoryURL = workspace
-    var environment = ProcessInfo.processInfo.environment
-    try? FileManager.default.createDirectory(at: dshHome, withIntermediateDirectories: true)
-    environment["HOME"] = environment["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path
-    environment["DSH_HOME"] = dshHome.path
-    environment["PATH"] = "\(runtime.path):/usr/bin:/bin:/usr/sbin:/sbin"
-    environment["DSH_PERMISSION_MODE"] = permission.rawValue
-    if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      environment[provider == "relay" ? "RELAY_API_KEY" : "DEEPSEEK_API_KEY"] = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    if !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { environment["DEEPSEEK_BASE_URL"] = baseURL.trimmingCharacters(in: .whitespacesAndNewlines) }
-    environment["DSH_CWD"] = workspace.path
-    process.environment = environment
-
-    let stdout = Pipe()
-    let stderr = Pipe()
-    process.standardOutput = stdout
-    process.standardError = stderr
-    task = process
-    stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
-      let data = handle.availableData
-      guard !data.isEmpty else { return }
-      DispatchQueue.main.async { self?.appendAssistant(String(decoding: data, as: UTF8.self)) }
-    }
-    stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
-      let data = handle.availableData
-      guard !data.isEmpty else { return }
-      DispatchQueue.main.async { self?.errorBuffer = String((self?.errorBuffer ?? "" + String(decoding: data, as: UTF8.self)).suffix(12000)) }
-    }
-    process.terminationHandler = { [weak self] ended in
-      DispatchQueue.main.async { self?.finish(process: ended, stdout: stdout, stderr: stderr) }
-    }
-    do { try process.run() } catch {
-      isRunning = false
-      sessions[sessionIndex].isRunning = false
-      task = nil
-      appendSystem("无法启动内置 DSH：\(error.localizedDescription)")
-      status = "启动失败"
+    status = "持久 Host 正在处理"
+    Task {
+      do {
+        var content: [DSHPromptContent] = text.isEmpty ? [] : [.text(text)]
+        if let image, let bytes = try? Data(contentsOf: image.url) { content.append(.image(data: bytes.base64EncodedString(), mediaType: image.mediaType, name: image.url.lastPathComponent)) }
+        try await hostClient.prompt(sessionId: hostSessionID, content: content)
+        await MainActor.run { self.status = "已交给持久 Host；等待事件流接入" }
+      } catch {
+        await MainActor.run {
+          self.isRunning = false
+          if let current = self.selectedSessionIndex { self.sessions[current].isRunning = false }
+          self.appendSystem("Host prompt 失败：\(error.localizedDescription)")
+        }
+      }
     }
   }
 
@@ -1264,40 +1326,43 @@ final class HarnessController: ObservableObject {
     }
   }
 
+  /// Submits while a turn is already running, via the same Host RPC `send()`
+  /// uses (`session.prompt` defaults to `mode: "queue"`) — previously this
+  /// only appended to a local array that nothing ever drained once the
+  /// legacy one-shot CLI path was removed, so a message typed while
+  /// "运行中" silently vanished. The Host's own `session/queue` push
+  /// (already wired into `queueItems`) is what actually reflects the queued
+  /// item back into the UI, not local state here.
   func queueDraft() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty else { return }
-    queuedPrompts.append(text)
+    let image = draftImage
+    guard !text.isEmpty || image != nil else { return }
+    guard let hostClient, let hostSessionID = hostCurrentSessionID else { return }
     draft = ""
+    draftImage = nil
+    Task {
+      do {
+        var content: [DSHPromptContent] = text.isEmpty ? [] : [.text(text)]
+        if let image, let bytes = try? Data(contentsOf: image.url) { content.append(.image(data: bytes.base64EncodedString(), mediaType: image.mediaType, name: image.url.lastPathComponent)) }
+        try await hostClient.prompt(sessionId: hostSessionID, content: content, mode: "queue")
+        await MainActor.run { self.status = "已排队" }
+      } catch { await MainActor.run { self.appendSystem("排队失败：\(error.localizedDescription)") } }
+    }
   }
 
   func stop() {
-    if let hostClient, let hostSessionID = hostCurrentSessionID {
-      Task {
-        do { try await hostClient.cancel(sessionId: hostSessionID); await MainActor.run { self.status = "已请求取消持久会话" } }
-        catch { await MainActor.run { self.status = "取消失败：\(error.localizedDescription)" } }
-      }
-      return
+    guard let hostClient, let hostSessionID = hostCurrentSessionID else { return }
+    Task {
+      do { try await hostClient.cancel(sessionId: hostSessionID); await MainActor.run { self.status = "已请求取消持久会话" } }
+      catch { await MainActor.run { self.status = "取消失败：\(error.localizedDescription)" } }
     }
-    stopRuntime(reason: "正在停止 DSH")
   }
-  func stopForTermination() { stopRuntime(reason: "正在关闭 DSH") }
+  /// The bundled Host is a long-lived child process, not per-message — this
+  /// is the only place it's asked to stop. `deinit` firing is not reliable
+  /// for a GUI app's actual quit path, so `applicationWillTerminate` (wired
+  /// in DSHNativeApp) calls this explicitly.
+  func stopForTermination() { hostRuntime?.stop() }
 
-  private func stopRuntime(reason: String) {
-    guard let task, task.isRunning else { return }
-    status = reason
-    task.terminate()
-    let pid = task.processIdentifier
-    let deadline = DispatchWorkItem { if task.isRunning { _ = kill(pid, SIGKILL) } }
-    forceStopDeadline?.cancel()
-    forceStopDeadline = deadline
-    DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: deadline)
-  }
-
-  func togglePlanMode() {
-    planMode.toggle()
-    appendSystem(planMode ? "已进入计划模式。请描述任务以生成计划。" : "已退出计划模式。")
-  }
 
 
   func selectCurrentModel(provider: String, model: String, reasoning: String? = nil) {
@@ -1317,11 +1382,6 @@ final class HarnessController: ObservableObject {
     preset = next
     UserDefaults.standard.set(next.rawValue, forKey: presetKey)
     appendSystem("新会话将使用\(next.label)。当前运行中的会话不受影响。")
-  }
-
-  func setPermission(_ next: PermissionMode) {
-    permission = next
-    UserDefaults.standard.set(next.rawValue, forKey: permissionKey)
   }
 
   func toolDetail(_ tool: ToolActivity) { selectedTool = tool; showDetails = true }
@@ -1411,20 +1471,47 @@ final class HarnessController: ObservableObject {
   }
 
 
-  func answerApproval(_ allowed: Bool) {
-    guard let pending = pendingApproval, let hostClient else { return }
-    pendingApproval = nil
+  static func alwaysAllowKey(sessionId: String, toolName: String) -> String { "\(sessionId)::\(toolName)" }
+
+  func answerApproval(_ approval: PendingApproval, allowed: Bool, alwaysThisSession: Bool = false) {
+    guard let hostClient else { return }
+    // Validate against the specific item the sheet was showing, not just
+    // whatever is currently `pendingApproval` — a queued backlog item can
+    // promote into that slot between the sheet rendering and the click
+    // landing (mirrors `answerQuestionBatch`'s id check below).
+    if pendingApproval?.id == approval.id { pendingApproval = queuedApprovals.isEmpty ? nil : queuedApprovals.removeFirst() }
+    else { queuedApprovals.removeAll { $0.id == approval.id } }
+    refreshAttentionBadge()
+    if allowed && alwaysThisSession { alwaysAllowedTools.insert(Self.alwaysAllowKey(sessionId: approval.sessionId, toolName: approval.toolName)) }
     Task {
       do {
-        try await hostClient.respond(rpcId: pending.rpcId, value: DSHApprovalAnswer(sessionId: pending.sessionId, approvalId: pending.id, outcome: allowed ? "allowed-once" : "rejected"))
-        await MainActor.run { self.appendSystem(allowed ? "已允许 \(pending.toolName) 执行一次。" : "已拒绝 \(pending.toolName)。") }
+        try await hostClient.respond(rpcId: approval.rpcId, value: DSHApprovalAnswer(sessionId: approval.sessionId, approvalId: approval.id, outcome: allowed ? "allowed-once" : "rejected"))
+        await MainActor.run { self.appendSystem(allowed ? "已允许 \(approval.toolName) 执行一次。" : "已拒绝 \(approval.toolName)。") }
       } catch { await MainActor.run { self.appendSystem("审批响应失败：\(error.localizedDescription)") } }
     }
   }
 
+  /// Moves the currently-shown question to the back of the backlog instead
+  /// of discarding it — the old "取消" button submitted an empty answer,
+  /// silently dropping the question. Pulls the next queued one (if any)
+  /// into view; `presentDeferredQuestion()` recalls a deferred one later.
+  func deferPendingQuestion(_ question: PendingQuestion) {
+    guard pendingQuestion?.id == question.id else { return }
+    let next = queuedQuestions.isEmpty ? nil : queuedQuestions.removeFirst()
+    queuedQuestions.append(question)
+    pendingQuestion = next
+  }
+
+  func presentDeferredQuestion() {
+    guard pendingQuestion == nil, !queuedQuestions.isEmpty else { return }
+    pendingQuestion = queuedQuestions.removeFirst()
+  }
+
   func answerQuestionBatch(_ question: PendingQuestion, selections: [String: String], custom: [String: String]) {
     guard let hostClient else { return }
-    pendingQuestion = nil
+    if pendingQuestion?.id == question.id { pendingQuestion = queuedQuestions.isEmpty ? nil : queuedQuestions.removeFirst() }
+    else { queuedQuestions.removeAll { $0.id == question.id } }
+    refreshAttentionBadge()
     var answers: [DSHQuestionAnswer.Item] = []
     for item in question.items {
       let selectedValue = selections[item.id] ?? ""
@@ -1441,6 +1528,20 @@ final class HarnessController: ObservableObject {
       }
     }
   }
+  /// Applied from a live `session/projection` "title" push — the Host may
+  /// derive/rename a session's title mid-turn (e.g. from the first prompt).
+  func applyProjectedTitle(_ title: String) {
+    guard !title.isEmpty, let index = selectedSessionIndex else { return }
+    sessions[index].title = title
+  }
+
+  /// Drops the menu-bar "needs attention" badge once nothing is left
+  /// waiting for an answer — called after every approval/question
+  /// resolution, whether answered locally or settled by another client.
+  private func refreshAttentionBadge() {
+    if pendingApproval == nil && pendingQuestion == nil { nativeAlerts.clearAttention() }
+  }
+
   private func appendSystem(_ text: String) {
     guard let index = selectedSessionIndex else { return }
     sessions[index].messages.append(Message(role: .system, text: text))
@@ -1455,51 +1556,6 @@ final class HarnessController: ObservableObject {
   private var bundledNode: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/node") }
   private var bundledDSH: URL { runtime.appendingPathComponent("dsh/lib/bin.js") }
 
-  private func persistRuntimeConfiguration() -> Bool {
-    let selectedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard selectedModel.range(of: "^[A-Za-z0-9._:/-]+$", options: .regularExpression) != nil else { appendSystem("模型 ID 无效。"); return false }
-    let profile = dshHome.appendingPathComponent("profiles/headless", isDirectory: true)
-    do {
-      try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
-      let selectedProvider = provider == "relay" ? "relay" : "deepseek-official"
-      let content = "- id: agent-default-model\n  config:\n    provider: \(selectedProvider)\n    model: \(selectedModel)\n"
-      try content.write(to: profile.appendingPathComponent("cordis.patch.yml"), atomically: true, encoding: .utf8)
-      UserDefaults.standard.set(provider, forKey: providerKey)
-      UserDefaults.standard.set(selectedModel, forKey: modelKey)
-      return true
-    } catch { appendSystem("无法保存运行配置：\(error.localizedDescription)"); return false }
-  }
-
-  private func appendAssistant(_ text: String) {
-    outputBuffer += text
-    guard let index = sessions.firstIndex(where: { $0.id == runningSessionID }), let message = sessions[index].messages.lastIndex(where: { $0.role == .assistant }) else { return }
-    sessions[index].messages[message].text = outputBuffer
-    if !activeTools.isEmpty { activeTools[0].output = outputBuffer; selectedTool = activeTools[0] }
-  }
-
-  private func finish(process: Process, stdout: Pipe, stderr: Pipe) {
-    forceStopDeadline?.cancel()
-    stdout.fileHandleForReading.readabilityHandler = nil
-    stderr.fileHandleForReading.readabilityHandler = nil
-    guard task === process else { return }
-    task = nil
-    isRunning = false
-    if let index = sessions.firstIndex(where: { $0.id == runningSessionID }) {
-      sessions[index].isRunning = false
-      sessions[index].updatedAt = Date()
-      if outputBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        sessions[index].messages.append(Message(role: .assistant, text: process.terminationStatus == 0 ? "DSH 已完成，但没有文本输出。" : "DSH 失败：\(errorBuffer.isEmpty ? "无诊断输出" : errorBuffer)"))
-      }
-    }
-    let ok = process.terminationStatus == 0
-    if !activeTools.isEmpty { activeTools[0].state = ok ? .succeeded : .failed; activeTools[0].output = outputBuffer.isEmpty ? errorBuffer : outputBuffer; selectedTool = activeTools[0] }
-    status = ok ? "已完成" : "DSH 退出：\(process.terminationStatus)"
-    runningSessionID = nil
-    if !queuedPrompts.isEmpty {
-      draft = queuedPrompts.removeFirst()
-      send()
-    }
-  }
 }
 
 struct ContentView: View {
@@ -1531,6 +1587,7 @@ struct ContentView: View {
     .sheet(isPresented: $harness.showSessionSearch) { SessionSearchView() }
     .sheet(isPresented: $harness.showSubagentTree) { SubagentTreeView() }
     .sheet(isPresented: $harness.showRenameSession) { RenameSessionSheet() }
+    .sheet(isPresented: $harness.showArchivedSessions) { ArchivedSessionsView() }
     .sheet(item: $harness.pendingApproval) { approval in ApprovalSheet(approval: approval) }
     .sheet(item: $harness.pendingQuestion) { question in QuestionBatchSheet(question: question) }
   }
@@ -1600,7 +1657,6 @@ private struct Sidebar: View {
           DSHStatusDot(kind: harness.hostClient == nil ? .idle : .live, diameter: 6)
           Text(harness.hostStatus).font(.system(size: 10.5)).foregroundStyle(DSHTheme.inkFaint).lineLimit(2)
         }
-        Text("本机运行 · \(harness.permission.label)").font(.system(size: 10.5)).foregroundStyle(DSHTheme.inkFaint)
       }
     }
     .padding(DSHSpace.s4)
@@ -1737,9 +1793,6 @@ private struct ConversationHeader: View {
           else { ForEach(harness.hostPresets.filter { $0.broken == nil }) { p in Button(p.name ?? p.id) { harness.selectCurrentPreset(p.id) } } }
         }
       }
-      HeaderChip(icon: "lock.shield", label: harness.permission.label) {
-        ForEach(HarnessController.PermissionMode.allCases) { p in Button(p.label) { harness.setPermission(p) } }
-      }
       Button(action: { harness.showDetails.toggle() }) { Image(systemName: "sidebar.right") }.buttonStyle(.dshGhost)
     }.padding(.horizontal, DSHSpace.s5).padding(.vertical, DSHSpace.s3)
   }
@@ -1824,6 +1877,7 @@ private struct MessageBubble: View {
           .textSelection(.enabled).font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.ink)
           .frame(maxWidth: 760, alignment: .leading)
         if let attachment = message.attachment { AttachmentPreview(ref: attachment) }
+        if message.role == .assistant, let messageId = message.hostMessageId { FeedbackBar(messageId: messageId) }
       }
       .padding(DSHSpace.s4)
       .dshCard(tint: background, radius: DSHRadius.lg)
@@ -1839,6 +1893,52 @@ private struct MessageBubble: View {
   private var background: Color { message.role == .user ? DSHTheme.surfaceTint2 : message.role == .assistant ? DSHTheme.surface : DSHTheme.surfaceTint }
 }
 
+/// Per-message rating strip backed by the Typert messageFeedback service.
+private struct FeedbackBar: View {
+  @EnvironmentObject var harness: HarnessController
+  let messageId: String
+  var body: some View {
+    let current = harness.messageFeedback[messageId]?.rating
+    HStack(spacing: 6) {
+      Button(action: { harness.setFeedback(messageId: messageId, rating: current == "positive" ? nil : "positive") }) {
+        Image(systemName: current == "positive" ? "hand.thumbsup.fill" : "hand.thumbsup")
+      }.help("有帮助")
+      Button(action: { harness.setFeedback(messageId: messageId, rating: current == "negative" ? nil : "negative") }) {
+        Image(systemName: current == "negative" ? "hand.thumbsdown.fill" : "hand.thumbsdown")
+      }.help("没帮助")
+    }
+    .buttonStyle(.dshGhost).font(.caption)
+    .foregroundStyle(current == nil ? DSHTheme.inkFaint : DSHTheme.accent)
+  }
+}
+
+/// Slash-command autocomplete, shown above the input row while the draft
+/// starts with "/" — backed by the Typert `commands/list` roster.
+private struct CommandPaletteView: View {
+  @EnvironmentObject var harness: HarnessController
+  var body: some View {
+    let query = String(harness.draft.dropFirst()).trimmingCharacters(in: .whitespaces).lowercased()
+    let matches = harness.hostCommands.filter { query.isEmpty || normalized($0.name).lowercased().contains(query) }.prefix(6)
+    if !matches.isEmpty {
+      VStack(alignment: .leading, spacing: 2) {
+        ForEach(Array(matches)) { command in
+          Button(action: { harness.draft = "\(normalized(command.name)) " }) {
+            HStack(spacing: DSHSpace.s2) {
+              Text(normalized(command.name)).font(.system(size: 11.5, weight: .semibold, design: .monospaced)).foregroundStyle(DSHTheme.accent)
+              Text(command.description).font(.caption2).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
+              Spacer()
+              if let hint = command.input?.hint { Text(hint).font(.caption2).foregroundStyle(DSHTheme.inkFaint) }
+            }.padding(.vertical, 3).padding(.horizontal, DSHSpace.s2)
+          }.buttonStyle(.plain)
+        }
+      }
+      .padding(DSHSpace.s2)
+      .dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
+    }
+  }
+  private func normalized(_ name: String) -> String { name.hasPrefix("/") ? name : "/" + name }
+}
+
 private struct Composer: View {
   @EnvironmentObject var harness: HarnessController
   var body: some View {
@@ -1848,13 +1948,16 @@ private struct Composer: View {
     } else {
     VStack(spacing: DSHSpace.s2) {
       HStack {
-        if harness.planMode { Button("计划模式 ×", action: harness.togglePlanMode).buttonStyle(.dshSecondary) }
-        if !harness.queuedPrompts.isEmpty { DSHBadge(text: "已排队 \(harness.queuedPrompts.count)", tone: .warm) }
+        if harness.hostPlanActive { Button("计划模式 ×", action: harness.exitPlanMode).buttonStyle(.dshSecondary) }
+        if !harness.queueItems.isEmpty { DSHBadge(text: "已排队 \(harness.queueItems.count)", tone: .warm) }
         Spacer()
         Text(harness.status).font(.caption).foregroundStyle(harness.isRunning ? DSHTheme.warm : DSHTheme.inkFaint)
       }
+      GoalBar()
       QueueDockView()
+      if harness.draft.hasPrefix("/") { CommandPaletteView() }
       HStack(alignment: .bottom, spacing: DSHSpace.s3) {
+        VoiceInputButton { text in harness.draft += (harness.draft.isEmpty ? "" : " ") + text; if harness.canSend { harness.send() } }
         TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).scrollContentBackground(.hidden)
           .frame(minHeight: 54, maxHeight: 140).padding(DSHSpace.s2).dshCard(tint: DSHTheme.surface, radius: DSHRadius.lg)
         if harness.isRunning {
@@ -1865,14 +1968,48 @@ private struct Composer: View {
         } else { Button("发送", action: harness.send).buttonStyle(.dshPrimary).disabled(!harness.canSend) }
       }
       HStack {
-        Menu { Button("添加图片", action: harness.pickImage); Button("进入计划模式", action: harness.togglePlanMode); Button("重命名当前会话", action: harness.beginRenameCurrentSession); Button("创建会话分支", action: harness.forkCurrentSession); Button("归档当前会话", action: harness.archiveCurrentSession); Button("新会话", action: harness.newSession); Button("打开工作区", action: harness.openWorkspace) } label: { Image(systemName: "plus") }.foregroundStyle(DSHTheme.inkSoft)
+        Menu { Button("添加图片", action: harness.pickImage); Button("进入计划模式", action: harness.enterPlanMode); Button("设定目标") { harness.draft = "/goal " }; Button("重命名当前会话", action: harness.beginRenameCurrentSession); Button("创建会话分支", action: harness.forkCurrentSession); Button("归档当前会话", action: harness.archiveCurrentSession); Button("导出会话日志", action: harness.exportCurrentSessionLog); Button("查看归档会话") { harness.showArchivedSessions = true }; Button("新会话", action: harness.newSession); Button("打开工作区", action: harness.openWorkspace) } label: { Image(systemName: "plus") }.foregroundStyle(DSHTheme.inkSoft)
         if let image = harness.draftImage { Label(image.url.lastPathComponent, systemImage: "photo").font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(1); Button(action: { harness.draftImage = nil }) { Image(systemName: "xmark.circle.fill") }.buttonStyle(.dshGhost) }
-        Text(harness.planMode ? "描述任务以生成计划" : "描述你想要构建的内容").font(.caption).foregroundStyle(DSHTheme.inkFaint)
+        Text(harness.hostPlanActive ? "描述任务以生成计划" : "描述你想要构建的内容").font(.caption).foregroundStyle(DSHTheme.inkFaint)
         Spacer()
+        StatusStrip()
         Menu { Button("关闭推理") { harness.reasoningEffort = "off"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "off") }; Button("高") { harness.reasoningEffort = "high"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "high") }; Button("最大") { harness.reasoningEffort = "max"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "max") } } label: { Text("\(harness.provider) / \(harness.model) · \(harness.reasoningEffort)").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(DSHTheme.inkFaint) }
       }
     }.padding(DSHSpace.s5)
     }
+  }
+}
+
+/// Compact live-session figures from the Host's projection pushes: context
+/// occupancy vs window, cumulative token usage, and turn/step counts. Hidden
+/// entirely once none of the three have data yet (fresh session).
+private struct StatusStrip: View {
+  @EnvironmentObject var harness: HarnessController
+  var body: some View {
+    if harness.contextPressure != nil || harness.tokenUsage != nil || (harness.sessionStats?.turns ?? 0) > 0 {
+      HStack(spacing: DSHSpace.s3) {
+        if let pressure = harness.contextPressure, let occupied = pressure.projectedTokens ?? pressure.pressureTokens {
+          Text("上下文 \(Self.compact(occupied))\(pressure.contextWindow.map { "/\(Self.compact($0))" } ?? "")")
+            .foregroundStyle(pressure.contextWindow.map { Double(occupied) > Double($0) * 0.8 } == true ? DSHTheme.coral : DSHTheme.inkFaint)
+            .help("下一次请求的预计上下文占用 / 模型窗口")
+        }
+        if let usage = harness.tokenUsage {
+          Text("↑\(Self.compact(usage.totalInputTokens)) ↓\(Self.compact(usage.outputTokens))")
+            .foregroundStyle(DSHTheme.inkFaint)
+            .help("会话累计 token：输入（含缓存读写）↑ / 输出 ↓")
+        }
+        if let stats = harness.sessionStats, stats.turns > 0 {
+          Text("\(stats.turns) 轮 · \(stats.steps) 步")
+            .foregroundStyle(DSHTheme.inkFaint)
+            .help("整个会话的回合与步骤计数（LLM \(Int(stats.llmMs / 1000))s · 工具 \(Int(stats.toolMs / 1000))s）")
+        }
+      }
+      .font(.system(size: 10.5, design: .monospaced))
+    }
+  }
+
+  private static func compact(_ value: Int) -> String {
+    value >= 10_000 ? String(format: "%.0fk", Double(value) / 1000) : value >= 1000 ? String(format: "%.1fk", Double(value) / 1000) : "\(value)"
   }
 }
 
@@ -1931,7 +2068,7 @@ private struct SessionSearchView: View {
 private struct SettingsView: View {
   @EnvironmentObject var harness: HarnessController
   @State private var section = "通用"
-  private let sections = ["通用", "模型", "提供方", "插件", "Agent 预设"]
+  private let sections = ["通用", "模型", "提供方", "插件", "语音", "Agent 预设"]
   var body: some View {
     HStack(spacing: 0) {
       VStack(alignment: .leading, spacing: 2) {
@@ -1951,9 +2088,10 @@ private struct SettingsView: View {
       }.padding(DSHSpace.s5).frame(width: 600, height: 480).background(DSHTheme.surface)
     }
   }
-  @ViewBuilder private var settingsBody: some View { switch section { case "通用": Picker("默认 Agent preset", selection: $harness.preset) { ForEach(HarnessController.Preset.allCases) { Text($0.label).tag($0) } }.onChange(of: harness.preset) { _, v in harness.setPreset(v) }; Picker("默认权限", selection: $harness.permission) { ForEach(HarnessController.PermissionMode.allCases) { Text($0.label).tag($0) } }.onChange(of: harness.permission) { _, v in harness.setPermission(v) }; Text("当前会话保持原有 preset；新会话使用新的默认配置。").font(.caption).foregroundStyle(DSHTheme.inkFaint)
-  case "模型": Picker("提供方", selection: $harness.provider) { Text("Relay（本机）").tag("relay"); Text("DeepSeek 官方").tag("deepseek") }.pickerStyle(.segmented); Picker("模型", selection: $harness.model) { ForEach(harness.availableModels) { group in ForEach(group.models) { model in Text("\(group.name) / \(model.name)").tag(model.id) } }; if harness.availableModels.isEmpty { Text("GPT-5.6 Terra").tag("gpt-5.6-terra") } }; Button("刷新 Host 模型目录", action: harness.refreshModelConfiguration).buttonStyle(.dshSecondary); SecureField(harness.provider == "relay" ? "Relay API Key（写入 DSH Host）" : "DeepSeek API Key（写入 DSH Host）", text: $harness.apiKey).dshField(); Button("保存凭据", action: harness.saveCredential).buttonStyle(.dshSecondary).disabled(harness.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty); TextField("可选 API Base URL", text: $harness.baseURL).dshField(); Text(harness.hasCredential ? "凭据已可用" : "请提供 API Key").font(.caption).foregroundStyle(harness.hasCredential ? DSHTheme.accent : DSHTheme.warm)
+  @ViewBuilder private var settingsBody: some View { switch section { case "通用": Picker("默认 Agent preset", selection: $harness.preset) { ForEach(HarnessController.Preset.allCases) { Text($0.label).tag($0) } }.onChange(of: harness.preset) { _, v in harness.setPreset(v) }; Text("当前会话保持原有 preset；新会话使用新的默认配置。").font(.caption).foregroundStyle(DSHTheme.inkFaint)
+  case "模型": Picker("提供方", selection: $harness.provider) { Text("Relay（本机）").tag("relay"); Text("DeepSeek 官方").tag("deepseek") }.pickerStyle(.segmented); Picker("模型", selection: $harness.model) { ForEach(harness.availableModels) { group in ForEach(group.models) { model in Text("\(group.name) / \(model.name)").tag(model.id) } } }.disabled(harness.availableModels.isEmpty); if harness.availableModels.isEmpty { Text("尚未读到 Host 模型目录，点击下方刷新").font(.caption).foregroundStyle(DSHTheme.inkFaint) }; Button("刷新 Host 模型目录", action: harness.refreshModelConfiguration).buttonStyle(.dshSecondary); SecureField(harness.provider == "relay" ? "Relay API Key（写入 DSH Host）" : "DeepSeek API Key（写入 DSH Host）", text: $harness.apiKey).dshField(); Button("保存凭据", action: harness.saveCredential).buttonStyle(.dshSecondary).disabled(harness.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty); Text(harness.hasCredential ? "凭据已可用" : "请提供 API Key").font(.caption).foregroundStyle(harness.hasCredential ? DSHTheme.accent : DSHTheme.warm)
   case "提供方": Button("刷新提供方配置", action: harness.refreshProviderConfiguration).buttonStyle(.dshSecondary); if let settings = harness.settingsDescription, let pi = settings.namespaces.first(where: { $0.ns == "llm-pi-ai" }) { Text(settings.writable ? "配置可写 · revision \(pi.revision)" : "配置只读").font(.caption).foregroundStyle(settings.writable ? DSHTheme.accent : DSHTheme.warm); ForEach(harness.configurableProviders.filter { $0.settingsNs == pi.ns }) { provider in HStack { Text(provider.displayName).foregroundStyle(DSHTheme.ink); Spacer(); Button("编辑") { harness.openProviderAuthoring(provider) }.buttonStyle(.dshSecondary).disabled(!settings.writable) } }; Button("添加自定义提供方") { harness.openProviderAuthoring() }.buttonStyle(.dshPrimary).disabled(!settings.writable) } else { Text("llm-pi-ai 未由当前 Host 提供。").foregroundStyle(DSHTheme.inkFaint) }
-  case "插件": Text("已安装插件由内置 DSH runtime 管理。").foregroundStyle(DSHTheme.inkFaint); Button("刷新真实 Host 设置", action: harness.refreshSettings).buttonStyle(.dshSecondary); if let settings = harness.settingsDescription { Text(settings.writable ? "配置可写" : "配置只读").font(.caption).foregroundStyle(settings.writable ? DSHTheme.accent : DSHTheme.warm); ForEach(settings.namespaces) { ns in HStack { Label("\(ns.ns) · \(ns.applies)", systemImage: "puzzlepiece").foregroundStyle(DSHTheme.ink); Spacer(); Button("编辑") { harness.openSettingsEditor(ns: ns) }.buttonStyle(.dshSecondary).disabled(!settings.writable) } }; Text("凭据").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink).padding(.top, DSHSpace.s2); ForEach(Array(Set(harness.configurableProviders.compactMap { provider in harness.providerCredentialReference(provider) } + ["DEEPSEEK_API_KEY"])).sorted(), id: \.self) { ref in HStack { Text(ref).font(.system(.body, design: .monospaced)).foregroundStyle(DSHTheme.ink); Spacer(); Text((harness.credentialStates[ref]?.configured ?? false) ? "已配置" : "未配置").font(.caption).foregroundStyle((harness.credentialStates[ref]?.configured ?? false) ? DSHTheme.accent : DSHTheme.warm) } }; Text("在命名空间编辑器里可写入或清除 API Key。").font(.caption).foregroundStyle(DSHTheme.inkFaint) } else { Text("正在读取 Host 设置…").font(.caption).foregroundStyle(DSHTheme.inkFaint) }
-  default: Text("选择新会话使用的 Agent 能力组合。").foregroundStyle(DSHTheme.inkFaint); ForEach(HarnessController.Preset.allCases) { p in Button(action: { harness.setPreset(p) }) { VStack(alignment: .leading) { Text(p.label).font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink); Text(p.detail).font(.caption).foregroundStyle(DSHTheme.inkFaint) } }.buttonStyle(.plain).padding(.vertical, 4) } } }
+  case "插件": Text("已安装插件由内置 DSH runtime 管理。").foregroundStyle(DSHTheme.inkFaint); Button("刷新真实 Host 设置", action: harness.refreshSettings).buttonStyle(.dshSecondary); if let settings = harness.settingsDescription { Text(settings.writable ? "配置可写" : "配置只读").font(.caption).foregroundStyle(settings.writable ? DSHTheme.accent : DSHTheme.warm); ForEach(settings.namespaces) { ns in HStack { Label("\(ns.ns) · \(ns.applies)", systemImage: "puzzlepiece").foregroundStyle(DSHTheme.ink); Spacer(); Button("编辑") { harness.openSettingsEditor(ns: ns) }.buttonStyle(.dshSecondary).disabled(!settings.writable) } }; Text("凭据").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink).padding(.top, DSHSpace.s2); ForEach(Array(Set(harness.configurableProviders.compactMap { provider in harness.providerCredentialReference(provider) } + ["DEEPSEEK_API_KEY"])).sorted(), id: \.self) { ref in HStack { Text(ref).font(.system(.body, design: .monospaced)).foregroundStyle(DSHTheme.ink); Spacer(); Text((harness.credentialStates[ref]?.configured ?? false) ? "已配置" : "未配置").font(.caption).foregroundStyle((harness.credentialStates[ref]?.configured ?? false) ? DSHTheme.accent : DSHTheme.warm) } }; Text("在命名空间编辑器里可写入或清除 API Key。").font(.caption).foregroundStyle(DSHTheme.inkFaint) } else { Text("正在读取 Host 设置…").font(.caption).foregroundStyle(DSHTheme.inkFaint) }; HStack { Text("插件运行清单").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink); Spacer(); Button("刷新", action: harness.loadPluginInventory).buttonStyle(.dshGhost) }.padding(.top, DSHSpace.s2); if harness.pluginEntries.isEmpty { Text("点击刷新读取 Cordis 加载器的插件清单。").font(.caption).foregroundStyle(DSHTheme.inkFaint) } else { ForEach(harness.pluginEntries) { entry in HStack { Label(entry.moduleName, systemImage: "shippingbox").foregroundStyle(DSHTheme.ink); Spacer(); Text(entry.fiberPhase ?? (entry.enabled ? "未运行" : "已禁用")).font(.caption).foregroundStyle(entry.fiberPhase == "failed" ? DSHTheme.coral : DSHTheme.inkFaint) } } }
+  case "语音": VoiceSettingsView()
+  default: Text("选择新会话使用的 Agent 能力组合。").foregroundStyle(DSHTheme.inkFaint); ForEach(HarnessController.Preset.allCases) { p in Button(action: { harness.setPreset(p) }) { VStack(alignment: .leading) { Text(p.label).font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink); Text(p.detail).font(.caption).foregroundStyle(DSHTheme.inkFaint) } }.buttonStyle(.plain).padding(.vertical, 4) }; Text("Host Agent Preset 管理").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink).padding(.top, DSHSpace.s3); PresetManagerView() } }
 }

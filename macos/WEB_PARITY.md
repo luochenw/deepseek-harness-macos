@@ -11,11 +11,12 @@ Last audited against the installed DSH Web Host API and the web bundle compositi
 | Conversation history and streaming | Implemented with reasoning, retry, compaction, pagination and trajectory baseline | `session.history`, `events.mux` |
 | Prompt, queue, cancel | Implemented with native queue edit/remove/steer | `session.prompt`, `session.cancel`, `session/queue` |
 | Images | Implemented send, durable history ref, Host retrieval and automatic native preview | `session.prompt` image content block |
+| Slash commands, message feedback, plugin inventory | Command-line autocomplete/dispatch, per-message thumbs up/down, and a read-only plugin-inventory list in Settings implemented via the native Typert Gateway client | `commands/list`, `commands/execute`, `messageFeedback/*`, `pluginInventory/list` |
 | Tool and job state | Implemented callId-correlated Host render-intent cards, including delivered file open/reveal controls | `tool/*`, `session/jobs`, `host.openPath` |
-| Todo, plan, goal | Implemented baseline | session projections and `goal.*` |
-| Approval and questions | Implemented baseline | answerable mux frames and `/api/respond` |
+| Todo, plan, goal | Todo list, Host-driven plan mode (`plan.active`, not a local toggle), and a composer-docked goal bar (objective, phase, round progress, pause/resume/complete/clear) implemented | session projections, `goal.*`, Typert `commands/execute` |
+| Approval and questions | Implemented with a backlog queue (a second request no longer overwrites the one already showing), "always allow this session," and defer/recall for questions | answerable mux frames and `/api/respond` |
 | Subagents | Catalog, nested history navigation, continuable prompt (text and image) and interrupt implemented. A subagent transcript is a dedicated overlay on the conversation pane (not a synthetic top-level session) that streams live and visually distinguishes read-only (one-shot) from continuable transcripts — see [subagent-transcript-redesign](.agents/notes/implemented/feature/2026-08-14-subagent-transcript-redesign.md) | `subagent.list`, `subagent.history`, `subagent.prompt`, `subagent.interrupt` |
-| Skills | Catalog implemented | `skill.list` |
+| Skills | Catalog implemented and rendered as a dashboard card (name, description, model-invocable badge) | `skill.list` |
 | Models and credentials | Catalog/status/session selection, Host credential writes and revisioned Relay/custom provider authoring implemented | `llm.models`, `credentials.describe`, `session.selectModel` |
 | Agent presets | Roster/select implemented | `agentPreset.list`, `agentPreset.select` |
 | Settings | Inventory, revisioned JSON editor, mutate, open-document, credential write controls, and inline revision-conflict recovery (discard-and-reload or keep-edits-and-retry) implemented | `settings.describe` |
@@ -42,4 +43,4 @@ capability is only possible because this is a native app:
 
 ## Deliberate architecture
 
-The macOS app is SwiftUI/AppKit native. It starts the bundled DSH Host only as a local runtime, consumes its documented loopback RPC and WebSocket event protocol, and does not embed the Web UI in a WebView. Its RPC client implements the legacy dot-method `ApiProxy` surface (`session.*`, `workspace.*`, `subagent.*`, ...); the newer Typert Gateway (`/api/<namespace>/<method>`, used by `dynamicCordisRunner` self-modification and other newer capabilities) has no native client today.
+The macOS app is SwiftUI/AppKit native. It starts the bundled DSH Host only as a local runtime, consumes its documented loopback RPC and WebSocket event protocol, and does not embed the Web UI in a WebView. Its RPC client implements the legacy dot-method `ApiProxy` surface (`session.*`, `workspace.*`, `subagent.*`, ...) plus a native Typert Gateway client (`/api/<namespace>/<method>`) covering `commands/*`, `messageFeedback/*`, and `pluginInventory/*`; newer Gateway namespaces such as `dynamicCordisRunner` self-modification remain unimplemented.

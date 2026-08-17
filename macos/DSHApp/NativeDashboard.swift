@@ -11,6 +11,7 @@ struct NativeDashboard: View {
       if !harness.activeTools.isEmpty { JobCard(items: harness.activeTools) }
       if !harness.subagents.isEmpty || !harness.subagentPath.isEmpty { SubagentCard(items: harness.subagents) }
       if !harness.workflows.isEmpty { WorkflowCard(items: harness.workflows) }
+      if !harness.skills.isEmpty { SkillsCard(items: harness.skills) }
     }
   }
 }

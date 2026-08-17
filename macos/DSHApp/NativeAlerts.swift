@@ -23,10 +23,29 @@ final class NativeAlerts: NSObject {
     statusItem = item
   }
 
+  private var isRunning = false
+  private var needsAttention = false
+
   func setBadge(running: Bool, needsAttention: Bool) {
+    isRunning = running
+    self.needsAttention = needsAttention
     let symbol = needsAttention ? "exclamationmark.circle.fill" : running ? "circle.fill" : "sparkles"
     statusItem?.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "DeepSeek Harness")
     statusItem?.button?.contentTintColor = needsAttention ? .systemOrange : running ? .systemBlue : nil
+  }
+
+  /// Live turn state from the controller — the status item tracks running
+  /// for real, not just at notification moments. Attention state wins until
+  /// the pending approval/question is answered.
+  func setRunning(_ running: Bool) {
+    guard !needsAttention else { isRunning = running; return }
+    setBadge(running: running, needsAttention: false)
+  }
+
+  /// Pending approval/question was answered — drop the attention badge and
+  /// fall back to the live running state.
+  func clearAttention() {
+    setBadge(running: isRunning, needsAttention: false)
   }
 
   @objc private func activateApp() {

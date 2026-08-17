@@ -19,7 +19,7 @@ struct QuestionBatchSheet: View {
       }.frame(maxHeight: 380)
       HStack {
         Spacer()
-        Button("取消") { harness.answerQuestionBatch(question, selections: [:], custom: [:]) }.buttonStyle(.dshSecondary)
+        Button("稍后回答") { harness.deferPendingQuestion(question) }.buttonStyle(.dshSecondary).help("暂不回答，问题将保留，可稍后继续回答")
         Button("提交") { harness.answerQuestionBatch(question, selections: selections, custom: custom) }.buttonStyle(.dshPrimary)
       }
     }

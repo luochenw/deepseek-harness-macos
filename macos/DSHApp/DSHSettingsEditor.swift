@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Extend the decodable JSON value with encoding so the editor can render a
-/// namespace's redacted value back to text before sending it as a patch.
+/// namespace's redacted value back to text before diffing it as path ops.
 extension DSHJSONValue: Encodable {
   func encode(to encoder: Encoder) throws {
     var container = encoder.singleValueContainer()
@@ -17,17 +17,27 @@ extension DSHJSONValue: Encodable {
 }
 
 /// Sheet editor for one settings namespace. Shows the redacted value as
-/// editable JSON text, saves it back through settings.update with the revision
-/// it was read at, and manages the Relay / DeepSeek API keys through
+/// editable JSON text; on save it diffs the edited JSON against the snapshot
+/// taken when the text was loaded and commits only the changed paths as
+/// revisioned `settings.mutate` ops. `role('secret')` fields are structurally
+/// removed from the described value (no sentinel), so a root-level replace
+/// would erase stored secrets — the diff guarantees untouched keys (secrets
+/// included, since they never appear in either side of the diff) are never
+/// written. Also manages the Relay / DeepSeek API keys through
 /// credentials.set / credentials.unset.
 struct SettingsEditorView: View {
   @EnvironmentObject var harness: HarnessController
   let namespace: DSHSettingsNamespace
 
   @State private var jsonText = ""
+  /// Plain-JSON snapshot of the value the editor buffer was loaded from; the
+  /// save diff runs against this, so only keys the user actually edited are
+  /// sent to the Host.
+  @State private var baseline: [String: Any] = [:]
   @State private var credentialRef = "RELAY_API_KEY"
   @State private var credentialValue = ""
   @State private var error: String?
+  @State private var notice: String?
   @State private var conflict = false
 
   /// The freshest known namespace value/revision — kept live from
@@ -47,7 +57,7 @@ struct SettingsEditorView: View {
           Label("配置已被其他客户端修改（当前 revision \(currentNamespace.revision)）", systemImage: "exclamationmark.triangle.fill")
             .font(.caption.weight(.bold)).foregroundStyle(DSHTheme.warm)
           HStack(spacing: DSHSpace.s2) {
-            Button("放弃我的修改，载入最新") { jsonText = Self.prettyJSON(currentNamespace.value); conflict = false }.buttonStyle(.dshSecondary)
+            Button("放弃我的修改，载入最新") { load(currentNamespace); conflict = false }.buttonStyle(.dshSecondary)
             Button("保留我的修改，基于最新版本重试保存") { conflict = false; save() }.buttonStyle(.dshPrimary)
           }
         }.padding(DSHSpace.s3).dshCard(tint: DSHTheme.warmSoft, radius: DSHRadius.md)
@@ -63,9 +73,12 @@ struct SettingsEditorView: View {
       if let error {
         Text(error).font(.caption).foregroundStyle(DSHTheme.coral)
       }
+      if let notice {
+        Text(notice).font(.caption).foregroundStyle(DSHTheme.inkSoft)
+      }
 
       HStack(spacing: DSHSpace.s2) {
-        Button("重置") { jsonText = Self.prettyJSON(currentNamespace.value) }.buttonStyle(.dshSecondary)
+        Button("重置") { load(currentNamespace) }.buttonStyle(.dshSecondary)
         Spacer()
         Button("保存") { save() }.buttonStyle(.dshPrimary)
       }
@@ -89,19 +102,38 @@ struct SettingsEditorView: View {
     .padding(DSHSpace.s5)
     .frame(width: 600, height: 560)
     .background(DSHTheme.surface)
-    .onAppear { jsonText = Self.prettyJSON(namespace.value) }
+    .onAppear { load(namespace) }
+  }
+
+  /// Fill the editor buffer from a namespace value and reset the diff baseline
+  /// to match, so a subsequent save diffs against exactly what is shown.
+  private func load(_ source: DSHSettingsNamespace) {
+    jsonText = Self.prettyJSON(source.value)
+    baseline = Self.plainValue(source.value) as? [String: Any] ?? [:]
   }
 
   private func save() {
     error = nil
-    guard let patch = Self.parseObject(jsonText) else {
+    notice = nil
+    guard let edited = Self.parseObject(jsonText) else {
       error = "JSON 无效，无法保存。请检查后重试。"
       return
     }
-    harness.saveSettings(ns: namespace.ns, patch: patch, revision: currentNamespace.revision, conflict: {
-      conflict = true
-      harness.refreshSettings()
-    })
+    let ops = Self.diffOperations(old: baseline, new: edited, path: [])
+    guard !ops.isEmpty else {
+      notice = "没有修改，无需保存"
+      return
+    }
+    harness.mutateSettings(
+      ns: namespace.ns,
+      ops: ops,
+      revision: currentNamespace.revision,
+      success: { _ in harness.showSettingsEditor = false },
+      conflict: {
+        conflict = true
+        harness.refreshSettings()
+      }
+    )
   }
 
   private func saveCredential() {
@@ -123,11 +155,74 @@ struct SettingsEditorView: View {
     return text
   }
 
-  /// Parse the editor buffer back into a JSON object patch.
+  /// Parse the editor buffer back into a plain JSON object.
   private static func parseObject(_ text: String) -> [String: Any]? {
     guard let data = text.data(using: .utf8),
           let raw = try? JSONSerialization.jsonObject(with: data),
           let object = raw as? [String: Any] else { return nil }
     return object
+  }
+
+  /// Convert a decoded namespace value into the plain Foundation JSON shapes
+  /// `JSONSerialization` produces, so the baseline and the parsed editor
+  /// buffer diff over one representation.
+  private static func plainValue(_ value: DSHJSONValue) -> Any {
+    switch value {
+    case .string(let value): return value
+    case .number(let value): return value
+    case .bool(let value): return value
+    case .object(let value): return value.mapValues(plainValue)
+    case .array(let value): return value.map(plainValue)
+    case .null: return NSNull()
+    }
+  }
+
+  /// Minimal path ops turning `old` into `new`: unchanged keys produce no op
+  /// at all (so redacted secret fields — absent from both sides — are never
+  /// written), object values recurse so sibling edits do not replace a whole
+  /// subtree, and everything else is set or unset at its own path.
+  private static func diffOperations(old: [String: Any], new: [String: Any], path: [String]) -> [DSHSettingsPathOperation] {
+    var ops: [DSHSettingsPathOperation] = []
+    for key in Set(old.keys).union(new.keys).sorted() {
+      let childPath = path + [key]
+      switch (old[key], new[key]) {
+      case (nil, nil):
+        continue
+      case (nil, let added?):
+        // Parsed JSON always converts; `.null` is an unreachable fallback.
+        ops.append(.set(path: childPath, value: DSHJSONPatchValue(added) ?? .null))
+      case (_?, nil):
+        ops.append(.unset(path: childPath))
+      case (let before?, let after?):
+        if deepEqual(before, after) { continue }
+        if let beforeObject = before as? [String: Any], let afterObject = after as? [String: Any] {
+          ops.append(contentsOf: diffOperations(old: beforeObject, new: afterObject, path: childPath))
+        } else {
+          ops.append(.set(path: childPath, value: DSHJSONPatchValue(after) ?? .null))
+        }
+      }
+    }
+    return ops
+  }
+
+  /// Structural equality over plain JSON values (objects, arrays, numbers,
+  /// strings, bools, null) — the diff's change-detection predicate.
+  private static func deepEqual(_ a: Any, _ b: Any) -> Bool {
+    switch (a, b) {
+    case (is NSNull, is NSNull):
+      return true
+    case (let a as [String: Any], let b as [String: Any]):
+      guard a.count == b.count else { return false }
+      return a.allSatisfy { key, value in b[key].map { deepEqual(value, $0) } ?? false }
+    case (let a as [Any], let b as [Any]):
+      guard a.count == b.count else { return false }
+      return zip(a, b).allSatisfy { deepEqual($0, $1) }
+    case (let a as String, let b as String):
+      return a == b
+    case (let a as NSNumber, let b as NSNumber):
+      return a == b
+    default:
+      return false
+    }
   }
 }
