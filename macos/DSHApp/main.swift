@@ -339,6 +339,9 @@ final class HarnessController: ObservableObject {
   @Published private(set) var hostSessions: [DSHSessionSummary] = []
   @Published private(set) var hostWorkspaces: [DSHWorkspaceView] = []
   @Published private(set) var hostCurrentSessionID: String?
+  /// True while the lazy first-send path is creating the session backing the
+  /// default page's first message — gates duplicate sends until it resolves.
+  private var isCreatingFirstSession = false
   let attachmentStore = DSHAttachmentStore()
   private let nativeAlerts = NativeAlerts()
   var hostClientForAttachments: DSHHostClient? { hostClient }
@@ -374,7 +377,8 @@ final class HarnessController: ObservableObject {
     preset = Preset(rawValue: UserDefaults.standard.string(forKey: presetKey) ?? Preset.code.rawValue) ?? .code
     seedConfigurationFromUserDSHIfNeeded()
     nativeAlerts.attach()
-    newSession()
+    // 启动不再自动建会话：停在默认页（空态 + 可输入的 composer），第一条
+    // 消息发出时才懒创建 —— 见 lazy-first-session Agent Note。
     startPersistentHost()
   }
 
@@ -519,10 +523,11 @@ final class HarnessController: ObservableObject {
         self.refreshModelConfiguration()
         self.refreshSettings()
         self.refreshPresets()
-        // init() created the launch placeholder before the Host was up;
-        // give it its persistent session now, or the first send always
-        // fails with "Host 未连接" — see attachHostSessionToCurrentPlaceholder.
-        if self.hostCurrentSessionID == nil { self.attachHostSessionToCurrentPlaceholder() }
+        // A placeholder created before the Host finished booting (the user
+        // hit ⌘N early) still needs its persistent session. A fresh launch
+        // has nothing selected and stays on the default page — the first
+        // send creates its session lazily.
+        if self.hostCurrentSessionID == nil, self.selectedSessionIndex != nil { self.attachHostSessionToCurrentPlaceholder() }
       case .failure(let error):
         self.hostStatus = "Host 启动失败：\(error.localizedDescription)"
       }
@@ -947,7 +952,7 @@ final class HarnessController: ObservableObject {
         try await hostClient.archiveSession(sessionId)
         await MainActor.run {
           self.status = "会话已删除（可在归档中找回）"
-          if self.hostCurrentSessionID == sessionId { self.newSession() }
+          if self.hostCurrentSessionID == sessionId { self.clearToDefaultPage() }
           self.refreshHostSnapshots()
         }
       } catch { await MainActor.run { self.appendSystem("删除会话失败：\(error.localizedDescription)") } }
@@ -962,13 +967,21 @@ final class HarnessController: ObservableObject {
         await MainActor.run {
           self.status = "会话已归档"
           self.refreshHostSnapshots()
-          self.newSession()
+          self.clearToDefaultPage()
         }
       } catch { await MainActor.run { self.appendSystem("归档会话失败：\(error.localizedDescription)") } }
     }
   }
 
   func newSession() {
+    insertLocalSessionRow()
+    attachHostSessionToCurrentPlaceholder()
+  }
+
+  /// The local sidebar row + selection reset shared by explicit ⌘N and the
+  /// lazy first-send path (which needs the row without the fire-and-forget
+  /// attach so it can sequence the send after the Host session exists).
+  private func insertLocalSessionRow() {
     let session = Session(title: "新会话", workspaceName: workspaceName, updatedAt: Date(), messages: [
       Message(role: .system, text: "正在创建持久 DSH 会话…")
     ])
@@ -979,18 +992,27 @@ final class HarnessController: ObservableObject {
     subagentPath = []
     subagentTranscript = nil
     selectedWorkflowRunID = nil
-    attachHostSessionToCurrentPlaceholder()
+  }
+
+  /// Back to the launch default page: nothing selected, empty-state hero in
+  /// the conversation pane, and the next send lazily creates a fresh session.
+  private func clearToDefaultPage() {
+    hostCurrentSessionID = nil
+    selectedSessionID = nil
+    selectedTool = nil
+    activeSubagentAddress = nil
+    subagentPath = []
+    subagentTranscript = nil
+    selectedWorkflowRunID = nil
   }
 
   /// Create the persistent Host session backing the currently-selected local
-  /// placeholder. Split out of `newSession()` because init() runs
-  /// `newSession()` before `startPersistentHost()` — the launch placeholder
-  /// is created while `hostClient` is still nil, and without a post-connect
-  /// retry it stays Host-less forever: every send on a fresh launch died with
-  /// "Host 未连接，无法发送" until the user manually hit ⌘N. The connect
-  /// callback now calls this when no Host session is bound yet.
-  func attachHostSessionToCurrentPlaceholder() {
-    guard let hostClient else { return }
+  /// row. Callers: `newSession()` (explicit ⌘N), the connect callback (a
+  /// placeholder made before the Host finished booting), and `send()`'s lazy
+  /// first-message path — the latter passes `onComplete` to sequence the
+  /// actual send after the Host session is bound.
+  func attachHostSessionToCurrentPlaceholder(onComplete: ((Bool) -> Void)? = nil) {
+    guard let hostClient else { onComplete?(false); return }
     let cwd = workspace?.path
     let presetId = preset == .creator ? "cordis" : preset.rawValue
     // Capture the composer's advertised selection before hopping off the main
@@ -1024,9 +1046,12 @@ final class HarnessController: ObservableObject {
         }
         // Sync back from the Host either way so the composer label reflects
         // the session's real model, not an unconfirmed local wish.
-        await MainActor.run { self.refreshSessionModels() }
+        await MainActor.run { self.refreshSessionModels(); onComplete?(true) }
       } catch {
-        await MainActor.run { self.appendSystem("持久会话创建失败：\(error.localizedDescription)") }
+        await MainActor.run {
+          self.appendSystem("持久会话创建失败：\(error.localizedDescription)")
+          onComplete?(false)
+        }
       }
     }
   }
@@ -1381,7 +1406,22 @@ final class HarnessController: ObservableObject {
     }
     guard workspace != nil else { status = "请选择工作区"; chooseWorkspace(); return }
     guard hasCredential else { status = "需要配置 API Key"; showSettings = true; return }
-    guard !isRunning, let sessionIndex = selectedSessionIndex else { return }
+    guard !isRunning else { return }
+    // 默认页上的第一条消息：先懒创建会话（本地行 + Host 持久会话），
+    // 建好后重入 send()，草稿原样还在。isCreatingFirstSession 挡住
+    // 创建期间的重复触发（回车连按/按钮连点）。
+    guard let sessionIndex = selectedSessionIndex else {
+      guard !isCreatingFirstSession else { return }
+      guard hostClient != nil else { status = "Host 未连接，无法发送；请点击重新连接后再试"; return }
+      isCreatingFirstSession = true
+      insertLocalSessionRow()
+      attachHostSessionToCurrentPlaceholder { [weak self] ok in
+        guard let self else { return }
+        self.isCreatingFirstSession = false
+        if ok { self.send() }
+      }
+      return
+    }
     guard let hostClient, let hostSessionID = hostCurrentSessionID else {
       status = "Host 未连接，无法发送；请点击重新连接后再试"
       return
