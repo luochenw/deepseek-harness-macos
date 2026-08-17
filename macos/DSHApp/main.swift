@@ -2232,6 +2232,9 @@ private struct ConversationHeader: View {
       // With content in the transcript the workspace context docks up here,
       // compact (blank conversations show it above the composer instead).
       if !harness.isNewConversation { WorkspaceChips(compact: true) }
+      // The same model menu as the composer's, surfaced top-right too —
+      // both write through selectCurrentModel, so they can't drift.
+      ComposerModelMenu()
       Button(action: { harness.showDetails.toggle() }) { Image(systemName: "sidebar.right") }.buttonStyle(.dshGhost)
     }.padding(.horizontal, DSHSpace.s5).padding(.vertical, DSHSpace.s3)
   }
