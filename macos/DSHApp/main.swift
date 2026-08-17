@@ -1976,32 +1976,47 @@ private struct ReasoningBlock: View {
   }
 }
 
+// Claude Code-style rows, no role captions: role is carried entirely by
+// layout — user input is a right-aligned tinted bubble, assistant output is
+// plain text on the canvas, system notes are dim small print. Labels like
+// "你 / DSH / 系统" restated the same information on every row and made the
+// transcript read like a chat log instead of a working session.
 private struct MessageBubble: View {
   @EnvironmentObject var harness: HarnessController
   let message: HarnessController.Message
   var body: some View {
-    HStack {
-      if message.role == .user { Spacer(minLength: 180) }
+    switch message.role {
+    case .user:
+      HStack {
+        Spacer(minLength: 180)
+        VStack(alignment: .leading, spacing: 7) {
+          Text(message.text)
+            .textSelection(.enabled).font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.ink)
+            .frame(maxWidth: 640, alignment: .leading)
+          if let attachment = message.attachment { AttachmentPreview(ref: attachment) }
+        }
+        .padding(.horizontal, DSHSpace.s4).padding(.vertical, DSHSpace.s3)
+        .dshCard(tint: DSHTheme.surfaceTint2, radius: DSHRadius.lg)
+      }
+    case .assistant:
       VStack(alignment: .leading, spacing: 7) {
-        Text(label).font(.system(size: 10.5, weight: .bold)).foregroundStyle(labelTint)
         Text(message.text.isEmpty ? "正在思考…" : message.text)
-          .textSelection(.enabled).font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.ink)
+          .textSelection(.enabled).font(.system(.body, design: .rounded))
+          .foregroundStyle(message.text.isEmpty ? DSHTheme.inkFaint : DSHTheme.ink)
           .frame(maxWidth: 760, alignment: .leading)
         if let attachment = message.attachment { AttachmentPreview(ref: attachment) }
-        if message.role == .assistant, let messageId = message.hostMessageId { FeedbackBar(messageId: messageId) }
+        if let messageId = message.hostMessageId { FeedbackBar(messageId: messageId) }
       }
-      .padding(DSHSpace.s4)
-      .dshCard(tint: background, radius: DSHRadius.lg)
-      if message.role != .user { Spacer(minLength: 180) }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    case .system:
+      HStack(spacing: 7) {
+        Image(systemName: "info.circle").font(.system(size: 11))
+        Text(message.text).textSelection(.enabled).font(.system(size: 12, design: .rounded))
+      }
+      .foregroundStyle(DSHTheme.inkFaint)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
-  // Role is already carried by alignment (user right, assistant/system left)
-  // and by the background depth step below — the label doesn't also need to
-  // be in brand color on every single message, that reads as noisy over a
-  // long conversation. Color here stays reserved for state, not decoration.
-  private var label: String { switch message.role { case .user: "你"; case .assistant: "DSH"; case .system: "系统" } }
-  private var labelTint: Color { DSHTheme.inkFaint }
-  private var background: Color { message.role == .user ? DSHTheme.surfaceTint2 : message.role == .assistant ? DSHTheme.surface : DSHTheme.surfaceTint }
 }
 
 /// Per-message rating strip backed by the Typert messageFeedback service.
