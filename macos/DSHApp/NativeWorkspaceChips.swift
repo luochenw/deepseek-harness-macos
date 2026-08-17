@@ -11,9 +11,17 @@ struct WorkspaceChips: View {
   var compact = false
   @State private var git: DSHGitOps.Info?
 
+  /// Registered folders other than the active one — each gets its own chip,
+  /// Codex-style, so an imported folder is visibly there without opening
+  /// any menu.
+  private var otherWorkspaces: [DSHWorkspaceView] {
+    let current = harness.workspace?.standardizedFileURL.path
+    return harness.hostWorkspaces.filter { URL(fileURLWithPath: $0.path).standardizedFileURL.path != current }
+  }
+
   var body: some View {
     HStack(spacing: 6) {
-      // Directory chip — switch between Host workspaces or pick a folder.
+      // Active directory chip — menu also lists everything for completeness.
       Menu {
         ForEach(harness.hostWorkspaces) { workspace in
           Button(workspace.title) {
@@ -23,9 +31,18 @@ struct WorkspaceChips: View {
         if !harness.hostWorkspaces.isEmpty { Divider() }
         Button("打开工作区…", action: harness.chooseWorkspace)
       } label: {
-        chipLabel(icon: "folder", text: harness.workspaceName)
+        chipLabel(icon: "folder", text: harness.workspaceName, emphasized: true)
       }
       .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+
+      // Imported folders sit beside it as their own chips; click to switch.
+      ForEach(otherWorkspaces.prefix(compact ? 2 : 4)) { workspace in
+        Button(action: { harness.registerWorkspace(URL(fileURLWithPath: workspace.path, isDirectory: true)) }) {
+          chipLabel(icon: "folder", text: workspace.title)
+        }
+        .buttonStyle(.plain)
+        .help("切换到 \(workspace.path)")
+      }
 
       // Branch chip — only for git workspaces: pick a branch (checkout) or
       // spin the current branch into a worktree and switch to it.
@@ -62,15 +79,15 @@ struct WorkspaceChips: View {
     .task(id: harness.workspace?.path) { await reloadGit() }
   }
 
-  private func chipLabel(icon: String, text: String) -> some View {
+  private func chipLabel(icon: String, text: String, emphasized: Bool = false) -> some View {
     HStack(spacing: 5) {
       Image(systemName: icon).font(.system(size: compact ? 9.5 : 10.5))
-      Text(text).font(.system(size: compact ? 11 : 12)).lineLimit(1)
+      Text(text).font(.system(size: compact ? 11 : 12, weight: emphasized ? .medium : .regular)).lineLimit(1)
     }
-    .foregroundStyle(DSHTheme.inkSoft)
+    .foregroundStyle(emphasized ? DSHTheme.ink : DSHTheme.inkFaint)
     .padding(.horizontal, 9).padding(.vertical, compact ? 4 : 5)
-    .background(DSHTheme.fieldFill, in: Capsule())
-    .overlay(Capsule().strokeBorder(DSHTheme.fieldStroke.opacity(0.5), lineWidth: 1))
+    .background(emphasized ? DSHTheme.accentSoft : DSHTheme.fieldFill, in: Capsule())
+    .overlay(Capsule().strokeBorder(DSHTheme.fieldStroke.opacity(emphasized ? 0.8 : 0.4), lineWidth: 1))
   }
 
   private func reloadGit() async {

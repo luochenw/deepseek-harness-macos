@@ -1325,7 +1325,9 @@ final class HarnessController: ObservableObject {
       do {
         _ = try await hostClient.createWorkspace(path: url.standardizedFileURL.path)
         await MainActor.run {
-          self.status = "已引入文件夹：\(url.lastPathComponent)"
+          // Visible feedback: the status line no longer exists, so confirm in
+          // the transcript; the chips row also shows the new folder now.
+          self.appendSystem("已引入文件夹：\(url.lastPathComponent)，可在目录 chips 中切换。")
           self.refreshHostSnapshots()
         }
       } catch { await MainActor.run { self.appendSystem("引入文件夹失败：\(error.localizedDescription)") } }
