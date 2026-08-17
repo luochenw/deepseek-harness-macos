@@ -55,7 +55,7 @@ final class HarnessController: ObservableObject {
   }
 
   struct Message: Identifiable, Equatable {
-    enum Role { case user, assistant, system }
+    enum Role { case user, assistant, system, tool }
     let id = UUID()
     let role: Role
     var text: String
@@ -64,6 +64,10 @@ final class HarnessController: ObservableObject {
     var reasoning: String?
     /// Host durable message id — the key for per-message Typert feedback.
     var hostMessageId: String?
+    /// For `.tool` rows: joins the transcript row to its live `ToolActivity`
+    /// (state, summary, presentation) in `activeTools` at render time, so the
+    /// row updates in place when the result lands without mutating messages.
+    var toolCallId: String?
   }
 
   struct Session: Identifiable, Equatable {
@@ -622,6 +626,10 @@ final class HarnessController: ObservableObject {
       let tool = ToolActivity(callId: data["callId"] as? String ?? UUID().uuidString, name: data["name"] as? String ?? "工具", summary: "正在运行", state: .running, output: "", presentation: ToolPresentation.from(view?["view"] as? [String: Any]))
       activeTools.append(tool)
       selectedTool = tool
+      // Inline transcript row (Claude Code style); the row itself renders
+      // live state by looking up `activeTools` via toolCallId, so tool/result
+      // below only needs to update the activity, not this message.
+      sessions[index].messages.append(Message(role: .tool, text: tool.name, toolCallId: tool.callId))
     case "tool/result":
       let callId = data["callId"] as? String
       if let toolIndex = activeTools.lastIndex(where: { callId == nil || $0.callId == callId }) {
@@ -1135,6 +1143,7 @@ final class HarnessController: ObservableObject {
         let name = data["name"]?.string ?? "tool"
         let id = data["callId"]?.string ?? "\(event.seq)"
         tools[id] = ToolActivity(callId: id, name: name, summary: "工具调用", state: .running, output: "", presentation: historyPresentation(entry.view))
+        result.append(Message(role: .tool, text: name, timestamp: Date(timeIntervalSince1970: event.time / 1000), toolCallId: id))
       case "tool/result":
         let id = data["callId"]?.string ?? "\(event.seq)"
         if var tool = tools[id] {
@@ -2015,6 +2024,67 @@ private struct MessageBubble: View {
       }
       .foregroundStyle(DSHTheme.inkFaint)
       .frame(maxWidth: .infinity, alignment: .leading)
+    case .tool:
+      ToolCallRow(message: message)
+    }
+  }
+}
+
+/// Claude Code-style inline tool row: a state dot plus `Name(argument)` in
+/// monospace, with a dim `⎿ result` line once the result lands. The heavy
+/// rendering (diffs, file lines, search matches) stays in the details panel —
+/// clicking the row opens it via the existing toolDetail() path.
+private struct ToolCallRow: View {
+  @EnvironmentObject var harness: HarnessController
+  let message: HarnessController.Message
+  private var activity: HarnessController.ToolActivity? {
+    guard let id = message.toolCallId else { return nil }
+    return harness.activeTools.last { $0.callId == id }
+  }
+  var body: some View {
+    Button(action: { if let activity { harness.toolDetail(activity) } }) {
+      VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 7) {
+          Circle().fill(dotColor).frame(width: 7, height: 7)
+          Text(headline).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(DSHTheme.ink).lineLimit(1)
+        }
+        if let detail {
+          HStack(alignment: .top, spacing: 6) {
+            Text("⎿").font(.system(size: 11, design: .monospaced))
+            Text(detail).font(.system(size: 11.5, design: .monospaced)).lineLimit(2).multilineTextAlignment(.leading)
+          }
+          .foregroundStyle(DSHTheme.inkFaint)
+          .padding(.leading, 13)
+        }
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+  /// `Name(argument)` — the argument is the presentation's own title when the
+  /// adapter supplied one (command line, file path, search query), else bare name.
+  private var headline: String {
+    let name = activity?.name ?? message.text
+    let argument = activity?.presentation?.title ?? activity?.presentation?.path
+    if let argument, !argument.isEmpty, argument != name { return "\(name)(\(argument))" }
+    return name
+  }
+  /// One dim line under the headline: first non-empty output line while the
+  /// tool has produced one, else the running placeholder.
+  private var detail: String? {
+    guard let activity else { return nil }
+    if activity.state == .running { return "运行中…" }
+    let firstLine = activity.output.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init)
+    if let firstLine, !firstLine.isEmpty, firstLine != "工具已完成" { return firstLine }
+    if activity.state == .failed { return activity.summary }
+    return nil
+  }
+  private var dotColor: Color {
+    switch activity?.state {
+    case .running: DSHTheme.warm
+    case .failed: Color.red.opacity(0.75)
+    default: DSHTheme.accent
     }
   }
 }
