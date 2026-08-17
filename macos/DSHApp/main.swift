@@ -2200,6 +2200,7 @@ private struct CommandPaletteView: View {
 
 private struct Composer: View {
   @EnvironmentObject var harness: HarnessController
+  @FocusState private var editorFocused: Bool
   var body: some View {
     if harness.isViewingReadOnlySubagent {
       HStack { Image(systemName: "lock.fill"); Text("只读：此子代理已结束，历史不可续写。返回上一级可继续操作。"); Spacer() }
@@ -2222,8 +2223,13 @@ private struct Composer: View {
       VStack(alignment: .leading, spacing: DSHSpace.s2) {
         TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).scrollContentBackground(.hidden)
           .frame(minHeight: 54, maxHeight: 140)
+          .focused($editorFocused)
           .overlay(alignment: .topLeading) {
-            if harness.draft.isEmpty {
+            // Hidden while focused, not just while non-empty: IME marked text
+            // (pinyin composition) never reaches the SwiftUI binding, so a
+            // focused-empty placeholder would sit under the composition
+            // underline text. Focus is the only reliable signal we have.
+            if harness.draft.isEmpty && !editorFocused {
               // Insets must mirror TextEditor's own text origin (NSTextView:
               // textContainerInset 0, lineFragmentPadding 5) or the insertion
               // point and this placeholder sit visibly misaligned.
