@@ -1740,15 +1740,6 @@ private struct ConversationHeader: View {
       HeaderChip(icon: "lock.shield", label: harness.permission.label) {
         ForEach(HarnessController.PermissionMode.allCases) { p in Button(p.label) { harness.setPermission(p) } }
       }
-      HeaderChip(icon: "brain", label: harness.model) {
-        if let sessionModels = harness.currentSessionModels {
-          if !sessionModels.routable { Text("当前会话没有可用模型路由") }
-          ForEach(sessionModels.groups) { group in ForEach(group.models) { item in Button("\(group.name) / \(item.name)") { harness.selectCurrentModel(provider: group.id, model: item.id) } } }
-        } else {
-          Button("刷新会话模型") { harness.refreshSessionModels() }
-          Button("Relay / GPT-5.6 Terra") { harness.selectCurrentModel(provider: "relay", model: "gpt-5.6-terra") }
-        }
-      }
       Button(action: { harness.showDetails.toggle() }) { Image(systemName: "sidebar.right") }.buttonStyle(.dshGhost)
     }.padding(.horizontal, DSHSpace.s5).padding(.vertical, DSHSpace.s3)
   }
