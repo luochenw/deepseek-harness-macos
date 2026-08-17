@@ -718,13 +718,31 @@ final class HarnessController: ObservableObject {
         }
       }
     case "assistant/message":
-      if let text = liveMessageText(data["message"]) {
+      let payload = liveMessagePayload(data)
+      if let text = liveMessageText(payload) {
         var message = Message(role: .assistant, text: text)
-        message.hostMessageId = (data["message"] as? [String: Any])?["id"] as? String
-        sessions[index].messages.append(message)
+        message.hostMessageId = payload["id"] as? String
+        // The chunk stream above may already have built this bubble — the
+        // settled message replaces the accumulation instead of doubling it.
+        if sessions[index].messages.last?.role == .assistant {
+          message.reasoning = sessions[index].messages[sessions[index].messages.count - 1].reasoning
+          sessions[index].messages[sessions[index].messages.count - 1] = message
+        } else {
+          sessions[index].messages.append(message)
+        }
       }
     case "user/message":
-      if let text = liveMessageText(data["message"]) { sessions[index].messages.append(Message(role: .user, text: text)) }
+      let payload = liveMessagePayload(data)
+      // Injected user-role contexts never render; real input dedupes against
+      // the local echo send() already appended (the outgoing first message
+      // may carry the workspace-context appendix, hence prefix matching).
+      // Queue drains, slash fallbacks, and other clients still land here.
+      if liveSourceKind(payload) == nil || liveSourceKind(payload) == "user", let text = liveMessageText(payload) {
+        let lastUser = sessions[index].messages.last(where: { $0.role == .user })?.text
+        if let lastUser, text == lastUser || text.hasPrefix(lastUser) {} else {
+          sessions[index].messages.append(Message(role: .user, text: text))
+        }
+      }
     case "tool/call":
       let tool = ToolActivity(callId: data["callId"] as? String ?? UUID().uuidString, name: data["name"] as? String ?? "工具", summary: "正在运行", state: .running, output: "", presentation: ToolPresentation.from(view?["view"] as? [String: Any]))
       activeTools.append(tool)
@@ -828,9 +846,19 @@ final class HarnessController: ObservableObject {
         else { subagentTranscript?.messages.append(Message(role: .assistant, text: delta)) }
       }
     case "assistant/message":
-      if let text = liveMessageText(data["message"]) { subagentTranscript?.messages.append(Message(role: .assistant, text: text)) }
+      let payload = liveMessagePayload(data)
+      if let text = liveMessageText(payload) {
+        if subagentTranscript?.messages.last?.role == .assistant, let count = subagentTranscript?.messages.count {
+          subagentTranscript?.messages[count - 1].text = text
+        } else {
+          subagentTranscript?.messages.append(Message(role: .assistant, text: text))
+        }
+      }
     case "user/message":
-      if let text = liveMessageText(data["message"]) { subagentTranscript?.messages.append(Message(role: .user, text: text)) }
+      let payload = liveMessagePayload(data)
+      if liveSourceKind(payload) == nil || liveSourceKind(payload) == "user", let text = liveMessageText(payload) {
+        subagentTranscript?.messages.append(Message(role: .user, text: text))
+      }
     case "turn/start":
       subagentTranscript?.isRunning = true
     case "turn/end":
@@ -838,6 +866,18 @@ final class HarnessController: ObservableObject {
     default:
       break
     }
+  }
+
+  /// Message-event payload: fields may sit directly on the event data
+  /// (`{content, id, role, source}` — the session log's shape) or nest under
+  /// `message`. The nested-only lookup silently dropped every flat user
+  /// message, which is how typed input vanished from transcripts.
+  private func liveMessagePayload(_ data: [String: Any]) -> [String: Any] {
+    (data["message"] as? [String: Any]) ?? data
+  }
+
+  private func liveSourceKind(_ message: [String: Any]) -> String? {
+    (message["source"] as? [String: Any])?["kind"] as? String
   }
 
   private func liveMessageText(_ value: Any?) -> String? {
@@ -1375,12 +1415,44 @@ final class HarnessController: ObservableObject {
       guard let data = event.data.object else { continue }
       switch event.type {
       case "user/message":
-        if let text = textFromMessage(data["message"]) { result.append(Message(role: .user, text: text, timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(data["message"]))) }
+        let message = historyMessage(data)
+        // Only real typed input becomes a bubble; injected user-role
+        // contexts (13KB instruction snapshots…) stay out of the transcript.
+        guard messageSourceKind(message) == nil || messageSourceKind(message) == "user" else { continue }
+        if let text = textFromMessage(message) { result.append(Message(role: .user, text: text, timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(message))) }
       case "assistant/message":
-        if let text = textFromMessage(data["message"]) {
-          var message = Message(role: .assistant, text: text, timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(data["message"]), reasoning: reasoningFromMessage(data["message"]))
-          message.hostMessageId = data["message"]?.object?["id"]?.string
-          result.append(message)
+        let payload = historyMessage(data)
+        if let text = textFromMessage(payload) {
+          var message = Message(role: .assistant, text: text, timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(payload), reasoning: reasoningFromMessage(payload))
+          message.hostMessageId = payload.object?["id"]?.string
+          // Adapters that stream chunks first may also log the settled
+          // message — the settled one is authoritative, so it replaces the
+          // chunk accumulation instead of doubling the bubble.
+          if result.last?.role == .assistant {
+            message.reasoning = message.reasoning ?? result[result.count - 1].reasoning
+            result[result.count - 1] = message
+          } else {
+            result.append(message)
+          }
+        }
+      case "assistant/chunk":
+        // Some adapters (e.g. hand-declared relay providers) log only the
+        // stream — without folding it, a reloaded transcript has no
+        // assistant text at all. Mirrors the live anchoring: extend the
+        // trailing assistant bubble, otherwise open a fresh one.
+        guard let chunk = data["chunk"]?.object else { continue }
+        if chunk["type"]?.string == "text-delta", let delta = chunk["textDelta"]?.string {
+          if result.last?.role == .assistant { result[result.count - 1].text += delta }
+          else { result.append(Message(role: .assistant, text: delta, timestamp: Date(timeIntervalSince1970: event.time / 1000))) }
+        }
+        if chunk["type"]?.string == "reasoning-delta", let delta = chunk["text"]?.string {
+          if result.last?.role == .assistant {
+            result[result.count - 1].reasoning = (result[result.count - 1].reasoning ?? "") + delta
+          } else {
+            var message = Message(role: .assistant, text: "", timestamp: Date(timeIntervalSince1970: event.time / 1000))
+            message.reasoning = delta
+            result.append(message)
+          }
         }
       case "tool/call":
         let name = data["name"]?.string ?? "tool"
@@ -1440,6 +1512,23 @@ final class HarnessController: ObservableObject {
       guard let data = block.object, data["type"]?.string == "text" else { return nil }
       return data["text"]?.string
     }.joined()
+  }
+
+  /// The session log stores message fields directly on the event data
+  /// (`{content, id, role, source}`); some emitters nest them under
+  /// `message`. Accept both — the nested lookup alone silently dropped
+  /// every flat-shaped user message from reloaded history.
+  private func historyMessage(_ data: [String: DSHJSONValue]) -> DSHJSONValue {
+    if let nested = data["message"], nested.object != nil { return nested }
+    return .object(data)
+  }
+
+  /// `source.kind` of a message event: "user" is real typed input; the
+  /// Host also logs user-*role* context injections (agent-instructions,
+  /// plugin snapshots, skill catalogs, skill invocations) that are model
+  /// plumbing and must never render as conversation bubbles.
+  private func messageSourceKind(_ value: DSHJSONValue) -> String? {
+    value.object?["source"]?.object?["kind"]?.string
   }
 
   private func anyValue(_ value: DSHJSONValue) -> Any {
