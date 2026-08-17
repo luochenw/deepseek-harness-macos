@@ -47,7 +47,7 @@ struct WorkspaceChips: View {
       }
 
       if !compact {
-        Button(action: createFolder) {
+        Button(action: harness.importWorkspaceFolder) {
           Image(systemName: "plus.square.on.square")
             .font(.system(size: 11))
             .foregroundStyle(DSHTheme.inkSoft)
@@ -56,7 +56,7 @@ struct WorkspaceChips: View {
             .overlay(Capsule().strokeBorder(DSHTheme.fieldStroke.opacity(0.5), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .help("添加新的文件夹（创建目录并作为工作区）")
+        .help("添加本地文件夹：引入已有目录到工作区列表")
       }
     }
     .task(id: harness.workspace?.path) { await reloadGit() }
@@ -71,24 +71,6 @@ struct WorkspaceChips: View {
     .padding(.horizontal, 9).padding(.vertical, compact ? 4 : 5)
     .background(DSHTheme.fieldFill, in: Capsule())
     .overlay(Capsule().strokeBorder(DSHTheme.fieldStroke.opacity(0.5), lineWidth: 1))
-  }
-
-  /// ＋ chip: create a brand-new folder and make it the workspace (existing
-  /// folders go through the directory chip's 打开工作区…).
-  private func createFolder() {
-    let panel = NSSavePanel()
-    panel.title = "添加新的文件夹"
-    panel.prompt = "创建"
-    panel.nameFieldStringValue = "新项目"
-    panel.canCreateDirectories = true
-    panel.directoryURL = harness.workspace?.deletingLastPathComponent()
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    do {
-      try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-      harness.registerWorkspace(url.standardizedFileURL)
-    } catch {
-      harness.appendSystem("创建文件夹失败：\(error.localizedDescription)")
-    }
   }
 
   private func reloadGit() async {

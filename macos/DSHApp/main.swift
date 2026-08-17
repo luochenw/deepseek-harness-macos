@@ -1310,6 +1310,28 @@ final class HarnessController: ObservableObject {
     Task { do { try await hostClient.deleteWorkspace(id: workspace.workspaceId); await MainActor.run { self.refreshHostSnapshots() } } catch { await MainActor.run { self.status = "工作区删除失败：\(error.localizedDescription)" } } }
   }
 
+  /// 引入一个已有的本地文件夹：注册进 Host 工作区表但不切换当前工作区 —
+  /// 之后它出现在目录 chip 的菜单里随取随用（＋ chip 的动作）。
+  func importWorkspaceFolder() {
+    let panel = NSOpenPanel()
+    panel.title = "添加本地文件夹"
+    panel.message = "引入一个已有目录；它会加入工作区列表，但不会切换当前会话的工作区。"
+    panel.prompt = "引入"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.allowsMultipleSelection = false
+    guard panel.runModal() == .OK, let url = panel.url, let hostClient else { return }
+    Task {
+      do {
+        _ = try await hostClient.createWorkspace(path: url.standardizedFileURL.path)
+        await MainActor.run {
+          self.status = "已引入文件夹：\(url.lastPathComponent)"
+          self.refreshHostSnapshots()
+        }
+      } catch { await MainActor.run { self.appendSystem("引入文件夹失败：\(error.localizedDescription)") } }
+    }
+  }
+
   func registerWorkspace(_ url: URL) {
     guard let hostClient else { return }
     Task {
@@ -1887,6 +1909,7 @@ private struct SidebarRowChrome: View {
   let statusKind: DSHStatusDot.Kind
   let isActive: Bool
   let action: () -> Void
+  @State private var hovering = false
   var body: some View {
     Button(action: action) {
       HStack(spacing: DSHSpace.s2) {
