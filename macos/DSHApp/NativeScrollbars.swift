@@ -1,15 +1,16 @@
 import SwiftUI
 import AppKit
 
-/// Truly hides the enclosing NSScrollView's scrollers. SwiftUI's
-/// `.scrollIndicators(.hidden)` is advisory on macOS: when the system
-/// preference is "Show scroll bars: Always", the legacy (thick, gutter-style)
-/// scroller still draws. This walks up from inside the scroll content to the
-/// AppKit scroll view and removes the scrollers outright — scrolling itself
-/// (wheel, trackpad, scrollTo) is unaffected.
+/// Forces the enclosing NSScrollView into thin overlay scrollers — the
+/// modern translucent bar that appears only while scrolling and never
+/// reserves a gutter. Needed at the AppKit level because with the system
+/// preference "Show scroll bars: Always", SwiftUI scroll views draw the
+/// legacy thick gutter scroller regardless of `.scrollIndicators`.
 ///
-/// Usage: attach `.dshHiddenScrollers()` to the ScrollView's *content* (it
+/// Usage: attach `.dshThinScrollers()` to the ScrollView's *content* (it
 /// must sit inside the scroll view to find it via `enclosingScrollView`).
+/// Reapplied on every SwiftUI update, which also survives AppKit resetting
+/// the style when the system preference changes.
 private struct ScrollerConfigurator: NSViewRepresentable {
   func makeNSView(context: Context) -> NSView {
     let view = NSView()
@@ -21,13 +22,14 @@ private struct ScrollerConfigurator: NSViewRepresentable {
   }
   private static func configure(from view: NSView) {
     guard let scrollView = view.enclosingScrollView else { return }
-    scrollView.hasVerticalScroller = false
-    scrollView.hasHorizontalScroller = false
     scrollView.scrollerStyle = .overlay
     scrollView.autohidesScrollers = true
+    scrollView.hasVerticalScroller = true
+    scrollView.hasHorizontalScroller = false
+    scrollView.verticalScroller?.controlSize = .small
   }
 }
 
 extension View {
-  func dshHiddenScrollers() -> some View { background(ScrollerConfigurator()) }
+  func dshThinScrollers() -> some View { background(ScrollerConfigurator()) }
 }

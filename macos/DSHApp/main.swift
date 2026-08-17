@@ -1814,9 +1814,8 @@ private struct Sidebar: View {
                 ForEach(harness.sessions) { session in SidebarLocalSessionRow(session: session) }
               }
             }
-            .dshHiddenScrollers()
+            .dshThinScrollers()
           }
-          .scrollIndicators(.hidden)
         }
       }.frame(maxHeight: .infinity)
 
@@ -1899,7 +1898,7 @@ private struct SidebarSessionRow: View {
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(DSHTheme.inkSoft)
             .frame(width: 24, height: 22)
-            .background(DSHTheme.surface, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(DSHTheme.surface, in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
         }
         .buttonStyle(.plain)
         .popover(isPresented: $showActions, arrowEdge: .bottom) {
@@ -1954,7 +1953,7 @@ private struct PanelActionRow: View {
       .padding(.horizontal, 8).padding(.vertical, 6)
       .frame(maxWidth: .infinity, alignment: .leading)
       .contentShape(Rectangle())
-      .background(hovering ? DSHTheme.sidebarSelected : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+      .background(hovering ? DSHTheme.sidebarSelected : .clear, in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
@@ -2084,13 +2083,11 @@ private struct ConversationView: View {
             }
           }
         }.frame(maxWidth: .infinity).padding(DSHSpace.s6)
-          // AppKit-level removal too — .scrollIndicators(.hidden) alone
-          // still shows the thick legacy bar under "始终显示滚动条".
-          .dshHiddenScrollers()
+          // Thin overlay scroller (appears while scrolling, no gutter) —
+          // AppKit-level because "始终显示滚动条" otherwise forces the
+          // thick legacy bar.
+          .dshThinScrollers()
       }
-      // No visible scrollbar in the transcript (Claude Code / Codex style) —
-      // the always-on system bar reads as chrome; scrolling still works.
-      .scrollIndicators(.hidden)
       .onChange(of: harness.displayedSession?.messages) { _, messages in if let last = messages?.last { proxy.scrollTo(last.id, anchor: .bottom) } }
     }
   }
