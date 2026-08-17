@@ -69,6 +69,43 @@ enum VoiceSettings {
   }
   static let wakePhraseKey = "dsh.voice.wakePhrase"
 
+  /// 静音自动定稿秒数（设置→语音；1–10s，默认 2s）。
+  static let silenceEndpointKey = "dsh.voice.silenceEndpoint"
+  static var silenceEndpoint: TimeInterval {
+    let value = UserDefaults.standard.double(forKey: silenceEndpointKey)
+    return (1.0...10.0).contains(value) ? value : 2.0
+  }
+
+  /// 定稿类指令：出现在句尾时立即结束聆听并定稿，命令词本身剔除。
+  static let endPhrases = ["就这样", "结束", "发送"]
+  /// 取消类指令：整段话就是一个"放弃"指令 —— 不进输入框、不发送。
+  static let cancelPhrases = ["不需要开启对话", "不需要新建对话", "不需要", "不用了", "没事了", "没事", "算了", "取消"]
+
+  /// Trailing end-phrase check on a partial/final transcript (normalized:
+  /// whitespace/punctuation-insensitive, same rules as wake matching).
+  static func strippingTrailingEndPhrase(_ text: String) -> (stripped: String, matched: Bool) {
+    let normalized = normalizedForWakeMatch(text)
+    for phrase in endPhrases {
+      let normalizedPhrase = normalizedForWakeMatch(phrase)
+      guard !normalizedPhrase.isEmpty, normalized.hasSuffix(normalizedPhrase) else { continue }
+      // Strip from the RAW text: drop trailing punctuation/space, then the
+      // phrase characters, then trailing separators again.
+      var raw = Substring(text)
+      while let last = raw.last, last.isWhitespace || last.isPunctuation { raw = raw.dropLast() }
+      if raw.hasSuffix(phrase) { raw = raw.dropLast(phrase.count) }
+      while let last = raw.last, last.isWhitespace || last.isPunctuation { raw = raw.dropLast() }
+      return (String(raw), true)
+    }
+    return (text, false)
+  }
+
+  /// True when the whole utterance is nothing but a cancel command.
+  static func isCancelCommand(_ text: String) -> Bool {
+    let normalized = normalizedForWakeMatch(text)
+    guard !normalized.isEmpty else { return false }
+    return cancelPhrases.contains { normalizedForWakeMatch($0) == normalized }
+  }
+
   /// Deep link straight to 系统设置 → 键盘（听写所在页）。
   static func openDictationSettings() {
     if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Dictation") {
@@ -497,10 +534,10 @@ final class VoiceController: NSObject, ObservableObject {
   private let enginesInjected: Bool
   private var synthesizerFingerprint: String
   private var silenceTimer: Timer?
-  /// Auto endpoint: stop listening this long after the last new partial result.
-  // 2.0s: 1.2s finalized mid-sentence on natural zh pauses once real speech
-  // had started; the initial wait is unbounded (see handlePartial).
-  private let silenceEndpoint: TimeInterval = 2.0
+  /// Auto endpoint: stop listening this long after the last new partial
+  /// result — user-configurable (设置→语音), floor 1s so natural zh pauses
+  /// don't truncate mid-sentence. Initial wait is unbounded (handlePartial).
+  private var silenceEndpoint: TimeInterval { VoiceSettings.silenceEndpoint }
 
   init(transcriber: VoiceTranscriber? = nil, synthesizer: VoiceSpeechSynthesizer? = nil) {
     self.enginesInjected = transcriber != nil || synthesizer != nil
@@ -634,6 +671,9 @@ final class VoiceController: NSObject, ObservableObject {
       // the click — before the user had said a word, which read as "语音
       // 输入完全不工作". Until speech arrives, the mic just keeps waiting.
       if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { armSilenceTimer() }
+      // 定稿类指令（"结束/发送/就这样"）出现在句尾 → 不等静音，立即定稿；
+      // handleFinal 统一剔除命令词本身。
+      if VoiceSettings.strippingTrailingEndPhrase(text).matched { stopListening() }
     case .transcribing:
       // Post-endAudio updates: late Apple partials, or the local engine's
       // "（本地模型识别中…）" placeholder. Display only — no silence timer.
@@ -650,7 +690,9 @@ final class VoiceController: NSObject, ObservableObject {
     }
     state = .idle
     partialText = ""
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    // 剔除句尾的定稿类命令词（"…结束" → "…"）。
+    let stripped = VoiceSettings.strippingTrailingEndPhrase(text).stripped
+    let trimmed = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
     onFinalText?(trimmed)
   }

@@ -11,6 +11,7 @@ struct VoiceSettingsView: View {
   @AppStorage(VoiceSettings.wakeAutoEnableKey) private var wakeAutoEnable = true
   @AppStorage(VoiceSettings.wakeAutoSendKey) private var wakeAutoSend = true
   @AppStorage(VoiceSettings.wakePhraseKey) private var wakePhrase = VoiceSettings.defaultWakePhrase
+  @AppStorage(VoiceSettings.silenceEndpointKey) private var silenceSeconds = 2.0
   @AppStorage(VoiceSettings.engineKey) private var engine = "apple"
   @AppStorage(VoiceSettings.sttEndpointKey) private var sttEndpoint = ""
   @AppStorage(VoiceSettings.ttsEndpointKey) private var ttsEndpoint = ""
@@ -27,6 +28,11 @@ struct VoiceSettingsView: View {
         Button("打开系统「听写」设置", action: VoiceSettings.openDictationSettings)
           .buttonStyle(.dshSecondary)
           .help("唤醒词依赖 macOS 系统听写（本地识别）；未开启时常驻监听无法运行")
+        Stepper(value: $silenceSeconds, in: 1.0...10.0, step: 0.5) {
+          Text("停顿 \(silenceSeconds, specifier: "%.1f") 秒后自动定稿")
+        }.foregroundStyle(DSHTheme.ink)
+        Text("语音指令：说「结束 / 发送 / 就这样」立即定稿（命令词不进正文）；整句只说「取消 / 不需要 / 算了」则放弃本次内容，不发送、不开启对话。")
+          .font(.caption).foregroundStyle(DSHTheme.inkFaint).fixedSize(horizontal: false, vertical: true)
         Text("常驻监听只用系统离线中文识别，音频不出本机；监听中麦克风按钮显示橙色圆点。点击麦克风的手动听写只把文字填进输入框、从不自动发送；唤醒词听写默认自动发送，可用上方开关关闭。手动关闭唤醒词后不会再被自动开启。")
           .font(.caption).foregroundStyle(DSHTheme.inkFaint).fixedSize(horizontal: false, vertical: true)
       }

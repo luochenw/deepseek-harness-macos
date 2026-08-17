@@ -2842,6 +2842,9 @@ private struct Composer: View {
   @EnvironmentObject var harness: HarnessController
   @FocusState private var editorFocused: Bool
   @State private var editorContentHeight: CGFloat = 22
+  /// Draft content captured when dictation starts streaming — partials
+  /// replace from here, and a cancel command restores it verbatim.
+  @State private var dictationBase: String?
   // Slash-palette view state: keyboard selection plus the Esc dismissal that
   // holds until the next edit. The roster itself derives from the draft.
   @State private var paletteSelection = 0
@@ -2974,12 +2977,28 @@ private struct Composer: View {
           Menu { Button("进入计划模式", action: harness.enterPlanMode); Button("设定目标") { harness.draft = "/goal " }; Divider(); Button("重命名当前会话", action: harness.beginRenameCurrentSession); Button("创建会话分支", action: harness.forkCurrentSession); Button("归档当前会话", action: harness.archiveCurrentSession); Button("导出会话日志", action: harness.exportCurrentSessionLog); Button("查看归档会话") { harness.showArchivedSessions = true }; Divider(); Button("新会话", action: harness.newSession); Button("打开工作区", action: harness.openWorkspace) } label: { Image(systemName: "ellipsis.circle") }
             .menuStyle(.borderlessButton).fixedSize().foregroundStyle(DSHTheme.inkSoft).help("更多操作")
           Button(action: harness.pickImage) { Image(systemName: "paperclip") }.buttonStyle(.borderless).foregroundStyle(DSHTheme.inkSoft).help("添加图片")
-          // Manual dictation only fills the composer for review; only a
-          // wake-word-initiated utterance auto-sends (switchable in 设置→语音).
-          VoiceInputButton { text, viaWake in
-            harness.draft += (harness.draft.isEmpty ? "" : " ") + text
-            if viaWake, VoiceSettings.wakeAutoSend, harness.canSend { harness.send() }
-          }
+          // Dictation streams live into the input box (partials replace from
+          // the pre-dictation base). Two command classes on the final text:
+          // 定稿类（结束/发送）ends capture early (handled in VoiceController);
+          // 取消类（取消/不需要…）discards the whole utterance — the draft is
+          // restored and nothing is sent or created. Manual dictation never
+          // auto-sends; wake-initiated does (switchable in 设置→语音).
+          VoiceInputButton(
+            onPartial: { partial in
+              if dictationBase == nil { dictationBase = harness.draft }
+              let base = dictationBase ?? ""
+              harness.draft = base + (base.isEmpty ? "" : " ") + partial
+            },
+            onCommit: { text, viaWake in
+              let base = dictationBase ?? harness.draft
+              dictationBase = nil
+              if VoiceSettings.isCancelCommand(text) {
+                harness.draft = base
+                return
+              }
+              harness.draft = base + (base.isEmpty ? "" : " ") + text
+              if viaWake, VoiceSettings.wakeAutoSend, harness.canSend { harness.send() }
+            })
           Spacer()
           ComposerModelMenu()
           if harness.isRunning {

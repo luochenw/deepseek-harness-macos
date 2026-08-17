@@ -17,6 +17,9 @@ struct VoiceInputButton: View {
   /// for wake-word-initiated dictation — the caller auto-sends那条, while a
   /// manual click just fills the composer.
   var onCommit: (String, _ viaWake: Bool) -> Void
+  /// Live partial transcript while listening — the composer streams this
+  /// into the input box so speech is visible as it happens.
+  var onPartial: ((String) -> Void)?
   @State private var viaWake = false
   @StateObject private var voice = VoiceController()
   @StateObject private var wake = WakeWordListener()
@@ -29,8 +32,9 @@ struct VoiceInputButton: View {
     return nil
   }
 
-  init(speakReplies: Binding<Bool>? = nil, onCommit: @escaping (String, _ viaWake: Bool) -> Void) {
+  init(speakReplies: Binding<Bool>? = nil, onPartial: ((String) -> Void)? = nil, onCommit: @escaping (String, _ viaWake: Bool) -> Void) {
     self.speakReplies = speakReplies
+    self.onPartial = onPartial
     self.onCommit = onCommit
   }
 
@@ -137,6 +141,9 @@ struct VoiceInputButton: View {
       } else {
         pulsing = false
       }
+    }
+    .onChange(of: voice.partialText) { _, partial in
+      if isActive, !partial.isEmpty { onPartial?(partial) }
     }
   }
 
