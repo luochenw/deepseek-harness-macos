@@ -44,7 +44,8 @@ you do not need to register it anywhere.
 There is **one** `@MainActor final class HarnessController: ObservableObject`
 (defined in `main.swift`) that owns essentially all app state as `@Published`
 properties and all business logic as methods. `main.swift` is **frozen**: it
-keeps its existing ~3364 lines of history but takes no new `@Published`
+keeps its remaining lines of history (being migrated out in batches — see
+the Agent Note linked from CLAUDE.md) but takes no new `@Published`
 state, no new controller methods, and no new top-level View structs (see
 CLAUDE.md's "质量规范" — `./scripts/test-macos-native.sh` enforces this as a
 line-count gate, not just a convention). All *new* feature-specific logic is

@@ -186,3 +186,28 @@ private struct RetryNoticeCard: View {
       .dshCard(tint: DSHTheme.accentSoft, radius: DSHRadius.md)
   }
 }
+
+struct DetailsPanel: View {
+  @EnvironmentObject var harness: HarnessController
+  var body: some View {
+    VStack(alignment: .leading, spacing: DSHSpace.s4) {
+      HStack { Text("详情").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink); Spacer(); Button(action: { harness.showDetails = false }) { Image(systemName: "xmark") }.buttonStyle(.dshGhost) }
+      NativeDashboard()
+      if let tool = harness.selectedTool {
+        VStack(alignment: .leading, spacing: DSHSpace.s2) {
+          Label(tool.name, systemImage: icon(for: tool.state)).foregroundStyle(DSHTheme.ink)
+          Text(tool.summary).font(.caption).foregroundStyle(DSHTheme.inkFaint)
+          ScrollView { NativeToolPresentationView(tool: tool).frame(maxWidth: .infinity, alignment: .leading) }
+        }
+      } else {
+        Spacer()
+        VStack(spacing: DSHSpace.s2) {
+          Image(systemName: "sidebar.right").font(.title2).foregroundStyle(DSHTheme.inkFaint)
+          Text("点击消息流中的工具行查看详情").multilineTextAlignment(.center).foregroundStyle(DSHTheme.inkFaint)
+        }
+        Spacer()
+      }
+    }.padding(DSHSpace.s4)
+  }
+  private func icon(for state: HarnessController.ToolActivity.State) -> String { switch state { case .running: "hourglass"; case .succeeded: "checkmark.circle"; case .failed: "exclamationmark.triangle" } }
+}

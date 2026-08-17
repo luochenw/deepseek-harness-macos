@@ -36,10 +36,28 @@ Status: proposed — Phase 0/1 已完成，Phase 2 仍待做，需等在途功�
 
 每批一个 commit、行为零改动、typecheck + build + smoke 全过，gate 基线随之下调：
 
-1. 30 个顶层 view struct 按功能域搬到既有/新建 `<Feature>View.swift`（约 1150 行迁出）。
-2. HarnessController 方法按域拆成 `extension` 到对应 `DSH<Feature>.swift`（沿用项目既有模式，只是执行彻底）。
-3. `main.swift` 只留 App 入口 + HarnessController 类声明与 `@Published` 属性 + 核心生命周期，目标 < 800 行，配 `// MARK:` 分区。
+1. ✅ **已完成**：30 个顶层 view struct 按功能域搬到既有/新建 `<Feature>View.swift`——`ContentView.swift`（根组合视图，30 行）、`SidebarView.swift`（Sidebar 及其 6 个子组件，243 行）、`ConversationView.swift`（对话流 16 个组件，646 行）、`ComposerView.swift`（输入框 3 个组件，295 行）、`DetailsPanel` 并入既有 `NativeDashboard.swift`（它本来就嵌套调用 `NativeDashboard()`，天然同源）、`SessionSearchView` 并入既有 `SessionOpsViews.swift`（同类会话操作视图的既有归宿）。main.swift：3364 → 2101 行（-1263，-37.5%）。
+   - 迁移方式：用 `sed -n 'START,ENDp'` 按顶层闭合大括号精确切界（先用 `awk '/^}$/{print NR}'` 找出所有顶层 `}` 的行号，两两配对验证过界限——6 处 cluster 边界都手工核对过没有夹带下一个 struct 的文档注释），逐块搬到新文件后从 main.swift 里删掉同样的行区间（从文件尾部往头部删，避免行号错位）。
+   - 踩了两个坑：① 一开始用 `{ echo ...; cat ...; } > file` 往文件里塞内容，shell 的交互式包装层把终端转义序列也写进了文件——4 个新文件全部损坏，靠 diff 比对原始 sed 提取的内容才发现，改用 `cat headerfile bodyfile > target`（无 echo、无花括号分组）之后每个文件都逐字节 diff 验证过和原文件一致。② 6 个顶层组件（`Sidebar`/`ConversationHeader`/`ConversationView`/`Composer`/`DetailsPanel`/`SessionSearchView`）在原 main.swift 里是 `private`——同文件内没问题，拆到不同文件后 `ContentView.swift` 跨文件引用不到，typecheck 直接报错抓出来了，改成默认的 `internal`（去掉 `private`）即可，其余只在同一新文件内部使用的子组件保持 `private` 不变。
+   - 验证：typecheck + `--unit`（12/12）+ `build-macos-app.sh` + `--smoke`（含写路径）全过；额外用 `open` 启动过打包后的 app 确认能正常拉起进程（非交互式，只验证不崩溃，没有做交互式 UI 走查）。
+   - Gate 基线跟着下调到 2101（`test-macos-native.sh` / CLAUDE.md / AGENTS.md 三处同步）——随后 rebase 到最新 main 又变成 2131，见下面「rebase 冲突」小节。
+2. **进行中**：HarnessController 方法按域拆成 `extension` 到对应 `DSH<Feature>.swift`（沿用项目既有模式，只是执行彻底）。main.swift 目前 2131 行里，HarnessController 类体还有 91+ 个方法 + 68+ 个 `@Published` 属性没动；已经按名字前缀/主题分好域（设置/凭据、Host 生命周期与事件流、会话管理、历史/消息解析、工作区、发送/队列、模型/preset、子代理/工作流、目标/审批/问题）。
+3. `main.swift` 只留 App 入口 + HarnessController 类声明与 `@Published` 属性 + 核心生命周期，目标 < 800 行，配 `// MARK:` 分区——还没到，当前 2131 行。
 4. （可选、单独开 Note）68 个 `@Published` 分组为子 ObservableObject——改变刷新语义、风险高，不并入本计划。
+
+### Phase 2 rebase 冲突：合并进 main 前重新对齐
+
+批次 1 提交后 rebase 到最新 origin/main（这期间 main 又推进了 8 个提交，包含一个新落地的跨会话消息中继功能 `feat(session-relay)`），main.swift 撞上一处真实的内容冲突：中继功能同时改了 `MessageBubble`（.user 分支加"来自其他会话"标签）和 `Composer`（`onCommit` 里加一行 `voiceDiag` 调试日志）——这两个 struct 恰好是批次 1 刚搬进 `ConversationView.swift` / `ComposerView.swift` 的。Git 没法把"改某个 struct"的 patch 自动重定向到它被搬去的新文件，冲突整块摊在 main.swift 里（`<<<<<<< HEAD` 側是 main 上完整未拆分的版本，`>>>>>>>` 側是空——我这边整段删掉了）。
+
+解法：把冲突 HEAD 側（main 当前的完整视图区块）和批次 1 之前保存的原始区块逐行 diff，精确定位出只有这两处改动，手工把这两处改动分别搬进 `ConversationView.swift`（`MessageBubble`）和 `ComposerView.swift`（`Composer`），main.swift 侧仍然整段删除（拆分意图不变）。Rebase 完成后 main.swift 变成 2131 行（不是原来算的 2101——中继功能也在 HarnessController 类体里加了 `isRelayMessage` 字段、`pendingVoiceTaskFocusID`、`liveIsRelayMessage`/`historyIsRelayMessage` 两个方法，这部分完全在我没碰的区域，rebase 自动合并干净，只是让基线数字往上多长了 30 行）。Gate 基线、CLAUDE.md、这份 Note 三处同步改成 2131。`build-macos-app.sh` 那次也有 upstream 改动（新增 in-house cordis 插件打包逻辑），插入点跟我加的构建锁完全不重叠，rebase 自动合并没冲突。
+
+**教训**：main.swift 分批拆分和"main 分支持续有其他 session 在加功能"这两件事本质上是在赛跑——批次拖得越久，rebase 时踩中"upstream 改了我正在挪的 struct"的概率越高。这次是运气好，只中了两处、且改动本身很小；批次 2 开始前也要重新拉一次 main 再看冲突面。
+
+### Phase 2 执行事故：非隔离 review workflow 的并发写入
+
+Phase 1 的 adversarial review workflow（`wams8yndi`）没加 `isolation: 'worktree'`，agent 对同一份工作目录有实时读写权限，而它还在跑的时候我已经开始动手做 Phase 2——期间连续两次撞见它的 agent 直接改了我正在编辑的文件：一次把 `DSHProjectionsTests.swift` 里的期望值改成明显错误的 999（大概率是在验证"这条断言是不是重言式"时的副作用，后来又自己改回了 17）；一次是 `NativeDashboard.swift`/`SessionOpsViews.swift` 被加了 `.bak` 备份文件、`DetailsPanel`/`SessionSearchView` 的 `private` 被顺手去掉（凑巧是我下一步正要做的修改，但发生的时间点和方式都不受控），外加一个我从没写过的 `macos/DSHTests/DSHZZZScratchTests.swift` 冒出来。发现后用 `TaskStop` 把这个 workflow 直接停了，删掉 `.bak` 和 scratch 文件，逐文件 diff 核对没有其他污染，才继续往下做。
+
+**教训**：以后任何会长时间跑、且没有明确"纯只读"保证的 review/analysis workflow，只要主 session 打算在它跑完之前继续碰同一批文件，必须传 `isolation: 'worktree'`——"review workflow 不会写文件"是一个假设，不是这个 workflow 框架给的保证（agent 可能为了验证假设去复现、去改、去建 scratch 文件）。Phase 0 那次 review workflow 没出这个问题是运气好（那次没有和它并发做其他编辑）。
 
 ### 并行协调
 

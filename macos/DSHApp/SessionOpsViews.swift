@@ -330,3 +330,30 @@ private struct DiscoveredModelRowView: View {
     .dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
   }
 }
+
+struct SessionSearchView: View {
+  @EnvironmentObject var harness: HarnessController
+  @State private var query = ""
+  var body: some View {
+    VStack(alignment: .leading, spacing: DSHSpace.s4) {
+      Text("搜索会话").font(.system(size: 18, weight: .semibold)).foregroundStyle(DSHTheme.ink)
+      TextField("搜索会话…", text: $query)
+        .dshField(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
+        .onChange(of: query) { _, text in harness.searchSessions(text) }
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: DSHSpace.s2) {
+          ForEach(harness.searchResults) { result in
+            Button(action: { harness.openHostSessionID(result.sessionId); harness.showSessionSearch = false }) {
+              VStack(alignment: .leading, spacing: 4) {
+                Text(harness.hostSessions.first(where: { $0.sessionId == result.sessionId })?.title ?? result.sessionId).foregroundStyle(DSHTheme.ink)
+                Text(result.snippet).font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(2)
+              }.padding(DSHSpace.s3).frame(maxWidth: .infinity, alignment: .leading).dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
+            }.buttonStyle(.plain)
+          }
+          if harness.searchHasMore { Text("结果较多，请缩小搜索范围。").font(.caption).foregroundStyle(DSHTheme.inkFaint) }
+        }
+      }
+      HStack { Spacer(); Button("关闭") { harness.showSessionSearch = false }.buttonStyle(.dshSecondary) }
+    }.padding(DSHSpace.s5).frame(width: 520, height: 520).background(DSHTheme.surface)
+  }
+}
