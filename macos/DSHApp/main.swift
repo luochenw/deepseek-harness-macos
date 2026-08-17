@@ -586,7 +586,27 @@ final class HarnessController: ObservableObject {
         }
       }
     case "session/jobs":
-      if let jobs = frame["jobs"] as? [[String: Any]] { activeTools = jobs.map { ToolActivity(callId: $0["id"] as? String ?? UUID().uuidString, name: $0["label"] as? String ?? "后台任务", summary: $0["detail"] as? String ?? $0["status"] as? String ?? "", state: ($0["status"] as? String) == "failed" ? .failed : .running, output: "", presentation: nil) } }
+      // 合并更新，绝不整表覆盖：覆盖会把转录里已完成的工具行全部换成
+      // job 条目，且旧映射除 failed 外一律算 .running（包括 completed）
+      // —— 这正是"run_code 都执行结束了还在动"的来源。
+      if let jobs = frame["jobs"] as? [[String: Any]] {
+        for job in jobs {
+          guard let id = job["id"] as? String else { continue }
+          let status = (job["status"] as? String ?? "running").lowercased()
+          let state: ToolActivity.State =
+            status == "failed" ? .failed :
+            ["running", "pending", "in-progress", "in_progress"].contains(status) ? .running : .succeeded
+          if let index = activeTools.lastIndex(where: { $0.callId == id }) {
+            activeTools[index].state = state
+            if let detail = job["detail"] as? String { activeTools[index].summary = detail }
+          } else {
+            activeTools.append(ToolActivity(
+              callId: id, name: job["label"] as? String ?? "后台任务",
+              summary: job["detail"] as? String ?? status, state: state,
+              output: "", presentation: nil))
+          }
+        }
+      }
     case "approval/requested":
       guard let rpcId = frame["_rpcId"] as? String, let sessionId = frame["sessionId"] as? String, let approvalId = frame["approvalId"] as? String else { return }
       let toolName = frame["toolName"] as? String ?? "工具"
@@ -721,6 +741,13 @@ final class HarnessController: ObservableObject {
       // message — see .agents/notes/implemented/feature/2026-08-17-port-feature-completeness-branch.md.
       isRunning = false
       sessions[index].isRunning = false
+      // 兜底：turn 已结束，转录里不该再有"运行中"的工具——没等到
+      // tool/result 的（callId 对不上、事件丢失）一律落定为完成，防止
+      // 状态点永远闪烁。仍在跑的真后台 job 会被下一帧 session/jobs
+      // 快照重新标回 running，不受影响。
+      for toolIndex in activeTools.indices where activeTools[toolIndex].state == .running {
+        activeTools[toolIndex].state = .succeeded
+      }
       nativeAlerts.notifyTurnFinished(summary: sessions[index].title)
     case "compaction/start":
       runNotice = "正在压缩历史上下文…"
