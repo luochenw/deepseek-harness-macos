@@ -622,6 +622,10 @@ final class HarnessController: ObservableObject {
         }
       }
     case "session/jobs":
+      // 同 session/queue：mux 是全会话聚合流，后台会话（语音派发、fork、
+      // 子代理）的 job 不能混进当前转录的工具行。activeTools 只被主转录
+      // 消费——子代理转录只显示文本，不收 job，故不看 activeSubagentAddress。
+      if let sid = frame["sessionId"] as? String, sid != hostCurrentSessionID { return }
       // 合并更新，绝不整表覆盖：覆盖会把转录里已完成的工具行全部换成
       // job 条目，且旧映射除 failed 外一律算 .running（包括 completed）
       // —— 这正是"run_code 都执行结束了还在动"的来源。
