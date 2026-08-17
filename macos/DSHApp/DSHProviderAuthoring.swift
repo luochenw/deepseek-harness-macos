@@ -13,6 +13,9 @@ struct ProviderAuthoringView: View {
   @State private var api = "openai-completions"
   @State private var models = ""
   @State private var credential = ""
+  /// 打开时读回的当前 Key 值——用于"未改动就不重写"的判定。
+  @State private var storedCredential = ""
+  @State private var revealCredential = false
   @State private var error: String?
 
   private let protocols = ["openai-completions", "openai-responses", "anthropic-messages"]
@@ -99,12 +102,25 @@ struct ProviderAuthoringView: View {
           DSHBadge(text: credentialWritable == false ? "只读" : "已配置", tone: credentialWritable == false ? .warm : .accent)
         }
       }
-      Text("仅写入；不会显示或保存在界面中")
+      Text("当前值已预填（密码样式）；修改后随「保存」一并写入。")
         .font(.caption)
         .foregroundStyle(DSHTheme.inkSoft)
-      SecureField(credentialConfigured ? "已配置——输入新值以替换" : "输入 API Key（可留空）", text: $credential)
+      HStack(spacing: DSHSpace.s2) {
+        Group {
+          if revealCredential {
+            TextField(credentialConfigured ? "已配置——输入新值以替换" : "输入 API Key（可留空）", text: $credential)
+          } else {
+            SecureField(credentialConfigured ? "已配置——输入新值以替换" : "输入 API Key（可留空）", text: $credential)
+          }
+        }
         .disabled(credentialWritable == false)
         .dshField()
+        Button { revealCredential.toggle() } label: {
+          Image(systemName: revealCredential ? "eye.slash" : "eye")
+        }
+        .buttonStyle(.dshGhost)
+        .help(revealCredential ? "隐藏" : "显示明文")
+      }
       if credentialWritable == false {
         Text("该凭据由 Host 标记为只读。")
           .font(.caption)
@@ -113,6 +129,12 @@ struct ProviderAuthoringView: View {
     }
     .padding(DSHSpace.s4)
     .dshCard(tint: DSHTheme.surfaceTint2, radius: DSHRadius.lg)
+    // EnvironmentObject 在 init 里还不可用，预填只能在这里做。
+    .onAppear {
+      let current = harness.credentialValue(ref: keyRef) ?? ""
+      storedCredential = current
+      if credential.isEmpty { credential = current }
+    }
   }
 
   private var normalizedRoute: String { route.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -125,7 +147,9 @@ struct ProviderAuthoringView: View {
     guard normalizedRoute.range(of: "^[a-z][a-z0-9-]*$", options: .regularExpression) != nil,
           !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           !modelIDs.isEmpty else { return false }
-    return credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || credentialWritable != false
+    let key = credential.trimmingCharacters(in: .whitespacesAndNewlines)
+    // 预填后未改动的 Key 不会被重写，只读也不挡保存。
+    return key.isEmpty || key == storedCredential || credentialWritable != false
   }
   private var modelIDs: [String] {
     models.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -140,14 +164,16 @@ struct ProviderAuthoringView: View {
     let path = provider?.settingsPath ?? ["providers", normalizedRoute]
     let ops = profileOperations(path: path)
     let key = credential.trimmingCharacters(in: .whitespacesAndNewlines)
+    // 预填未改动的 Key 不重写（避免每次保存都碰凭据文件）。
+    let keyChanged = !key.isEmpty && key != storedCredential
     var profileOps = ops
-    if !key.isEmpty, profile?.apiKeyEnv != keyRef {
+    if keyChanged, profile?.apiKeyEnv != keyRef {
       profileOps.append(.set(path: path + ["apiKeyEnv"], value: .string(keyRef)))
     }
-    harness.saveProviderProfile(namespace: namespace, ops: profileOps, credentialRef: key.isEmpty ? nil : keyRef, credentialValue: key) { result in
+    harness.saveProviderProfile(namespace: namespace, ops: profileOps, credentialRef: keyChanged ? keyRef : nil, credentialValue: key) { result in
       if case let .failure(saveError) = result { error = saveError.localizedDescription }
     }
-    credential = ""
+    if keyChanged { storedCredential = key }
   }
 
   /// Existing profiles can carry gateway-specific fields the native form does

@@ -458,10 +458,10 @@ private struct CustomProviderRow: View {
             }
           }
         }
-        // 这份配置自己的 Key 就地填写——官方与自定义的凭据不再混在一张
-        // 全局列表里。
+        // Key 的填写/修改集中在「编辑」抽屉里（当前值会预填）；这里只
+        // 展示引用名，状态看右上角徽标。
         if let keyRef = profile.apiKeyEnv {
-          CredentialQuickEntry(reference: keyRef)
+          detailRow("Key 引用", keyRef)
         }
       }
     }
