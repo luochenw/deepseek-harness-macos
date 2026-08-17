@@ -61,6 +61,7 @@ extension HarnessController {
         await MainActor.run {
           voiceDiag("[dispatch] created \(created.sessionId) cwd=\(cwd ?? "nil")")
           self.voiceTaskSessions[created.sessionId] = String(instruction.prefix(24))
+          self.pendingVoiceTaskFocusID = created.sessionId
           self.status = "语音任务已派发到「\(targetName)」"
           self.appendSystem("语音任务已派发到「\(targetName)」，后台执行中：\(String(instruction.prefix(48)))")
           self.refreshHostSnapshots()
@@ -76,6 +77,20 @@ extension HarnessController {
         }
       }
     }
+  }
+
+  /// 悬浮圈点击的直达通道：有刚派发的语音任务就直接进那条会话。
+  /// 返回是否完成了跳转（找不到快照时先刷新，下一次点击就能进）。
+  @discardableResult
+  func openPendingVoiceTaskSession() -> Bool {
+    guard let id = pendingVoiceTaskFocusID else { return false }
+    guard let summary = hostSessions.first(where: { $0.sessionId == id }) else {
+      refreshHostSnapshots()
+      return false
+    }
+    pendingVoiceTaskFocusID = nil
+    openHostSession(summary)
+    return true
   }
 
   /// Mux events for dispatched sessions (everything except the one on

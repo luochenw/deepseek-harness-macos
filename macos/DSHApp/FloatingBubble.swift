@@ -63,10 +63,12 @@ final class FloatingBubbleManager: ObservableObject {
   }
 
   /// 单击：回到主窗口。红点在这里熄灭（didBecomeActive 也会兜底）。
+  /// 刚有语音派发时更进一步——直接进入那条新建的对话。
   func bubbleClicked() {
     unseenCompletion = false
     NSApp.activate(ignoringOtherApps: true)
     NSApp.windows.first { !($0 is NSPanel) && $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
+    harness?.openPendingVoiceTaskSession()
   }
 
   private func show() {

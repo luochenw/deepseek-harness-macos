@@ -365,6 +365,9 @@ final class HarnessController: ObservableObject {
   /// Their mux events are intercepted for completion notification instead
   /// of being dropped with other non-current sessions.
   @Published var voiceTaskSessions: [String: String] = [:]
+  /// 最近一次语音派发的会话——悬浮圈点击直接进入这条对话（进入后清空，
+  /// 恢复悬浮圈"只回主窗口"的默认行为）。
+  @Published var pendingVoiceTaskFocusID: String?
   var hostClientForAttachments: DSHHostClient? { hostClient }
 
   private var hostRuntime: DSHHostRuntime?
@@ -3171,6 +3174,7 @@ private struct Composer: View {
               harness.draft = base + (base.isEmpty ? "" : " ") + partial
             },
             onCommit: { text, viaWake in
+              voiceDiag("[voice] commit '\(text)' viaWake=\(viaWake) autoSend=\(VoiceSettings.wakeAutoSend)")
               let base = dictationBase ?? harness.draft
               dictationBase = nil
               // 空文本 = 放弃（取消、超时无语音、或剔除命令词后一无所剩）

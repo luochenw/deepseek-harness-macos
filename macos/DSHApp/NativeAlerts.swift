@@ -87,7 +87,8 @@ final class NativeAlerts: NSObject {
 
 extension NativeAlerts: UNUserNotificationCenterDelegate {
   nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
-    Task { @MainActor in self.activateApp() }
+    // 与悬浮圈点击同一直达通道：有刚派发的语音任务就直接进那条会话。
+    Task { @MainActor in FloatingBubbleManager.shared.bubbleClicked() }
     completionHandler()
   }
 
