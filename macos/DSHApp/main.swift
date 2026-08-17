@@ -2820,11 +2820,15 @@ private struct MessageBubble: View {
         VStack(alignment: .leading, spacing: 7) {
           Text(message.text)
             .textSelection(.enabled).font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.ink)
-            .frame(maxWidth: 640, alignment: .leading)
           if let attachment = message.attachment { AttachmentPreview(ref: attachment) }
         }
         .padding(.horizontal, DSHSpace.s4).padding(.vertical, DSHSpace.s3)
         .dshCard(tint: DSHTheme.surfaceTint2, radius: DSHRadius.lg)
+        // The card hugs its content and sits on the right edge; 640 is only
+        // the wrap ceiling. A maxWidth frame directly on the Text is greedy —
+        // it stretched every bubble to full width, so a short message wore a
+        // long empty gray bar.
+        .frame(maxWidth: 640, alignment: .trailing)
       }
     case .assistant:
       VStack(alignment: .leading, spacing: 7) {
