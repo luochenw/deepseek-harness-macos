@@ -1733,7 +1733,10 @@ private struct Sidebar: View {
     VStack(alignment: .leading, spacing: DSHSpace.s5) {
       HStack {
         HStack(spacing: DSHSpace.s2) {
-          Image(systemName: "water.waves").foregroundStyle(DSHTheme.accent)
+          // The real bundle icon, not an SF Symbol stand-in — keeps the
+          // in-app brand mark identical to the Dock icon automatically.
+          Image(nsImage: NSApp.applicationIconImage)
+            .resizable().interpolation(.high).frame(width: 22, height: 22)
           Text("DeepSeek Harness").font(.system(size: 13.5, weight: .semibold)).foregroundStyle(DSHTheme.ink)
         }
         Spacer()
@@ -1961,7 +1964,11 @@ private struct ConversationView: View {
           } else {
             ForEach(messages) { message in
               VStack(alignment: .leading, spacing: DSHSpace.s2) {
-                if let reasoning = message.reasoning { ReasoningBlock(text: reasoning) }
+                if let reasoning = message.reasoning {
+                  // "live" = this thought is still streaming: last row of a
+                  // running turn with no answer text yet.
+                  ReasoningBlock(text: reasoning, live: harness.isRunning && message.id == messages.last?.id && message.text.isEmpty)
+                }
                 MessageBubble(message: message)
               }.id(message.id)
             }
@@ -2039,24 +2046,26 @@ private struct ConversationEmptyState: View {
   }
 }
 
-/// A model's reasoning/thinking trace, rendered as its own region above the
-/// answer, Claude Code-style: flat dim gray, no card. Collapsed it's a single
-/// "✻ 思考过程" line with a one-line preview; expanded it's the full
-/// reasoning in gray italic, indented under the toggle.
+/// A model's reasoning/thinking trace, Claude Code / Codex-style: while the
+/// thought is still streaming (`live`) the row shows the latest line rolling
+/// by in dim italic; once done it collapses to a bare "✻ 思考过程" one-liner
+/// with no preview — completed thinking is chrome, not content. Click to
+/// expand the full trace either way.
 private struct ReasoningBlock: View {
   let text: String
+  var live: Bool = false
   @State private var expanded = false
-  private var preview: String {
-    text.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+  private var latestLine: String {
+    text.split(separator: "\n", omittingEmptySubsequences: true).last.map(String.init) ?? ""
   }
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       Button(action: { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }) {
         HStack(spacing: 6) {
           Text("✻").font(.system(size: 11))
-          Text("思考过程").font(.system(size: 12)).italic()
-          if !expanded, !preview.isEmpty {
-            Text(preview).font(.system(size: 12)).italic().lineLimit(1).opacity(0.7)
+          Text(live ? "思考中" : "思考过程").font(.system(size: 12)).italic()
+          if live, !expanded, !latestLine.isEmpty {
+            Text(latestLine).font(.system(size: 12)).italic().lineLimit(1).opacity(0.7)
           }
           Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)).rotationEffect(.degrees(expanded ? 90 : 0))
         }
@@ -2083,6 +2092,7 @@ private struct ReasoningBlock: View {
 private struct MessageBubble: View {
   @EnvironmentObject var harness: HarnessController
   let message: HarnessController.Message
+  @State private var hovering = false
   var body: some View {
     switch message.role {
     case .user:
@@ -2100,14 +2110,24 @@ private struct MessageBubble: View {
     case .assistant:
       VStack(alignment: .leading, spacing: 7) {
         if message.text.isEmpty {
-          Text("正在思考…").font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
+          // Empty text + reasoning = the ✻ thinking row above already says
+          // what's happening; a second "正在思考…" line doubles the signal.
+          if message.reasoning == nil {
+            Text("正在思考…").font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
+          }
         } else {
           MarkdownText(text: message.text).frame(maxWidth: 760, alignment: .leading)
         }
         if let attachment = message.attachment { AttachmentPreview(ref: attachment) }
-        if let messageId = message.hostMessageId { FeedbackBar(messageId: messageId) }
+        // Hover-revealed, Claude Code-style: an always-on 👍👎 under every
+        // intermediate narration line reads as clutter across a long turn.
+        if let messageId = message.hostMessageId {
+          // A rating already given stays visible; unrated bars appear on hover.
+          FeedbackBar(messageId: messageId).opacity(hovering || harness.messageFeedback[messageId]?.rating != nil ? 1 : 0)
+        }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
+      .onHover { hovering = $0 }
     case .system:
       HStack(spacing: 7) {
         Image(systemName: "info.circle").font(.system(size: 11))

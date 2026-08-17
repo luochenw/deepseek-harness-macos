@@ -4,7 +4,6 @@ struct SettingsView: View {
   private enum Section: String, CaseIterable, Identifiable {
     case general = "通用"
     case models = "模型"
-    case customConfiguration = "自定义配置"
     case plugins = "插件"
     case voice = "语音"
     case presets = "Agent 预设"
@@ -15,7 +14,6 @@ struct SettingsView: View {
       switch self {
       case .general: "gearshape"
       case .models: "cpu"
-      case .customConfiguration: "slider.horizontal.3"
       case .plugins: "puzzlepiece"
       case .voice: "waveform"
       case .presets: "square.stack.3d.up"
@@ -94,9 +92,7 @@ struct SettingsView: View {
     case .general:
       GeneralSettingsSection()
     case .models:
-      ModelSettingsSection { section = .customConfiguration }
-    case .customConfiguration:
-      CustomConfigurationSettingsSection()
+      ModelSettingsSection()
     case .plugins:
       PluginSettingsSection()
     case .voice:
@@ -129,7 +125,6 @@ private struct GeneralSettingsSection: View {
 
 private struct ModelSettingsSection: View {
   @EnvironmentObject private var harness: HarnessController
-  let openCustomConfiguration: () -> Void
 
   private var selectedGroup: DSHModelGroup? {
     harness.availableModels.first(where: { $0.id == harness.provider }) ?? harness.availableModels.first
@@ -181,16 +176,52 @@ private struct ModelSettingsSection: View {
         }
       }
 
-      HStack(spacing: DSHSpace.s2) {
-        Button("刷新 Host 模型目录", action: harness.refreshModelConfiguration)
-          .buttonStyle(.dshSecondary)
-        Button("管理自定义配置", action: openCustomConfiguration)
-          .buttonStyle(.dshSecondary)
+      Button("刷新 Host 模型目录", action: harness.refreshModelConfiguration)
+        .buttonStyle(.dshSecondary)
+
+      // API keys write straight from here — the credentials service is the
+      // same one provider authoring uses, this is just the faster path for
+      // "粘贴个 key 就能用" without opening an endpoint editor.
+      VStack(alignment: .leading, spacing: DSHSpace.s2) {
+        Text("API Key").dshSectionLabel()
+        if harness.credentialStates.isEmpty {
+          Text("尚未发现凭据引用；添加自定义配置后这里会列出对应的 Key。")
+            .font(.caption).foregroundStyle(DSHTheme.inkFaint)
+        } else {
+          ForEach(harness.credentialStates.keys.sorted(), id: \.self) { reference in
+            CredentialQuickEntry(reference: reference)
+          }
+        }
+        Text(harness.hasCredential ? "已检测到可用凭据。" : "尚未检测到可用凭据；粘贴对应引用的 API Key 并保存。")
+          .font(.caption)
+          .foregroundStyle(harness.hasCredential ? DSHTheme.accent : DSHTheme.warm)
       }
 
-      Text(harness.hasCredential ? "已检测到可用凭据。" : "尚未检测到可用凭据；请在「自定义配置」中添加端点并写入 API Key。")
-        .font(.caption)
-        .foregroundStyle(harness.hasCredential ? DSHTheme.accent : DSHTheme.warm)
+      // 自定义配置 lives inline under the model picker now — switching and
+      // endpoint management are one surface, not a separate tab.
+      CustomConfigurationSettingsSection()
+    }
+  }
+}
+
+/// One credential reference row: masked entry plus save, with the configured
+/// badge reflecting the Host's credentials service state.
+private struct CredentialQuickEntry: View {
+  @EnvironmentObject private var harness: HarnessController
+  let reference: String
+  @State private var value = ""
+  var body: some View {
+    HStack(spacing: DSHSpace.s2) {
+      Text(reference)
+        .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(DSHTheme.ink)
+        .lineLimit(1).truncationMode(.middle)
+        .frame(width: 168, alignment: .leading)
+      SecureField("粘贴 API Key", text: $value).dshField()
+      let configured = harness.credentialStates[reference]?.configured == true
+      DSHBadge(text: configured ? "已配置" : "未配置", tone: configured ? .accent : .warm)
+      Button("保存") { harness.saveCredential(ref: reference, value: value); value = "" }
+        .buttonStyle(.dshSecondary)
+        .disabled(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
   }
 }
