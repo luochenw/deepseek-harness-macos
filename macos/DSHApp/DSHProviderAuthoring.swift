@@ -29,39 +29,86 @@ struct ProviderAuthoringView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      Text(provider == nil ? "添加自定义提供方" : "编辑提供方")
-        .font(.title2.weight(.bold))
-      Text("llm-pi-ai · revision \(namespace.revision)").font(.caption).foregroundStyle(.secondary)
-
-      TextField("Provider ID（小写字母开头，可含数字和短横线）", text: $route)
-        .disabled(provider != nil)
-      TextField("显示名称", text: $displayName)
-      TextField("API 地址", text: $baseURL)
-      Picker("API 协议", selection: $api) {
-        ForEach(protocols, id: \.self) { Text($0).tag($0) }
+    VStack(alignment: .leading, spacing: DSHSpace.s5) {
+      VStack(alignment: .leading, spacing: DSHSpace.s1) {
+        Text(provider == nil ? "添加自定义提供方" : "编辑提供方")
+          .font(.title2.weight(.bold))
+          .foregroundStyle(DSHTheme.ink)
+        Text("llm-pi-ai · revision \(namespace.revision)")
+          .font(.caption)
+          .foregroundStyle(DSHTheme.inkFaint)
       }
-      TextField("模型 ID（使用逗号分隔）", text: $models)
 
-      Divider()
-      Text("API Key（仅写入；不会显示或保存在界面中）").font(.headline)
-      SecureField(credentialConfigured ? "已配置——输入新值以替换" : "输入 API Key（可留空）", text: $credential)
-        .disabled(credentialWritable == false)
-      if credentialWritable == false {
-        Text("该凭据由 Host 标记为只读。") .font(.caption).foregroundStyle(.orange)
+      basicInfoSection
+      credentialSection
+
+      if let error {
+        Text(error)
+          .font(.caption)
+          .foregroundStyle(DSHTheme.coral)
+          .padding(.horizontal, DSHSpace.s3).padding(.vertical, DSHSpace.s2)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .dshCard(tint: DSHTheme.coralSoft, radius: DSHRadius.sm)
       }
-      if let error { Text(error).font(.caption).foregroundStyle(.red) }
 
       HStack {
         Spacer()
-        Button("取消") { harness.showProviderAuthoring = false }.keyboardShortcut(.cancelAction)
+        Button("取消") { harness.showProviderAuthoring = false }
+          .buttonStyle(.dshGhost)
+          .keyboardShortcut(.cancelAction)
         Button(provider == nil ? "创建" : "保存") { save() }
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(.dshPrimary)
           .disabled(!canSave)
       }
     }
-    .padding(24)
+    .padding(DSHSpace.s5)
     .frame(width: 560)
+    .background(DSHTheme.canvas)
+  }
+
+  private var basicInfoSection: some View {
+    VStack(alignment: .leading, spacing: DSHSpace.s3) {
+      Text("基本信息").dshSectionLabel()
+      TextField("Provider ID（小写字母开头，可含数字和短横线）", text: $route)
+        .disabled(provider != nil)
+        .dshField()
+      TextField("显示名称", text: $displayName)
+        .dshField()
+      TextField("API 地址", text: $baseURL)
+        .dshField()
+      Picker("API 协议", selection: $api) {
+        ForEach(protocols, id: \.self) { Text($0).tag($0) }
+      }
+      .tint(DSHTheme.accent)
+      TextField("模型 ID（使用逗号分隔）", text: $models)
+        .dshField()
+    }
+    .padding(DSHSpace.s4)
+    .dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.lg)
+  }
+
+  private var credentialSection: some View {
+    VStack(alignment: .leading, spacing: DSHSpace.s3) {
+      HStack(spacing: DSHSpace.s2) {
+        Text("API Key").dshSectionLabel()
+        if credentialConfigured {
+          DSHBadge(text: credentialWritable == false ? "只读" : "已配置", tone: credentialWritable == false ? .warm : .accent)
+        }
+      }
+      Text("仅写入；不会显示或保存在界面中")
+        .font(.caption)
+        .foregroundStyle(DSHTheme.inkSoft)
+      SecureField(credentialConfigured ? "已配置——输入新值以替换" : "输入 API Key（可留空）", text: $credential)
+        .disabled(credentialWritable == false)
+        .dshField()
+      if credentialWritable == false {
+        Text("该凭据由 Host 标记为只读。")
+          .font(.caption)
+          .foregroundStyle(DSHTheme.warm)
+      }
+    }
+    .padding(DSHSpace.s4)
+    .dshCard(tint: DSHTheme.surfaceTint2, radius: DSHRadius.lg)
   }
 
   private var normalizedRoute: String { route.trimmingCharacters(in: .whitespacesAndNewlines) }
