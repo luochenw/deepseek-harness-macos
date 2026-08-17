@@ -104,17 +104,31 @@ final class AppleSpeechTranscriber: VoiceTranscriber {
   private var lastTranscript = ""
   private var finalized = false
   private var finalizeFallback: DispatchWorkItem?
+  private var receivedAnyResult = false
+  private var retriedOnline = false
 
   func startStreaming() throws {
+    retriedOnline = false
+    try startStreaming(forceOnline: false)
+  }
+
+  private func startStreaming(forceOnline: Bool) throws {
     guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN")), recognizer.isAvailable else {
       throw VoiceEngineError.recognizerUnavailable
     }
     self.recognizer = recognizer
     lastTranscript = ""
     finalized = false
+    receivedAnyResult = false
     let request = SFSpeechAudioBufferRecognitionRequest()
     request.shouldReportPartialResults = true
-    if recognizer.supportsOnDeviceRecognition {
+    if forceOnline {
+      // The on-device task died instantly (local speech daemon in a bad
+      // state); this retry goes through Apple's server so the utterance
+      // still lands instead of the session flashing shut.
+      request.requiresOnDeviceRecognition = false
+      engineNote = "在线识别（本地识别启动失败，已自动回退）"
+    } else if recognizer.supportsOnDeviceRecognition {
       request.requiresOnDeviceRecognition = true
       engineNote = "本地识别"
     } else {
@@ -132,12 +146,20 @@ final class AppleSpeechTranscriber: VoiceTranscriber {
     try audioEngine.start()
     task = recognizer.recognitionTask(with: request) { [weak self] result, error in
       DispatchQueue.main.async {
-        guard let self, !self.finalized else { return }
+        guard let self, !self.finalized, self.request === request else { return }
         if let result {
+          self.receivedAnyResult = true
           self.lastTranscript = result.bestTranscription.formattedString
           self.onPartialText?(self.lastTranscript)
           if result.isFinal { self.deliverFinal() }
         } else if error != nil {
+          if !self.receivedAnyResult, !self.retriedOnline, request.requiresOnDeviceRecognition {
+            // Died before producing anything — one-shot online fallback.
+            self.retriedOnline = true
+            self.stopCapture()
+            try? self.startStreaming(forceOnline: true)
+            return
+          }
           // Post-endAudio errors (e.g. "no speech detected") still carry the
           // best partial we accumulated; deliver it instead of dropping the utterance.
           self.deliverFinal()
@@ -674,6 +696,8 @@ final class WakeWordListener: NSObject, ObservableObject {
   /// SFSpeechRecognizer caps a streaming task at ~1 minute; restart under it.
   private let taskRestartInterval: TimeInterval = 50
   private let errorRecoveryDelay: TimeInterval = 1.5
+  /// Instant-failure streak feeding the circuit breaker in the task handler.
+  private var consecutiveFailures = 0
 
   func start() {
     guard !enabled else { return }
@@ -750,8 +774,25 @@ final class WakeWordListener: NSObject, ObservableObject {
     task = recognizer.recognitionTask(with: request) { [weak self] result, error in
       Task { @MainActor in
         guard let self, self.request === request else { return } // stale task
-        if let result { self.handlePartial(result.bestTranscription.formattedString) }
-        else if error != nil { self.tearDownRecognition(); self.scheduleRestart(after: self.errorRecoveryDelay) }
+        if let result {
+          self.consecutiveFailures = 0
+          self.handlePartial(result.bestTranscription.formattedString)
+        } else if let error {
+          // Circuit breaker: a fixed 1.5s retry used to thrash forever when
+          // the local speech daemon was unhealthy — restarting ~40×/min,
+          // grabbing the mic each time, and killing any manual talk session
+          // it raced ("一闪而过"). Failures now back off exponentially and
+          // give up loudly after a streak; the reason is shown, not
+          // swallowed.
+          self.consecutiveFailures += 1
+          self.tearDownRecognition()
+          if self.consecutiveFailures >= 5 {
+            self.statusNote = "唤醒词监听连续失败已暂停：\(error.localizedDescription)。重开唤醒词开关可重试。"
+          } else {
+            self.statusNote = "唤醒词监听重试中：\(error.localizedDescription)"
+            self.scheduleRestart(after: self.errorRecoveryDelay * pow(2, Double(self.consecutiveFailures)))
+          }
+        }
       }
     }
     scheduleRestart(after: taskRestartInterval)
