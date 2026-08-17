@@ -1937,11 +1937,65 @@ private struct ConversationView: View {
                 MessageBubble(message: message)
               }.id(message.id)
             }
+            // Waiting indicator between send and the first streamed token —
+            // the send path no longer seeds a placeholder assistant bubble
+            // (see the composer-consolidation note), so without this row the
+            // transcript sits visually dead until the first delta arrives.
+            if harness.isRunning, messages.last?.role != .assistant || messages.last?.text.isEmpty == true {
+              WaitingWaveIndicator().id("waiting-indicator")
+            }
           }
         }.frame(maxWidth: .infinity).padding(DSHSpace.s6)
       }
       .onChange(of: harness.displayedSession?.messages) { _, messages in if let last = messages?.last { proxy.scrollTo(last.id, anchor: .bottom) } }
     }
+  }
+}
+
+/// One rolling wave band of the waiting indicator — top edge is a cosine
+/// curve whose phase the caller advances per frame.
+private struct WaveBand: Shape {
+  let baseY: CGFloat
+  let amplitude: CGFloat
+  let phase: CGFloat
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    let steps = 24
+    path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+    for i in 0...steps {
+      let fraction = CGFloat(i) / CGFloat(steps)
+      let x = rect.minX + fraction * rect.width
+      let y = rect.minY + baseY * rect.height + amplitude * rect.height * cos(phase + fraction * .pi * 2.5)
+      path.addLine(to: CGPoint(x: x, y: y))
+    }
+    path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+    path.closeSubpath()
+    return path
+  }
+}
+
+/// Waiting style for the gap between send and the first streamed token: a
+/// miniature of the app icon (deep-sea gradient, moon, layered waves) with
+/// the waves actually rolling. Colors are the icon generator's constants —
+/// keep the two in sync when the icon changes.
+private struct WaitingWaveIndicator: View {
+  var body: some View {
+    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+      let t = context.date.timeIntervalSinceReferenceDate
+      ZStack {
+        RoundedRectangle(cornerRadius: 6.5, style: .continuous)
+          .fill(LinearGradient(
+            colors: [Color(red: 0.031, green: 0.106, blue: 0.125), Color(red: 0.043, green: 0.216, blue: 0.235), Color(red: 0.039, green: 0.424, blue: 0.404)],
+            startPoint: .top, endPoint: .bottom))
+        Circle().fill(Color(red: 0.867, green: 0.980, blue: 0.960)).frame(width: 4.5, height: 4.5).offset(x: 5.5, y: -7)
+        WaveBand(baseY: 0.56, amplitude: 0.07, phase: t * 1.7).fill(Color(red: 0.290, green: 0.871, blue: 0.824).opacity(0.30))
+        WaveBand(baseY: 0.66, amplitude: 0.065, phase: t * 2.3 + 2.1).fill(Color(red: 0.376, green: 0.925, blue: 0.871).opacity(0.55))
+        WaveBand(baseY: 0.75, amplitude: 0.055, phase: t * 2.9 + 4.4).fill(Color(red: 0.173, green: 0.773, blue: 0.722).opacity(0.95))
+      }
+      .frame(width: 26, height: 26)
+      .clipShape(RoundedRectangle(cornerRadius: 6.5, style: .continuous))
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -1958,30 +2012,38 @@ private struct ConversationEmptyState: View {
 }
 
 /// A model's reasoning/thinking trace, rendered as its own region above the
-/// answer bubble rather than nested inside it — see the ocean-design-system
-/// Agent Note: "推理过程" and the answer are different kinds of content and
-/// shouldn't share one card.
+/// answer, Claude Code-style: flat dim gray, no card. Collapsed it's a single
+/// "✻ 思考过程" line with a one-line preview; expanded it's the full
+/// reasoning in gray italic, indented under the toggle.
 private struct ReasoningBlock: View {
   let text: String
   @State private var expanded = false
+  private var preview: String {
+    text.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+  }
   var body: some View {
-    HStack {
-      VStack(alignment: .leading, spacing: DSHSpace.s2) {
-        Button(action: { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }) {
-          HStack(spacing: 6) {
-            Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).rotationEffect(.degrees(expanded ? 90 : 0))
-            Text("推理过程").font(.system(size: 11, weight: .semibold))
-          }.foregroundStyle(DSHTheme.inkFaint)
-        }.buttonStyle(.plain)
-        if expanded {
-          Text(text).font(.system(.caption, design: .monospaced)).foregroundStyle(DSHTheme.inkSoft).textSelection(.enabled)
+    VStack(alignment: .leading, spacing: 4) {
+      Button(action: { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }) {
+        HStack(spacing: 6) {
+          Text("✻").font(.system(size: 11))
+          Text("思考过程").font(.system(size: 12)).italic()
+          if !expanded, !preview.isEmpty {
+            Text(preview).font(.system(size: 12)).italic().lineLimit(1).opacity(0.7)
+          }
+          Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)).rotationEffect(.degrees(expanded ? 90 : 0))
         }
+        .foregroundStyle(DSHTheme.inkFaint)
+        .contentShape(Rectangle())
+      }.buttonStyle(.plain)
+      if expanded {
+        Text(text)
+          .font(.system(size: 12)).italic().foregroundStyle(DSHTheme.inkFaint)
+          .textSelection(.enabled)
+          .frame(maxWidth: 760, alignment: .leading)
+          .padding(.leading, 17)
       }
-      .padding(.horizontal, DSHSpace.s3).padding(.vertical, DSHSpace.s2)
-      .dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
-      .frame(maxWidth: 760, alignment: .leading)
-      Spacer(minLength: 180)
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
