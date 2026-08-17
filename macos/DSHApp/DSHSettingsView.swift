@@ -112,33 +112,37 @@ private struct GeneralSettingsSection: View {
   @AppStorage(AppPrefs.notifyAttentionKey) private var notifyAttention = true
 
   var body: some View {
-    VStack(alignment: .leading, spacing: DSHSpace.s3) {
-      Text("窗口").dshSectionLabel()
-      Toggle("显示悬浮圈", isOn: Binding(
-        get: { bubble.enabled },
-        set: { if $0 != bubble.enabled { bubble.toggle() } }
-      ))
-      Text("置顶的小圆窗，随时看到会话运行状态；后台完成会亮红点。快捷键 ⌥⌘Y。")
-        .font(.caption)
-        .foregroundStyle(DSHTheme.inkFaint)
+    VStack(alignment: .leading, spacing: DSHSpace.s4) {
+      VStack(alignment: .leading, spacing: DSHSpace.s2) {
+        Text("窗口").dshSectionLabel()
+        Toggle("显示悬浮圈", isOn: Binding(
+          get: { bubble.enabled },
+          set: { if $0 != bubble.enabled { bubble.toggle() } }
+        )).foregroundStyle(DSHTheme.ink)
+        Text("置顶的小圆窗，随时看到会话运行状态；后台完成会亮红点。快捷键 ⌥⌘Y。")
+          .font(.caption).foregroundStyle(DSHTheme.inkFaint).fixedSize(horizontal: false, vertical: true)
+      }
+      .padding(DSHSpace.s3).dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
 
-      Text("通知").dshSectionLabel()
-      Toggle("回合完成时发送系统通知", isOn: $notifyTurnEnd)
-      Toggle("需要审批或提问时提醒", isOn: $notifyAttention)
-      Text("横幅只在 app 不在前台时弹出；菜单栏图标始终显示实时状态，不受此开关影响。")
-        .font(.caption)
-        .foregroundStyle(DSHTheme.inkFaint)
+      VStack(alignment: .leading, spacing: DSHSpace.s2) {
+        Text("通知").dshSectionLabel()
+        Toggle("回合完成时发送系统通知", isOn: $notifyTurnEnd).foregroundStyle(DSHTheme.ink)
+        Toggle("需要审批或提问时提醒", isOn: $notifyAttention).foregroundStyle(DSHTheme.ink)
+        Text("横幅只在 app 不在前台时弹出；菜单栏图标始终显示实时状态，不受此开关影响。")
+          .font(.caption).foregroundStyle(DSHTheme.inkFaint).fixedSize(horizontal: false, vertical: true)
+      }
+      .padding(DSHSpace.s3).dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
 
-      Text("输入").dshSectionLabel()
-      Toggle("回车直接发送", isOn: $enterToSend)
-      Text(enterToSend
-        ? "Shift+回车换行。关闭后：回车换行，⌘回车发送。"
-        : "当前：回车换行，⌘回车发送。")
-        .font(.caption)
-        .foregroundStyle(DSHTheme.inkFaint)
+      VStack(alignment: .leading, spacing: DSHSpace.s2) {
+        Text("输入").dshSectionLabel()
+        Toggle("回车直接发送", isOn: $enterToSend).foregroundStyle(DSHTheme.ink)
+        Text(enterToSend
+          ? "Shift+回车换行。关闭后：回车换行，⌘回车发送。"
+          : "当前：回车换行，⌘回车发送。")
+          .font(.caption).foregroundStyle(DSHTheme.inkFaint).fixedSize(horizontal: false, vertical: true)
+      }
+      .padding(DSHSpace.s3).dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
     }
-    .toggleStyle(.switch)
-    .controlSize(.small)
   }
 }
 
