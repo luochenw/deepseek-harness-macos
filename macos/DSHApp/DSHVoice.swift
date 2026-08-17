@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Foundation
 import Speech
@@ -67,6 +68,13 @@ enum VoiceSettings {
     UserDefaults.standard.object(forKey: wakeAutoSendKey) == nil ? true : UserDefaults.standard.bool(forKey: wakeAutoSendKey)
   }
   static let wakePhraseKey = "dsh.voice.wakePhrase"
+
+  /// Deep link straight to 系统设置 → 键盘（听写所在页）。
+  static func openDictationSettings() {
+    if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Dictation") {
+      NSWorkspace.shared.open(url)
+    }
+  }
   static let engineKey = "dsh.voice.engine" // "apple" (default) | "local"
   static let sttEndpointKey = "dsh.voice.sttEndpoint"
   static let ttsEndpointKey = "dsh.voice.ttsEndpoint"
@@ -693,6 +701,9 @@ final class WakeWordListener: NSObject, ObservableObject {
   @Published private(set) var isActive = false
   /// Most recent start/permission failure, for display; nil when healthy.
   @Published private(set) var statusNote: String?
+  /// True once failures are diagnosed as "系统听写未开启" — drives the
+  /// mic button's proactive setup prompt (one-click jump to 系统设置).
+  @Published private(set) var needsDictationSetup = false
   /// Fired on the main actor when the wake phrase is heard (listener is
   /// already suspended by then; call `resume()` after the talk session ends).
   var onWake: (() -> Void)?
@@ -798,6 +809,7 @@ final class WakeWordListener: NSObject, ObservableObject {
           self.consecutiveFailures += 1
           self.tearDownRecognition()
           let reason = Self.friendlyFailureReason(error)
+          if reason.contains("听写") { self.needsDictationSetup = true }
           if self.consecutiveFailures >= 5 {
             self.statusNote = "唤醒词监听连续失败已暂停：\(reason)。重开唤醒词开关可重试。"
           } else {

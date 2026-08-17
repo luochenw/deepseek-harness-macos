@@ -24,6 +24,9 @@ struct VoiceSettingsView: View {
         Toggle("唤醒识别的内容自动发送", isOn: $wakeAutoSend).foregroundStyle(DSHTheme.ink)
         TextField("唤醒短语", text: $wakePhrase, prompt: Text(VoiceSettings.defaultWakePhrase))
           .dshField()
+        Button("打开系统「听写」设置", action: VoiceSettings.openDictationSettings)
+          .buttonStyle(.dshSecondary)
+          .help("唤醒词依赖 macOS 系统听写（本地识别）；未开启时常驻监听无法运行")
         Text("常驻监听只用系统离线中文识别，音频不出本机；监听中麦克风按钮显示橙色圆点。点击麦克风的手动听写只把文字填进输入框、从不自动发送；唤醒词听写默认自动发送，可用上方开关关闭。手动关闭唤醒词后不会再被自动开启。")
           .font(.caption).foregroundStyle(DSHTheme.inkFaint).fixedSize(horizontal: false, vertical: true)
       }

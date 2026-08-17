@@ -22,6 +22,8 @@ struct VoiceInputButton: View {
   @StateObject private var wake = WakeWordListener()
   @State private var pulsing = false
   @State private var showDeniedHelp = false
+  @State private var showDictationSetup = false
+  @State private var dictationPromptShown = false
   private var deniedMessage: String? {
     if case .denied(let message) = voice.state { return message }
     return nil
@@ -67,21 +69,24 @@ struct VoiceInputButton: View {
       // loses its microphone/speech TCC grants on every reinstall, so users
       // may need to re-authorize after updates.
       .popover(isPresented: $showDeniedHelp, arrowEdge: .top) {
-        VStack(alignment: .leading, spacing: 10) {
-          Label("语音暂不可用", systemImage: "mic.slash").font(.headline)
-          Text(deniedMessage ?? "请授权麦克风与语音识别后重试。").font(.caption)
-          Text("提示：每次重新安装 app 后，系统会重新询问授权；如果没有弹出询问，请在系统设置中手动开启。").font(.caption2).foregroundStyle(.secondary)
-          HStack {
-            Button("打开「麦克风」设置") { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") { NSWorkspace.shared.open(url) } }
-            Button("打开「语音识别」设置") { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition") { NSWorkspace.shared.open(url) } }
-          }.controlSize(.small)
-          Button("重试") { showDeniedHelp = false; toggle() }.controlSize(.small)
+        DeniedHelpPopover(message: deniedMessage) { showDeniedHelp = false; toggle() }
+      }
+      // Proactive setup prompt: the moment failures are diagnosed as "系统
+      // 听写未开启", say so in the user's face with a one-click jump —
+      // burying it in the right-click menu read as "没有任何提示".
+      .popover(isPresented: $showDictationSetup, arrowEdge: .top) {
+        DictationSetupPopover { showDictationSetup = false }
+      }
+      .onChange(of: wake.needsDictationSetup) { _, needed in
+        if needed, !dictationPromptShown {
+          dictationPromptShown = true
+          showDictationSetup = true
         }
-        .padding(14).frame(width: 320)
       }
       .contextMenu {
         if isActive { Button("取消聆听") { voice.cancelListening() } }
         Button("停止播报") { voice.stopSpeaking() }
+        Button("打开系统「听写」设置") { VoiceSettings.openDictationSettings() }
         Divider()
         Button(VoiceSettings.wakeEnabled ? "停用唤醒词" : "启用唤醒词（\(VoiceSettings.wakePhrase)）") {
           UserDefaults.standard.set(!VoiceSettings.wakeEnabled, forKey: VoiceSettings.wakeEnabledKey)
@@ -190,5 +195,43 @@ struct VoiceInputButton: View {
       wake.suspend()
       voice.startListening()
     }
+  }
+}
+
+/// Proactive "系统听写未开启" prompt with a one-click jump to 系统设置 —
+/// shown once per run when wake failures are diagnosed as dictation-off.
+private struct DictationSetupPopover: View {
+  let dismiss: () -> Void
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Label("需要开启系统「听写」", systemImage: "waveform.badge.exclamationmark").font(.headline)
+      Text("唤醒词监听使用系统本地识别，依赖 macOS 的听写功能。当前系统听写未开启，监听无法运行。").font(.caption)
+      HStack {
+        Button("打开「听写」设置") { VoiceSettings.openDictationSettings(); dismiss() }
+          .buttonStyle(.borderedProminent).controlSize(.small)
+        Button("暂不", action: dismiss).controlSize(.small)
+      }
+      Text("开启后无需重启，监听会自动恢复。").font(.caption2).foregroundStyle(.secondary)
+    }
+    .padding(14).frame(width: 300)
+  }
+}
+
+/// Permission-denied explainer with direct links into 系统设置.
+private struct DeniedHelpPopover: View {
+  let message: String?
+  let retry: () -> Void
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Label("语音暂不可用", systemImage: "mic.slash").font(.headline)
+      Text(message ?? "请授权麦克风与语音识别后重试。").font(.caption)
+      Text("提示：每次重新安装 app 后，系统会重新询问授权；如果没有弹出询问，请在系统设置中手动开启。").font(.caption2).foregroundStyle(.secondary)
+      HStack {
+        Button("打开「麦克风」设置") { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") { NSWorkspace.shared.open(url) } }
+        Button("打开「语音识别」设置") { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition") { NSWorkspace.shared.open(url) } }
+      }.controlSize(.small)
+      Button("重试", action: retry).controlSize(.small)
+    }
+    .padding(14).frame(width: 320)
   }
 }
