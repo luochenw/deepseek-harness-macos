@@ -103,6 +103,50 @@ struct SettingsView: View {
   }
 }
 
+/// Claude Code 桌面端式的设置行：左边标题 + 灰字说明，右边一枚小 switch。
+/// 行自己不带背景——由外层的组卡片承载。
+struct DSHToggleRow: View {
+  let title: String
+  var caption: String?
+  @Binding var isOn: Bool
+
+  var body: some View {
+    HStack(alignment: .center, spacing: DSHSpace.s3) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title).font(.system(size: 13)).foregroundStyle(DSHTheme.ink)
+        if let caption {
+          Text(caption)
+            .font(.system(size: 11))
+            .foregroundStyle(DSHTheme.inkFaint)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      Spacer(minLength: DSHSpace.s3)
+      Toggle("", isOn: $isOn)
+        .labelsHidden()
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .tint(DSHTheme.accent)
+    }
+  }
+}
+
+/// 设置组：小节标题 + 一张卡片，行间距分组（不用分割线）。
+struct DSHSettingsGroup<Content: View>: View {
+  let title: String
+  @ViewBuilder var content: Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: DSHSpace.s2) {
+      Text(title).dshSectionLabel()
+      VStack(alignment: .leading, spacing: DSHSpace.s3) { content }
+        .padding(DSHSpace.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
+    }
+  }
+}
+
 // 真正"通用"的客户端行为开关。默认 Agent preset 的选择挪回「Agent 预设」
 // 页（此前两处展示同一状态，改哪个生效说不清）。
 private struct GeneralSettingsSection: View {
@@ -113,35 +157,35 @@ private struct GeneralSettingsSection: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: DSHSpace.s4) {
-      VStack(alignment: .leading, spacing: DSHSpace.s2) {
-        Text("窗口").dshSectionLabel()
-        Toggle("显示悬浮圈", isOn: Binding(
-          get: { bubble.enabled },
-          set: { if $0 != bubble.enabled { bubble.toggle() } }
-        )).foregroundStyle(DSHTheme.ink)
-        Text("置顶的小圆窗，随时看到会话运行状态；后台完成会亮红点。快捷键 ⌥⌘Y。")
-          .font(.caption).foregroundStyle(DSHTheme.inkFaint).fixedSize(horizontal: false, vertical: true)
+      DSHSettingsGroup(title: "窗口") {
+        DSHToggleRow(
+          title: "显示悬浮圈",
+          caption: "置顶的小圆窗，随时看到会话运行状态；后台完成会亮红点。快捷键 ⌥⌘Y。",
+          isOn: Binding(
+            get: { bubble.enabled },
+            set: { if $0 != bubble.enabled { bubble.toggle() } }
+          ))
       }
-      .padding(DSHSpace.s3).dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
 
-      VStack(alignment: .leading, spacing: DSHSpace.s2) {
-        Text("通知").dshSectionLabel()
-        Toggle("回合完成时发送系统通知", isOn: $notifyTurnEnd).foregroundStyle(DSHTheme.ink)
-        Toggle("需要审批或提问时提醒", isOn: $notifyAttention).foregroundStyle(DSHTheme.ink)
-        Text("横幅只在 app 不在前台时弹出；菜单栏图标始终显示实时状态，不受此开关影响。")
-          .font(.caption).foregroundStyle(DSHTheme.inkFaint).fixedSize(horizontal: false, vertical: true)
+      DSHSettingsGroup(title: "通知") {
+        DSHToggleRow(
+          title: "回合完成时发送系统通知",
+          caption: "横幅只在 app 不在前台时弹出。",
+          isOn: $notifyTurnEnd)
+        DSHToggleRow(
+          title: "需要审批或提问时提醒",
+          caption: "菜单栏图标始终显示实时状态，不受通知开关影响。",
+          isOn: $notifyAttention)
       }
-      .padding(DSHSpace.s3).dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
 
-      VStack(alignment: .leading, spacing: DSHSpace.s2) {
-        Text("输入").dshSectionLabel()
-        Toggle("回车直接发送", isOn: $enterToSend).foregroundStyle(DSHTheme.ink)
-        Text(enterToSend
-          ? "Shift+回车换行。关闭后：回车换行，⌘回车发送。"
-          : "当前：回车换行，⌘回车发送。")
-          .font(.caption).foregroundStyle(DSHTheme.inkFaint).fixedSize(horizontal: false, vertical: true)
+      DSHSettingsGroup(title: "输入") {
+        DSHToggleRow(
+          title: "回车直接发送",
+          caption: enterToSend
+            ? "Shift+回车换行。关闭后：回车换行，⌘回车发送。"
+            : "当前：回车换行，⌘回车发送。",
+          isOn: $enterToSend)
       }
-      .padding(DSHSpace.s3).dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
     }
   }
 }
