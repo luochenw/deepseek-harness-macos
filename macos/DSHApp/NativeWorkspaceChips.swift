@@ -39,8 +39,10 @@ struct WorkspaceChips: View {
       // what the session can reach, not switch targets (switching lives in
       // the active chip's menu). Right-click removes one from the registry.
       ForEach(otherWorkspaces.prefix(compact ? 2 : 4)) { workspace in
-        chipLabel(icon: "folder", text: workspace.title)
-          .help(workspace.path)
+        let missing = !FileManager.default.fileExists(atPath: workspace.path)
+        chipLabel(icon: missing ? "exclamationmark.triangle" : "folder",
+                  text: workspace.title + (missing ? "（目录已删除）" : ""))
+          .help(missing ? "磁盘上已找不到 \(workspace.path)，右键可从列表移除" : workspace.path)
           .contextMenu {
             Button("从列表移除", role: .destructive) { harness.deleteWorkspace(workspace) }
           }

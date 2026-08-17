@@ -1362,6 +1362,15 @@ final class HarnessController: ObservableObject {
   }
 
   func registerWorkspace(_ url: URL) {
+    // Fail fast and *visibly* when the directory is gone from disk — letting
+    // it through used to surface only at session creation, as an opaque
+    // "找不到" from the Host (and half the errors here wrote to the removed
+    // status line, so the user saw nothing actionable).
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+      appendSystem("工作区目录已不存在：\(url.path)。若它还在文件夹列表里，右键对应 chip 选「从列表移除」。")
+      return
+    }
     guard let hostClient else { return }
     Task {
       do {
@@ -1373,7 +1382,7 @@ final class HarnessController: ObservableObject {
           self.refreshHostSnapshots()
         }
       } catch {
-        await MainActor.run { self.status = "工作区注册失败：\(error.localizedDescription)" }
+        await MainActor.run { self.appendSystem("工作区注册失败：\(error.localizedDescription)") }
       }
     }
   }
