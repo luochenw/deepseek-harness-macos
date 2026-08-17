@@ -457,7 +457,9 @@ final class VoiceController: NSObject, ObservableObject {
   private var synthesizerFingerprint: String
   private var silenceTimer: Timer?
   /// Auto endpoint: stop listening this long after the last new partial result.
-  private let silenceEndpoint: TimeInterval = 1.2
+  // 2.0s: 1.2s finalized mid-sentence on natural zh pauses once real speech
+  // had started; the initial wait is unbounded (see handlePartial).
+  private let silenceEndpoint: TimeInterval = 2.0
 
   init(transcriber: VoiceTranscriber? = nil, synthesizer: VoiceSpeechSynthesizer? = nil) {
     self.enginesInjected = transcriber != nil || synthesizer != nil
@@ -586,7 +588,11 @@ final class VoiceController: NSObject, ObservableObject {
     switch state {
     case .listening:
       partialText = text
-      armSilenceTimer()
+      // Only a real utterance arms the endpoint. The zh recognizer warms up
+      // with empty partials, and arming on those closed the mic ~1.2s after
+      // the click — before the user had said a word, which read as "语音
+      // 输入完全不工作". Until speech arrives, the mic just keeps waiting.
+      if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { armSilenceTimer() }
     case .transcribing:
       // Post-endAudio updates: late Apple partials, or the local engine's
       // "（本地模型识别中…）" placeholder. Display only — no silence timer.
