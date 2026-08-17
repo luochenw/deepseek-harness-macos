@@ -20,7 +20,6 @@ struct VoiceInputButton: View {
   /// Live partial transcript while listening — the composer streams this
   /// into the input box so speech is visible as it happens.
   var onPartial: ((String) -> Void)?
-  @State private var viaWake = false
   @StateObject private var voice = VoiceController()
   @StateObject private var wake = WakeWordListener()
   @State private var pulsing = false
@@ -110,7 +109,9 @@ struct VoiceInputButton: View {
     // No floating transcript bubble — the pulsing icon is the listening
     // indicator, and the text lands in the composer where you can edit it.
     .onAppear {
-      voice.onFinalText = { text in onCommit(text, viaWake); viaWake = false }
+      // Single, stable commit hook: the via-wake fact lives on the
+      // controller (set by startListening(viaWake:)), not in view state.
+      voice.onFinalText = { text in onCommit(text, voice.sessionViaWake) }
       syncWakeListener()
     }
     // Covers both the settings pane and the context menu writing the defaults.
@@ -176,11 +177,7 @@ struct VoiceInputButton: View {
   /// Reconcile the resident listener with the wakeEnabled default; idempotent.
   private func syncWakeListener() {
     if VoiceSettings.wakeEnabled {
-      wake.onWake = {
-        viaWake = true
-        voice.onFinalText = { text in onCommit(text, viaWake); viaWake = false }
-        voice.startListening()
-      }
+      wake.onWake = { voice.startListening(viaWake: true) }
       wake.start()
     } else {
       wake.stop()
@@ -188,8 +185,6 @@ struct VoiceInputButton: View {
   }
 
   private func toggle() {
-    viaWake = false
-    voice.onFinalText = { text in onCommit(text, viaWake); viaWake = false }
     switch voice.state {
     case .listening: voice.stopListening()
     case .transcribing, .requestingPermission: break

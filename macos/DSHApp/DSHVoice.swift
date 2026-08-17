@@ -589,11 +589,19 @@ final class VoiceController: NSObject, ObservableObject {
 
   // MARK: Listening
 
-  func startListening() {
+  /// Whether the CURRENT talk session was started by the wake word — read
+  /// by the commit path to decide auto-send. Lives here (reference type)
+  /// rather than as view @State: a flag threaded through escaping closures
+  /// on a struct proved unreliable, and the symptom was wake dictation
+  /// filling the composer without sending.
+  private(set) var sessionViaWake = false
+
+  func startListening(viaWake: Bool = false) {
     switch state {
     case .idle, .denied: break
     default: return
     }
+    sessionViaWake = viaWake
     state = .requestingPermission
     Task { [weak self] in
       let speechGranted = await Self.requestSpeechAuthorization()
