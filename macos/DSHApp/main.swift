@@ -2369,8 +2369,11 @@ private struct WaveBand: Shape {
 
 /// Waiting style for the gap between send and the first streamed token: a
 /// miniature of the app icon (deep-sea gradient, moon, layered waves) with
-/// the waves actually rolling. Colors are the icon generator's constants —
-/// keep the two in sync when the icon changes.
+/// the waves actually rolling and the moon in transit — it rises out of
+/// the waves at the lower left, arcs over the top, and sets into them at
+/// the lower right, resting briefly below the horizon between passes.
+/// Colors are the icon generator's constants — keep the two in sync when
+/// the icon changes.
 private struct WaitingWaveIndicator: View {
   var body: some View {
     TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
@@ -2380,7 +2383,15 @@ private struct WaitingWaveIndicator: View {
           .fill(LinearGradient(
             colors: [Color(red: 0.031, green: 0.106, blue: 0.125), Color(red: 0.043, green: 0.216, blue: 0.235), Color(red: 0.039, green: 0.424, blue: 0.404)],
             startPoint: .top, endPoint: .bottom))
-        Circle().fill(Color(red: 0.867, green: 0.980, blue: 0.960)).frame(width: 4.5, height: 4.5).offset(x: 5.5, y: -7)
+        // 月亮的升落弧线：一个周期内前 82% 走完左下→顶点→右下的半弧
+        // （两端都藏在浪面之下，波浪后画、天然遮挡），其余时间停在浪下,
+        // 读起来就是"月落片刻，再从左边升起"。
+        let cycle = (t / 5.0).truncatingRemainder(dividingBy: 1)
+        let arc = min(cycle / 0.82, 1.0)
+        let theta = (Double.pi + 0.55) - arc * (Double.pi + 1.1)
+        Circle().fill(Color(red: 0.867, green: 0.980, blue: 0.960))
+          .frame(width: 4.5, height: 4.5)
+          .offset(x: 9.0 * cos(theta), y: -7.5 * sin(theta) + 1.5)
         WaveBand(baseY: 0.56, amplitude: 0.07, phase: t * 1.7).fill(Color(red: 0.290, green: 0.871, blue: 0.824).opacity(0.30))
         WaveBand(baseY: 0.66, amplitude: 0.065, phase: t * 2.3 + 2.1).fill(Color(red: 0.376, green: 0.925, blue: 0.871).opacity(0.55))
         WaveBand(baseY: 0.75, amplitude: 0.055, phase: t * 2.9 + 4.4).fill(Color(red: 0.173, green: 0.773, blue: 0.722).opacity(0.95))
