@@ -26,10 +26,6 @@ Agent reasoning, tools, MCP, terminal, filesystem, and subagents are still provi
 
 See [macos/WEB_PARITY.md](macos/WEB_PARITY.md) for the living matrix of what's implemented against the web client, what's native-only, and what's still open.
 
-| Live subagent overlay | Native settings |
-| --- | --- |
-| ![Subagent transcripts stream in an overlay on the conversation](docs/screenshots/subagent.png) | ![Settings: model catalog and custom endpoint configurations](docs/screenshots/settings.png) |
-
 ## Install
 
 Grab the zip from the [latest release](https://github.com/luochenw/deepseek-harness-macos/releases/latest) (Apple Silicon, macOS 13+), unzip, and drag **DeepSeek Harness.app** into `/Applications`.

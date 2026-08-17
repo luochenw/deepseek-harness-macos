@@ -26,10 +26,6 @@ Agent 推理、工具、MCP、终端、文件系统与子代理仍由 DSH runtim
 
 完整的"对照 web 客户端实现了什么、哪些是原生独有能力、还有哪些没做"的活文档见 [macos/WEB_PARITY.md](macos/WEB_PARITY.md)。
 
-| 子代理实时浮层 | 原生设置 |
-| --- | --- |
-| ![子代理会话以浮层形式实时流式展示](docs/screenshots/subagent.png) | ![设置：模型目录与自定义端点配置](docs/screenshots/settings.png) |
-
 ## 安装
 
 从[最新 Release](https://github.com/luochenw/deepseek-harness-macos/releases/latest) 下载 zip（Apple Silicon，macOS 13+），解压后把 **DeepSeek Harness.app** 拖进「应用程序」。
