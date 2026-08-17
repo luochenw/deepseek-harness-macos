@@ -1903,8 +1903,15 @@ private struct SidebarRowChrome: View {
       // only responds where content draws, so the trailing blank half of the
       // row was otherwise dead space.
       .contentShape(Rectangle())
-      .background(isActive ? DSHTheme.sidebarSelected : .clear, in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
-    }.buttonStyle(.plain)
+      // Hover is structure feedback, not state — neutral wash; only the
+      // selected row keeps the accent-tinted background.
+      .background(
+        isActive ? DSHTheme.sidebarSelected : hovering ? DSHTheme.surfaceTint2 : .clear,
+        in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+    .animation(.easeOut(duration: 0.12), value: hovering)
   }
   /// Minute-granularity timestamp — `Text(_, style: .relative)` ticks with
   /// seconds, which reads as visual noise in a static list.
