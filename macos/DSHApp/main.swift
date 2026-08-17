@@ -523,11 +523,9 @@ final class HarnessController: ObservableObject {
         self.refreshModelConfiguration()
         self.refreshSettings()
         self.refreshPresets()
-        // A placeholder created before the Host finished booting (the user
-        // hit ⌘N early) still needs its persistent session. A fresh launch
-        // has nothing selected and stays on the default page — the first
-        // send creates its session lazily.
-        if self.hostCurrentSessionID == nil, self.selectedSessionIndex != nil { self.attachHostSessionToCurrentPlaceholder() }
+        // No session auto-creation on connect: the app sits on the default
+        // page until the first send lazily creates one (⌘N also just
+        // returns to the default page — see the lazy-first-session note).
       case .failure(let error):
         self.hostStatus = "Host 启动失败：\(error.localizedDescription)"
       }
@@ -973,14 +971,18 @@ final class HarnessController: ObservableObject {
     }
   }
 
+  /// "新会话" / ⌘N：只回到默认页，不创建任何东西——会话（本地行 +
+  /// Host 持久会话）一律等第一条消息发出时由 send() 懒创建。用户反馈
+  /// 点按钮就冒出一个空会话仍然是"直接新增"，与启动自动建会话是
+  /// 同一个问题。
   func newSession() {
-    insertLocalSessionRow()
-    attachHostSessionToCurrentPlaceholder()
+    clearToDefaultPage()
+    status = "输入内容即可开始新会话"
   }
 
-  /// The local sidebar row + selection reset shared by explicit ⌘N and the
-  /// lazy first-send path (which needs the row without the fire-and-forget
-  /// attach so it can sequence the send after the Host session exists).
+  /// The local sidebar row + selection reset for the lazy first-send path
+  /// (which needs the row without the fire-and-forget attach so it can
+  /// sequence the send after the Host session exists).
   private func insertLocalSessionRow() {
     let session = Session(title: "新会话", workspaceName: workspaceName, updatedAt: Date(), messages: [
       Message(role: .system, text: "正在创建持久 DSH 会话…")
@@ -1007,10 +1009,8 @@ final class HarnessController: ObservableObject {
   }
 
   /// Create the persistent Host session backing the currently-selected local
-  /// row. Callers: `newSession()` (explicit ⌘N), the connect callback (a
-  /// placeholder made before the Host finished booting), and `send()`'s lazy
-  /// first-message path — the latter passes `onComplete` to sequence the
-  /// actual send after the Host session is bound.
+  /// row. Sole caller: `send()`'s lazy first-message path, which passes
+  /// `onComplete` to sequence the actual send after the Host session is bound.
   func attachHostSessionToCurrentPlaceholder(onComplete: ((Bool) -> Void)? = nil) {
     guard let hostClient else { onComplete?(false); return }
     let cwd = workspace?.path
