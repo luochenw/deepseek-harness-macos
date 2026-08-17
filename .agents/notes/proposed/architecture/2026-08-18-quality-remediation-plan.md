@@ -41,8 +41,12 @@ Status: proposed — Phase 0/1 已完成，Phase 2 仍待做，需等在途功�
    - 踩了两个坑：① 一开始用 `{ echo ...; cat ...; } > file` 往文件里塞内容，shell 的交互式包装层把终端转义序列也写进了文件——4 个新文件全部损坏，靠 diff 比对原始 sed 提取的内容才发现，改用 `cat headerfile bodyfile > target`（无 echo、无花括号分组）之后每个文件都逐字节 diff 验证过和原文件一致。② 6 个顶层组件（`Sidebar`/`ConversationHeader`/`ConversationView`/`Composer`/`DetailsPanel`/`SessionSearchView`）在原 main.swift 里是 `private`——同文件内没问题，拆到不同文件后 `ContentView.swift` 跨文件引用不到，typecheck 直接报错抓出来了，改成默认的 `internal`（去掉 `private`）即可，其余只在同一新文件内部使用的子组件保持 `private` 不变。
    - 验证：typecheck + `--unit`（12/12）+ `build-macos-app.sh` + `--smoke`（含写路径）全过；额外用 `open` 启动过打包后的 app 确认能正常拉起进程（非交互式，只验证不崩溃，没有做交互式 UI 走查）。
    - Gate 基线跟着下调到 2101（`test-macos-native.sh` / CLAUDE.md / AGENTS.md 三处同步）——随后 rebase 到最新 main 又变成 2131，见下面「rebase 冲突」小节。
-2. **进行中**：HarnessController 方法按域拆成 `extension` 到对应 `DSH<Feature>.swift`（沿用项目既有模式，只是执行彻底）。main.swift 目前 2131 行里，HarnessController 类体还有 91+ 个方法 + 68+ 个 `@Published` 属性没动；已经按名字前缀/主题分好域（设置/凭据、Host 生命周期与事件流、会话管理、历史/消息解析、工作区、发送/队列、模型/preset、子代理/工作流、目标/审批/问题）。
-3. `main.swift` 只留 App 入口 + HarnessController 类声明与 `@Published` 属性 + 核心生命周期，目标 < 800 行，配 `// MARK:` 分区——还没到，当前 2131 行。
+2. **进行中**：HarnessController 方法按域拆成 `extension` 到对应 `DSH<Feature>.swift`（沿用项目既有模式，只是执行彻底）。
+   - ✅ **批次 2 已完成**：工作区管理 9 个成员（`renameWorkspace`/`deleteWorkspace`/`importWorkspaceFolder`/`registerWorkspace`/`chooseWorkspace`/`resolveWorkspacePath`/`openDeliveredFile`/`revealDeliveredFile`/`openHostPath`/`openWorkspace`，110 行）搬进既有 `DSHWorkspaceActions.swift`（之前只有 wire types，现在加了 `extension HarnessController`）。main.swift：2131 → 2020 行。
+     - 踩了两个新坑（跟批次 1 的"struct 是 private"不是同一类）：① 顶层 `private let workspaceKey = "dsh.workspace"`（main.swift 文件作用域常量）被 `registerWorkspace` 用到，挪去别的文件看不见，去掉 `private`（只改这一个常量，`modelKey`/`providerKey`/`reasoningEffortKey`/`presetKey` 留给以后动到对应方法时再改，不预先扩大改动面）。② `@Published private(set) var workspace` / `sessions` 的 setter 是 `private(set)`——同文件内是 var 一样能写，跨文件的 extension 看不到 setter，报"setter is inaccessible"，去掉 `private(set)` 变普通 `var`（这本来就是这个"拆到 extension 里改状态"架构必然要付的代价：状态只让 main.swift 写的封装假设从"多文件按功能域拆分"那天起就不成立了）。`DSHWorkspaceActions.swift` 原来只 `import Foundation`，`NSOpenPanel`/`NSWorkspace` 需要 `import AppKit`，补上。
+     - 验证：typecheck + `--unit`（12/12）+ build + `--smoke` 全过。
+   - 还没做：main.swift 目前 2020 行里，HarnessController 类体还有约 82 个方法 + 68 个 `@Published` 属性没动；已经按名字前缀/主题分好域（设置/凭据、Host 生命周期与事件流、会话管理、历史/消息解析、发送/队列、模型/preset、子代理/工作流、目标/审批/问题）。
+3. `main.swift` 只留 App 入口 + HarnessController 类声明与 `@Published` 属性 + 核心生命周期，目标 < 800 行，配 `// MARK:` 分区——还没到，当前 2020 行。
 4. （可选、单独开 Note）68 个 `@Published` 分组为子 ObservableObject——改变刷新语义、风险高，不并入本计划。
 
 ### Phase 2 rebase 冲突：合并进 main 前重新对齐
