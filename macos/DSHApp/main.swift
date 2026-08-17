@@ -309,6 +309,9 @@ final class HarnessController: ObservableObject {
   @Published var model = ""
   @Published var reasoningEffort = "high"
   @Published var preset: Preset = .code
+  /// Preset chosen while no Host session exists yet (lazy creation);
+  /// consumed by attachHostSessionToCurrentPlaceholder.
+  @Published var pendingHostPresetID: String?
   @Published var activeTools: [ToolActivity] = []
   @Published var todos: [DSHTodoItem] = []
   @Published var subagents: [DSHSubagentEntry] = []
@@ -822,11 +825,26 @@ final class HarnessController: ObservableObject {
   }
 
   func selectCurrentPreset(_ preset: String) {
-    guard let hostClient, let sessionId = hostCurrentSessionID else { return }
+    // Lazy sessions: before the first message there is no Host session to
+    // select on — remember the choice instead of silently dropping it (点了
+    // 没反应 = "无法切换模式"), and apply it when the session is created.
+    guard let hostClient, let sessionId = hostCurrentSessionID else {
+      pendingHostPresetID = preset
+      return
+    }
     Task {
       do { try await hostClient.selectPreset(sessionId: sessionId, preset: preset); await MainActor.run { self.status = "已切换 Agent preset：\(preset)"; self.refreshHostSnapshots() } }
       catch { await MainActor.run { self.appendSystem("Preset 切换失败：\(error.localizedDescription)") } }
     }
+  }
+
+  /// Chip label for the preset control: the pending (not-yet-created-session)
+  /// choice wins over the local default enum.
+  var activePresetLabel: String {
+    if let pending = pendingHostPresetID {
+      return hostPresets.first(where: { $0.id == pending })?.name ?? pending
+    }
+    return preset.label
   }
 
   func refreshSettings() {
@@ -1069,7 +1087,7 @@ final class HarnessController: ObservableObject {
   func attachHostSessionToCurrentPlaceholder(onComplete: ((Bool) -> Void)? = nil) {
     guard let hostClient else { onComplete?(false); return }
     let cwd = workspace?.path
-    let presetId = preset == .creator ? "cordis" : preset.rawValue
+    let presetId = pendingHostPresetID ?? (preset == .creator ? "cordis" : preset.rawValue)
     // Capture the composer's advertised selection before hopping off the main
     // actor — `session.create` takes no model, so without an explicit
     // `session.selectModel` right after, the Host silently runs its own
@@ -2224,7 +2242,7 @@ private struct ConversationHeader: View {
           .foregroundStyle(DSHTheme.warm)
           .help("会话已开始运行，Agent Preset 无法再切换（Host 会拒绝：agent-preset-locked）")
       } else {
-        HeaderChip(icon: "cpu", label: harness.preset.label) {
+        HeaderChip(icon: "cpu", label: harness.activePresetLabel) {
           if harness.hostPresets.isEmpty { ForEach(HarnessController.Preset.allCases) { p in Button(p.label) { harness.setPreset(p) } } }
           else { ForEach(harness.hostPresets.filter { $0.broken == nil }) { p in Button(p.name ?? p.id) { harness.selectCurrentPreset(p.id) } } }
         }
@@ -2232,9 +2250,6 @@ private struct ConversationHeader: View {
       // With content in the transcript the workspace context docks up here,
       // compact (blank conversations show it above the composer instead).
       if !harness.isNewConversation { WorkspaceChips(compact: true) }
-      // The same model menu as the composer's, surfaced top-right too —
-      // both write through selectCurrentModel, so they can't drift.
-      ComposerModelMenu()
       Button(action: { harness.showDetails.toggle() }) { Image(systemName: "sidebar.right") }.buttonStyle(.dshGhost)
     }.padding(.horizontal, DSHSpace.s5).padding(.vertical, DSHSpace.s3)
   }

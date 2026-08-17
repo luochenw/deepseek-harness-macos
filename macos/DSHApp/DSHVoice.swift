@@ -797,10 +797,11 @@ final class WakeWordListener: NSObject, ObservableObject {
           // swallowed.
           self.consecutiveFailures += 1
           self.tearDownRecognition()
+          let reason = Self.friendlyFailureReason(error)
           if self.consecutiveFailures >= 5 {
-            self.statusNote = "唤醒词监听连续失败已暂停：\(error.localizedDescription)。重开唤醒词开关可重试。"
+            self.statusNote = "唤醒词监听连续失败已暂停：\(reason)。重开唤醒词开关可重试。"
           } else {
-            self.statusNote = "唤醒词监听重试中：\(error.localizedDescription)"
+            self.statusNote = "唤醒词监听重试中：\(reason)"
             self.scheduleRestart(after: self.errorRecoveryDelay * pow(2, Double(self.consecutiveFailures)))
           }
         }
@@ -819,6 +820,19 @@ final class WakeWordListener: NSObject, ObservableObject {
     guard window.contains(phrase) else { return }
     suspend()
     onWake?()
+  }
+
+  /// Map the local speech service's opaque failures to something the user
+  /// can act on. Diagnosed on this machine: assets installed, permissions
+  /// granted, but on-device tasks all die with kLSR 201 "Siri and Dictation
+  /// are disabled" — the fix lives in 系统设置, not in the app.
+  private static func friendlyFailureReason(_ error: Error) -> String {
+    let text = error.localizedDescription
+    let ns = error as NSError
+    if text.localizedCaseInsensitiveContains("disabled") || ns.code == 201 || ns.code == 1101 {
+      return "系统「听写」未开启（系统设置 → 键盘 → 听写）"
+    }
+    return text
   }
 
   private func scheduleRestart(after interval: TimeInterval) {
