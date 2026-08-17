@@ -2278,12 +2278,16 @@ private struct ConversationView: View {
                 ToolGroupRow(messages: group).id(group[0].id)
               }
             }
-            // Waiting indicator between send and the first streamed token —
-            // the send path no longer seeds a placeholder assistant bubble
-            // (see the composer-consolidation note), so without this row the
-            // transcript sits visually dead until the first delta arrives.
-            if harness.isRunning, messages.last?.role != .assistant || messages.last?.text.isEmpty == true {
-              WaitingWaveIndicator().id("waiting-indicator")
+            // The transcript tail row: the rolling-wave miniature animates
+            // for the whole running turn (it also fills the send→first-token
+            // gap), then freezes into the static icon once the turn settles.
+            // Both states share one id so follow-mode can anchor the true
+            // bottom of the transcript — scrolling to the last *message*
+            // left this row cut off just below the viewport.
+            if harness.isRunning {
+              WaitingWaveIndicator().id("transcript-tail")
+            } else {
+              TranscriptEndMarker().id("transcript-tail")
             }
           }
         }.frame(maxWidth: .infinity).padding(DSHSpace.s6)
@@ -2313,15 +2317,24 @@ private struct ConversationView: View {
       .onChange(of: harness.displayedSession?.messages) { _, messages in
         guard let last = messages?.last else { return }
         // Follow only while pinned — except the user's own send, which
-        // always snaps down so the new turn starts in view.
+        // always snaps down so the new turn starts in view. Anchor is the
+        // tail row (running animation / end marker), not the last message —
+        // it is the transcript's true bottom.
         if last.role == .user { pinnedToBottom = true }
-        if pinnedToBottom { proxy.scrollTo(last.id, anchor: .bottom) }
+        if pinnedToBottom { proxy.scrollTo("transcript-tail", anchor: .bottom) }
       }
       // Switching sessions (or opening a subagent transcript) resets the
       // pin — a freshly opened transcript always lands at its bottom.
       .onChange(of: harness.displayedSession?.id) { _, _ in
         pinnedToBottom = true
-        if let last = harness.displayedSession?.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+        if harness.displayedSession?.messages.isEmpty == false { proxy.scrollTo("transcript-tail", anchor: .bottom) }
+      }
+      // The run settling (or starting without a new message, e.g. a queued
+      // drain) swaps the tail row in place — keep it in view while pinned.
+      .onChange(of: harness.isRunning) { _, _ in
+        if pinnedToBottom, harness.displayedSession?.messages.isEmpty == false {
+          proxy.scrollTo("transcript-tail", anchor: .bottom)
+        }
       }
       .onAppear {
         guard scrollMonitor == nil else { return }
@@ -2346,8 +2359,8 @@ private struct ConversationView: View {
         if !pinnedToBottom {
           Button {
             pinnedToBottom = true
-            if let last = harness.displayedSession?.messages.last {
-              withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
+            if harness.displayedSession?.messages.isEmpty == false {
+              withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("transcript-tail", anchor: .bottom) }
             }
           } label: {
             Image(systemName: "arrow.down")
@@ -2462,42 +2475,60 @@ private struct WaveBand: Shape {
   }
 }
 
-/// Waiting style for the gap between send and the first streamed token: a
-/// miniature of the app icon (deep-sea gradient, moon, layered waves) with
-/// the waves actually rolling and the moon in transit — it rises out of
-/// the waves at the lower left, arcs over the top, and sets into them at
-/// the lower right, resting briefly below the horizon between passes.
-/// Colors are the icon generator's constants — keep the two in sync when
-/// the icon changes.
+/// One frame of the miniature app icon (deep-sea gradient, moon, layered
+/// waves) at time `t` — the shared artwork behind the animated running
+/// indicator and the static end-of-turn marker. Colors are the icon
+/// generator's constants — keep the two in sync when the icon changes.
+private struct WaveIconArt: View {
+  let t: Double
+  var body: some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: 6.5, style: .continuous)
+        .fill(LinearGradient(
+          colors: [Color(red: 0.031, green: 0.106, blue: 0.125), Color(red: 0.043, green: 0.216, blue: 0.235), Color(red: 0.039, green: 0.424, blue: 0.404)],
+          startPoint: .top, endPoint: .bottom))
+      // 月亮的升落弧线：一个周期内前 82% 走完左下→顶点→右下的半弧，
+      // 其余时间停在海平面之下，读起来就是"月落片刻，再从左边升起"。
+      // 波浪是半透明的遮不住它，所以用海平面遮罩硬裁：月亮只在浪线
+      // 以上可见，升落时被地平线渐渐"吃掉"。
+      let cycle = (t / 5.0).truncatingRemainder(dividingBy: 1)
+      let arc = min(cycle / 0.82, 1.0)
+      let theta = (Double.pi + 0.65) - arc * (Double.pi + 1.3)
+      Circle().fill(Color(red: 0.867, green: 0.980, blue: 0.960))
+        .frame(width: 4.5, height: 4.5)
+        .offset(x: 9.0 * cos(theta), y: -7.5 * sin(theta) + 1.5)
+        .frame(width: 26, height: 26)
+        .mask(alignment: .top) { Rectangle().frame(height: 16) }
+      WaveBand(baseY: 0.56, amplitude: 0.07, phase: t * 1.7).fill(Color(red: 0.290, green: 0.871, blue: 0.824).opacity(0.30))
+      WaveBand(baseY: 0.66, amplitude: 0.065, phase: t * 2.3 + 2.1).fill(Color(red: 0.376, green: 0.925, blue: 0.871).opacity(0.55))
+      WaveBand(baseY: 0.75, amplitude: 0.055, phase: t * 2.9 + 4.4).fill(Color(red: 0.173, green: 0.773, blue: 0.722).opacity(0.95))
+    }
+    .frame(width: 26, height: 26)
+    .clipShape(RoundedRectangle(cornerRadius: 6.5, style: .continuous))
+  }
+}
+
+/// Running style for the whole turn — from send to settlement: the waves
+/// actually roll and the moon transits. It doubles as the "waiting" filler
+/// between send and the first streamed token (the send path seeds no
+/// placeholder bubble; see the composer-consolidation note).
 private struct WaitingWaveIndicator: View {
   var body: some View {
     TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-      let t = context.date.timeIntervalSinceReferenceDate
-      ZStack {
-        RoundedRectangle(cornerRadius: 6.5, style: .continuous)
-          .fill(LinearGradient(
-            colors: [Color(red: 0.031, green: 0.106, blue: 0.125), Color(red: 0.043, green: 0.216, blue: 0.235), Color(red: 0.039, green: 0.424, blue: 0.404)],
-            startPoint: .top, endPoint: .bottom))
-        // 月亮的升落弧线：一个周期内前 82% 走完左下→顶点→右下的半弧，
-        // 其余时间停在海平面之下，读起来就是"月落片刻，再从左边升起"。
-        // 波浪是半透明的遮不住它，所以用海平面遮罩硬裁：月亮只在浪线
-        // 以上可见，升落时被地平线渐渐"吃掉"。
-        let cycle = (t / 5.0).truncatingRemainder(dividingBy: 1)
-        let arc = min(cycle / 0.82, 1.0)
-        let theta = (Double.pi + 0.65) - arc * (Double.pi + 1.3)
-        Circle().fill(Color(red: 0.867, green: 0.980, blue: 0.960))
-          .frame(width: 4.5, height: 4.5)
-          .offset(x: 9.0 * cos(theta), y: -7.5 * sin(theta) + 1.5)
-          .frame(width: 26, height: 26)
-          .mask(alignment: .top) { Rectangle().frame(height: 16) }
-        WaveBand(baseY: 0.56, amplitude: 0.07, phase: t * 1.7).fill(Color(red: 0.290, green: 0.871, blue: 0.824).opacity(0.30))
-        WaveBand(baseY: 0.66, amplitude: 0.065, phase: t * 2.3 + 2.1).fill(Color(red: 0.376, green: 0.925, blue: 0.871).opacity(0.55))
-        WaveBand(baseY: 0.75, amplitude: 0.055, phase: t * 2.9 + 4.4).fill(Color(red: 0.173, green: 0.773, blue: 0.722).opacity(0.95))
-      }
-      .frame(width: 26, height: 26)
-      .clipShape(RoundedRectangle(cornerRadius: 6.5, style: .continuous))
+      WaveIconArt(t: context.date.timeIntervalSinceReferenceDate)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+/// End-of-turn marker: the same icon frozen with the moon at its apex —
+/// the settled counterpart of the running animation, marking where the
+/// transcript ends. t = 2.05 puts the arc at θ ≈ π/2 (moon on top).
+private struct TranscriptEndMarker: View {
+  var body: some View {
+    WaveIconArt(t: 2.05)
+      .opacity(0.75)
+      .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
