@@ -113,7 +113,8 @@ struct FloatingBubbleView: View {
   var body: some View {
     ZStack {
       // 唤醒动画：听写进行中，三圈声呐涟漪从圆边向外扩散消散 ——
-      // 海面"听到了你的声音"。
+      // 海面"听到了你的声音"。结束时不瞬间消失：外层 .animation 让
+      // 移除走 0.9s 的透明度过渡，期间涟漪仍在继续扩散，读作"散尽"。
       if voice.listening {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
           let t = context.date.timeIntervalSinceReferenceDate
@@ -127,6 +128,7 @@ struct FloatingBubbleView: View {
             }
           }
         }
+        .transition(.opacity)
       }
       ZStack(alignment: .topTrailing) {
         SeaBubbleScene(animated: running || voice.listening, waveSpeed: voice.listening ? 2.1 : 1.0)
@@ -143,26 +145,66 @@ struct FloatingBubbleView: View {
       .onTapGesture { manager.bubbleClicked() }
     }
     .frame(width: 84, height: 84)
+    .animation(.easeOut(duration: 0.9), value: voice.listening)
     .help(voice.listening ? "正在聆听…" : running ? "会话运行中 — 点击回到 DeepSeek Harness" : "点击回到 DeepSeek Harness")
   }
 }
 
 /// 悬浮圈里的海景：与转录 WaitingWaveIndicator 同一套视觉常量按 44pt
-/// 重排。运行中逐帧动画；静止态渲染一张固定帧（月亮停在弧线顶点），
+/// 重排。运行中逐帧动画；静止态渲染一张固定帧（月亮停在弧线顶点）,
 /// 不再空转 TimelineView。
+///
+/// 结束不突兀（用户反馈"结束的时候走完完整一遍"）：`animated` 关闭后
+/// 先把当前月亮周期走完——月亮落入海面、进入休止段——到周期边界才
+/// 用 0.6s 透明度过渡淡入静态帧；期间若重新开始运行则直接续播。
 private struct SeaBubbleScene: View {
   let animated: Bool
   /// 听写中海浪加速涌动（唤醒动画的一部分）；常态 1.0。
   var waveSpeed: Double = 1.0
+
+  /// 波形相位累加器：速度变化瞬间保持相位连续（`t × speed` 的绝对
+  /// 相位在切速时会跳变，浪面看起来像"瞬移"）。用类引用装载，逐帧
+  /// 更新不触发视图失效。
+  private final class PhaseBox { var phase: Double = 0; var last: Date? }
+  @State private var box = PhaseBox()
+  /// true = 显示静态帧。animated 关闭后延迟到周期边界才置 true。
+  @State private var frozen = true
+  /// 让迟到的"定格"回调作废（期间又开始了新一轮动画）。
+  @State private var finishGeneration = 0
+
   var body: some View {
-    if animated {
-      TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-        let t = context.date.timeIntervalSinceReferenceDate
-        let cycle = (t / 5.0).truncatingRemainder(dividingBy: 1)
-        scene(wavePhase: t * waveSpeed, moonArc: min(cycle / 0.82, 1.0))
+    ZStack {
+      if frozen {
+        scene(wavePhase: box.phase, moonArc: 0.5).transition(.opacity)
+      } else {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+          let t = context.date.timeIntervalSinceReferenceDate
+          let dt = box.last.map { min(max(context.date.timeIntervalSince($0), 0), 0.2) } ?? 0
+          let _ = { box.phase += dt * waveSpeed; box.last = context.date }()
+          let cycle = (t / 5.0).truncatingRemainder(dividingBy: 1)
+          scene(wavePhase: box.phase, moonArc: min(cycle / 0.82, 1.0))
+        }
+        .transition(.opacity)
       }
-    } else {
-      scene(wavePhase: 0, moonArc: 0.5)
+    }
+    .onAppear { frozen = !animated }
+    .onChange(of: animated) { _, nowAnimated in
+      finishGeneration += 1
+      let generation = finishGeneration
+      if nowAnimated {
+        box.last = nil
+        withAnimation(.easeInOut(duration: 0.3)) { frozen = false }
+        return
+      }
+      // 走完当前周期：等到下一个 5s 周期边界（此时月亮已落海并休止）
+      // 再定格；淡入静态帧时月亮在水下→顶点的切换发生在不可见处。
+      let now = Date().timeIntervalSinceReferenceDate
+      let remain = 5.0 - now.truncatingRemainder(dividingBy: 5.0) + 0.05
+      DispatchQueue.main.asyncAfter(deadline: .now() + remain) {
+        guard finishGeneration == generation else { return }
+        box.last = nil
+        withAnimation(.easeInOut(duration: 0.6)) { frozen = true }
+      }
     }
   }
 
