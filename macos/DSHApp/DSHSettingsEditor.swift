@@ -38,54 +38,57 @@ struct SettingsEditorView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("编辑配置：\(namespace.ns)").font(.title2.weight(.bold))
-      Text("applies: \(namespace.applies) · revision \(currentNamespace.revision)").font(.caption).foregroundStyle(.secondary)
+    VStack(alignment: .leading, spacing: DSHSpace.s3) {
+      Text("编辑配置：\(namespace.ns)").font(.title2.weight(.bold)).foregroundStyle(DSHTheme.ink)
+      Text("applies: \(namespace.applies) · revision \(currentNamespace.revision)").font(.caption).foregroundStyle(DSHTheme.inkSoft)
 
       if conflict {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DSHSpace.s2) {
           Label("配置已被其他客户端修改（当前 revision \(currentNamespace.revision)）", systemImage: "exclamationmark.triangle.fill")
-            .font(.caption.weight(.bold)).foregroundStyle(.orange)
-          HStack {
-            Button("放弃我的修改，载入最新") { jsonText = Self.prettyJSON(currentNamespace.value); conflict = false }
-            Button("保留我的修改，基于最新版本重试保存") { conflict = false; save() }.buttonStyle(.borderedProminent)
+            .font(.caption.weight(.bold)).foregroundStyle(DSHTheme.warm)
+          HStack(spacing: DSHSpace.s2) {
+            Button("放弃我的修改，载入最新") { jsonText = Self.prettyJSON(currentNamespace.value); conflict = false }.buttonStyle(.dshSecondary)
+            Button("保留我的修改，基于最新版本重试保存") { conflict = false; save() }.buttonStyle(.dshPrimary)
           }
-        }.padding(10).background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        }.padding(DSHSpace.s3).dshCard(tint: DSHTheme.warmSoft, radius: DSHRadius.md)
       }
 
       TextEditor(text: $jsonText)
         .font(.system(.body, design: .monospaced))
+        .scrollContentBackground(.hidden)
         .frame(minHeight: 200)
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25)))
+        .padding(DSHSpace.s2)
+        .dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
 
       if let error {
-        Text(error).font(.caption).foregroundStyle(.red)
+        Text(error).font(.caption).foregroundStyle(DSHTheme.coral)
       }
 
-      HStack {
-        Button("重置") { jsonText = Self.prettyJSON(currentNamespace.value) }
+      HStack(spacing: DSHSpace.s2) {
+        Button("重置") { jsonText = Self.prettyJSON(currentNamespace.value) }.buttonStyle(.dshSecondary)
         Spacer()
-        Button("保存") { save() }.buttonStyle(.borderedProminent)
+        Button("保存") { save() }.buttonStyle(.dshPrimary)
       }
 
-      Divider()
-
-      Text("凭据").font(.headline)
-      Picker("凭据引用", selection: $credentialRef) {
-        Text("RELAY_API_KEY").tag("RELAY_API_KEY")
-        Text("DEEPSEEK_API_KEY").tag("DEEPSEEK_API_KEY")
-      }.pickerStyle(.segmented)
-      SecureField("写入新值（留空保持不变）", text: $credentialValue)
-      HStack {
-        Button("写凭据") { saveCredential() }.disabled(credentialValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        Button("清除凭据") { unsetCredential() }
-        Spacer()
-        Text(harness.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-        Button("关闭") { harness.showSettingsEditor = false }.keyboardShortcut(.cancelAction)
-      }
+      VStack(alignment: .leading, spacing: DSHSpace.s3) {
+        Text("凭据").font(.headline).foregroundStyle(DSHTheme.ink)
+        Picker("凭据引用", selection: $credentialRef) {
+          Text("RELAY_API_KEY").tag("RELAY_API_KEY")
+          Text("DEEPSEEK_API_KEY").tag("DEEPSEEK_API_KEY")
+        }.pickerStyle(.segmented)
+        SecureField("写入新值（留空保持不变）", text: $credentialValue).dshField()
+        HStack(spacing: DSHSpace.s2) {
+          Button("写凭据") { saveCredential() }.buttonStyle(.dshPrimary).disabled(credentialValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          Button("清除凭据") { unsetCredential() }.buttonStyle(.dshSecondary)
+          Spacer()
+          Text(harness.status).font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(1)
+          Button("关闭") { harness.showSettingsEditor = false }.buttonStyle(.dshSecondary).keyboardShortcut(.cancelAction)
+        }
+      }.padding(DSHSpace.s4).dshCard(tint: DSHTheme.surfaceTint2, radius: DSHRadius.md)
     }
-    .padding(20)
+    .padding(DSHSpace.s5)
     .frame(width: 600, height: 560)
+    .background(DSHTheme.surface)
     .onAppear { jsonText = Self.prettyJSON(namespace.value) }
   }
 

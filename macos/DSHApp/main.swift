@@ -380,6 +380,46 @@ final class HarnessController: ObservableObject {
   var isViewingReadOnlySubagent: Bool { subagentTranscript != nil && activeSubagentAddress?.mode != "continuable" }
   var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && workspace != nil && hasCredential && !isRunning && !isViewingReadOnlySubagent }
 
+  struct WorkspaceSessionGroup: Identifiable {
+    let workspace: DSHWorkspaceView?
+    let sessions: [DSHSessionSummary]
+    var id: String { workspace?.workspaceId ?? "__ungrouped__" }
+  }
+
+  /// `hostSessions` grouped by which host workspace's `sessionIds` claims
+  /// each one, current workspace first — see
+  /// .agents/notes/proposed/architecture/2026-08-17-ocean-design-system.md.
+  /// A session not claimed by any workspace falls into an "其他" group
+  /// rather than being dropped.
+  var sessionGroups: [WorkspaceSessionGroup] {
+    let visible = hostSessions.filter { $0.origin != "subagent" }
+    guard !hostWorkspaces.isEmpty else {
+      return visible.isEmpty ? [] : [WorkspaceSessionGroup(workspace: nil, sessions: visible)]
+    }
+    var claimed = Set<String>()
+    var groups: [WorkspaceSessionGroup] = hostWorkspaces.compactMap { ws in
+      let ids = Set(ws.sessionIds)
+      let members = visible.filter { ids.contains($0.sessionId) }.sorted { $0.updatedAt > $1.updatedAt }
+      guard !members.isEmpty else { return nil }
+      members.forEach { claimed.insert($0.sessionId) }
+      return WorkspaceSessionGroup(workspace: ws, sessions: members)
+    }
+    let orphans = visible.filter { !claimed.contains($0.sessionId) }.sorted { $0.updatedAt > $1.updatedAt }
+    if !orphans.isEmpty { groups.append(WorkspaceSessionGroup(workspace: nil, sessions: orphans)) }
+    // `workspace` is already standardized (see `registerWorkspace`/`init`);
+    // `DSHWorkspaceView.path` is a Host-echoed string that isn't guaranteed
+    // to match byte-for-byte (trailing slash, symlink resolution), so
+    // standardize it the same way before comparing — otherwise the current
+    // workspace's group silently falls out of "pinned first" ordering.
+    let currentPath = workspace?.standardizedFileURL.path
+    groups.sort { a, b in
+      let aCurrent = currentPath != nil && URL(fileURLWithPath: a.workspace?.path ?? "").standardizedFileURL.path == currentPath
+      let bCurrent = currentPath != nil && URL(fileURLWithPath: b.workspace?.path ?? "").standardizedFileURL.path == currentPath
+      if aCurrent != bCurrent { return aCurrent }
+      return (a.sessions.first?.updatedAt ?? 0) > (b.sessions.first?.updatedAt ?? 0)
+    }
+    return groups
+  }
 
   /// Seed the app-local DSH home from the user's existing ~/.dsh configuration
   /// when the app home has no credentials yet. This makes the bundled Host work
@@ -1447,20 +1487,18 @@ struct ContentView: View {
   var body: some View {
     HStack(spacing: 0) {
       Sidebar().frame(width: 290)
-      Divider()
       VStack(spacing: 0) {
         ConversationHeader()
-        Divider()
         ConversationView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        Divider()
         Composer()
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(DSHTheme.canvas)
       if harness.showDetails {
-        Divider()
-        DetailsPanel().frame(width: 330)
+        DetailsPanel().frame(width: 330).background(DSHTheme.surfaceTint)
       }
     }
+    .background(DSHTheme.canvas)
     .sheet(isPresented: $harness.showSettings) { SettingsView() }
     .sheet(isPresented: $harness.showSettingsEditor) {
       if let namespace = harness.selectedSettingsNamespace { SettingsEditorView(namespace: namespace) }
@@ -1481,68 +1519,170 @@ struct ContentView: View {
 private struct Sidebar: View {
   @EnvironmentObject var harness: HarnessController
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack { Label("DeepSeek Harness", systemImage: "sparkles").font(.headline); Spacer(); Button(action: harness.newSession) { Image(systemName: "square.and.pencil") }.help("新会话") }
-      Button(action: harness.newSession) { Label("新会话", systemImage: "plus") }.buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
-      HStack { Text("工作区").font(.caption.weight(.bold)).foregroundStyle(.secondary); Spacer(); Button(action: { harness.showSessionSearch = true }) { Image(systemName: "magnifyingglass") }.buttonStyle(.borderless) }
-      Button(action: harness.chooseWorkspace) { Label(harness.workspaceName, systemImage: "folder") }.buttonStyle(.bordered).lineLimit(1).help(harness.workspace?.path ?? "选择工作区")
-      Divider()
-      HStack { Text("会话").font(.caption.weight(.bold)).foregroundStyle(.secondary); Spacer(); Button(action: harness.refreshHostSnapshots) { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless); Text("\(harness.hostSessions.count > 0 ? harness.hostSessions.count : harness.sessions.count)").font(.caption).foregroundStyle(.secondary) }
-      List {
-        if !harness.hostSessions.isEmpty {
-          ForEach(harness.hostSessions.filter { $0.origin != "subagent" }) { session in
-            Button(action: { harness.openHostSession(session) }) {
-              HStack(spacing: 8) {
-                Circle().fill(session.running ? .blue : session.blank ? .clear : .green).frame(width: 7, height: 7)
+    VStack(alignment: .leading, spacing: DSHSpace.s5) {
+      HStack {
+        HStack(spacing: DSHSpace.s2) {
+          Image(systemName: "water.waves").foregroundStyle(DSHTheme.accent)
+          Text("DeepSeek Harness").font(.system(size: 13.5, weight: .semibold)).foregroundStyle(DSHTheme.ink)
+        }
+        Spacer()
+        Button(action: harness.newSession) { Image(systemName: "square.and.pencil") }.buttonStyle(.dshGhost).help("新会话")
+      }
+      Button(action: harness.newSession) { Label("新会话", systemImage: "plus").frame(maxWidth: .infinity) }.buttonStyle(.dshPrimary)
+
+      VStack(alignment: .leading, spacing: DSHSpace.s2) {
+        HStack {
+          Text("工作区").dshSectionLabel()
+          Spacer()
+          Button(action: { harness.showSessionSearch = true }) { Image(systemName: "magnifyingglass") }.buttonStyle(.dshGhost)
+        }
+        Button(action: harness.chooseWorkspace) {
+          Label(harness.workspaceName, systemImage: "folder").lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+        }.buttonStyle(.dshSecondary).help(harness.workspace?.path ?? "选择工作区")
+      }
+
+      VStack(alignment: .leading, spacing: DSHSpace.s2) {
+        HStack {
+          Text("会话").dshSectionLabel()
+          Spacer()
+          Button(action: harness.refreshHostSnapshots) { Image(systemName: "arrow.clockwise") }.buttonStyle(.dshGhost)
+          Text("\(harness.hostSessions.count > 0 ? harness.hostSessions.count : harness.sessions.count)").font(.system(size: 10.5)).foregroundStyle(DSHTheme.inkFaint)
+        }
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: DSHSpace.s4) {
+            if !harness.hostSessions.isEmpty {
+              ForEach(harness.sessionGroups) { group in
                 VStack(alignment: .leading, spacing: 3) {
-                  Text(session.title).lineLimit(1)
-                  Text(Date(timeIntervalSince1970: session.updatedAt / 1000), style: .relative).font(.caption).foregroundStyle(.secondary)
+                  Text(group.workspace?.title ?? "其他").dshSectionLabel().padding(.leading, 2)
+                  ForEach(group.sessions) { session in SidebarSessionRow(session: session) }
                 }
-                Spacer()
               }
-            }.buttonStyle(.plain)
-          }
-        } else {
-          ForEach(harness.sessions) { session in
-            Button(action: { harness.selectSession(session.id) }) {
-              HStack(spacing: 8) {
-                Circle().fill(session.isRunning ? .blue : session.hasUnread ? .green : .clear).frame(width: 7, height: 7)
-                VStack(alignment: .leading, spacing: 3) { Text(session.title).lineLimit(1); Text(session.updatedAt, style: .relative).font(.caption).foregroundStyle(.secondary) }
-                Spacer()
-              }
-            }.buttonStyle(.plain)
+            } else {
+              ForEach(harness.sessions) { session in SidebarLocalSessionRow(session: session) }
+            }
           }
         }
-      }.listStyle(.sidebar)
-      Spacer()
+      }.frame(maxHeight: .infinity)
+
       WorkspaceManagerView()
-      Button(action: { harness.showSettings = true }) { Label("设置", systemImage: "gearshape") }
-      Text(harness.hostStatus).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-      Text("本机运行 · \(harness.permission.label)").font(.caption).foregroundStyle(.secondary)
-    }.padding(16)
+      VStack(alignment: .leading, spacing: 6) {
+        Button(action: { harness.showSettings = true }) { Label("设置", systemImage: "gearshape") }.buttonStyle(.dshGhost)
+        HStack(spacing: 6) {
+          DSHStatusDot(kind: harness.hostClient == nil ? .idle : .live, diameter: 6)
+          Text(harness.hostStatus).font(.system(size: 10.5)).foregroundStyle(DSHTheme.inkFaint).lineLimit(2)
+        }
+        Text("本机运行 · \(harness.permission.label)").font(.system(size: 10.5)).foregroundStyle(DSHTheme.inkFaint)
+      }
+    }
+    .padding(DSHSpace.s4)
+    .background(DSHTheme.sidebarBg)
+  }
+}
+
+/// Shared chrome for a sidebar session row — both the Host-backed list and
+/// the local fallback list render through this so their layout/selection
+/// treatment can't drift apart.
+private struct SidebarRowChrome: View {
+  let title: String
+  let date: Date
+  let statusKind: DSHStatusDot.Kind
+  let isActive: Bool
+  let action: () -> Void
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: DSHSpace.s2) {
+        DSHStatusDot(kind: statusKind)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title).font(.system(size: 12.5)).foregroundStyle(DSHTheme.ink).lineLimit(1)
+          Text(date, style: .relative).font(.system(size: 10.5)).foregroundStyle(DSHTheme.inkFaint)
+        }
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, DSHSpace.s2).padding(.vertical, 7)
+      .background(isActive ? DSHTheme.sidebarSelected : .clear, in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
+    }.buttonStyle(.plain)
+  }
+}
+
+private struct SidebarSessionRow: View {
+  @EnvironmentObject var harness: HarnessController
+  let session: DSHSessionSummary
+  var body: some View {
+    // Host sessions carry no "seen/unread" flag (unlike the local fallback
+    // `Session.hasUnread` below) — only the running state is real signal
+    // here, so a finished session gets no dot rather than a misleading
+    // `.unread` amber one.
+    SidebarRowChrome(
+      title: session.title,
+      date: Date(timeIntervalSince1970: session.updatedAt / 1000),
+      statusKind: session.running ? .live : .idle,
+      isActive: harness.hostCurrentSessionID == session.sessionId,
+      action: { harness.openHostSession(session) }
+    )
+  }
+}
+
+private struct SidebarLocalSessionRow: View {
+  @EnvironmentObject var harness: HarnessController
+  let session: HarnessController.Session
+  var body: some View {
+    SidebarRowChrome(
+      title: session.title,
+      date: session.updatedAt,
+      statusKind: session.isRunning ? .live : session.hasUnread ? .unread : .idle,
+      isActive: harness.selectedSessionID == session.id,
+      action: { harness.selectSession(session.id) }
+    )
+  }
+}
+
+private struct HeaderChip<Content: View>: View {
+  let icon: String
+  let label: String
+  @ViewBuilder let content: () -> Content
+  var body: some View {
+    Menu { content() } label: {
+      HStack(spacing: 6) { Image(systemName: icon).font(.system(size: 11)); Text(label).font(.system(size: 11.5)) }
+        .padding(.horizontal, DSHSpace.s3).padding(.vertical, 6)
+        .background(DSHTheme.surface, in: Capsule())
+        .foregroundStyle(DSHTheme.inkSoft)
+    }.menuStyle(.borderlessButton).fixedSize()
   }
 }
 
 private struct ConversationHeader: View {
   @EnvironmentObject var harness: HarnessController
   var body: some View {
-    HStack(spacing: 10) {
+    HStack(spacing: DSHSpace.s2) {
       VStack(alignment: .leading, spacing: 2) {
         if !harness.subagentPath.isEmpty {
           HStack(spacing: 6) {
-            Button(action: harness.navigateUpSubagent) { Image(systemName: "chevron.left") }.buttonStyle(.borderless).help("返回上一级")
-            Text(harness.subagentPath.map(\.title).joined(separator: " › ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Button(action: harness.navigateUpSubagent) { Image(systemName: "chevron.left") }.buttonStyle(.dshGhost).help("返回上一级")
+            Text(harness.subagentPath.map(\.title).joined(separator: " › ")).font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
           }
         }
-        Text(harness.displayedSession?.title ?? "新会话").font(.headline)
-        Text(harness.workspace?.path ?? "选择工作区后开始").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        Text(harness.displayedSession?.title ?? "新会话").font(.system(size: 15, weight: .semibold)).foregroundStyle(DSHTheme.ink)
+        Text(harness.workspace?.path ?? "选择工作区后开始").font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
       }
       Spacer()
-      Menu { if harness.hostPresets.isEmpty { ForEach(HarnessController.Preset.allCases) { p in Button(p.label) { harness.setPreset(p) } } } else { ForEach(harness.hostPresets.filter { $0.broken == nil }) { p in Button(p.name ?? p.id) { harness.selectCurrentPreset(p.id) } } } } label: { Label(harness.preset.label, systemImage: "cpu") }.menuStyle(.borderlessButton)
-      Menu { ForEach(HarnessController.PermissionMode.allCases) { p in Button(p.label) { harness.setPermission(p) } } } label: { Label(harness.permission.label, systemImage: "lock.shield") }.menuStyle(.borderlessButton)
-      Menu { if let sessionModels = harness.currentSessionModels { if !sessionModels.routable { Text("当前会话没有可用模型路由") }; ForEach(sessionModels.groups) { group in ForEach(group.models) { item in Button("\(group.name) / \(item.name)") { harness.selectCurrentModel(provider: group.id, model: item.id) } } } } else { Button("刷新会话模型") { harness.refreshSessionModels() }; Button("Relay / GPT-5.6 Terra") { harness.selectCurrentModel(provider: "relay", model: "gpt-5.6-terra") } } } label: { Label(harness.model, systemImage: "brain") }.menuStyle(.borderlessButton)
-      Button(action: { harness.showDetails.toggle() }) { Image(systemName: harness.showDetails ? "sidebar.right" : "sidebar.right") }.buttonStyle(.borderless)
-    }.padding(.horizontal, 22).padding(.vertical, 12)
+      HeaderChip(icon: "cpu", label: harness.preset.label) {
+        if harness.hostPresets.isEmpty { ForEach(HarnessController.Preset.allCases) { p in Button(p.label) { harness.setPreset(p) } } }
+        else { ForEach(harness.hostPresets.filter { $0.broken == nil }) { p in Button(p.name ?? p.id) { harness.selectCurrentPreset(p.id) } } }
+      }
+      HeaderChip(icon: "lock.shield", label: harness.permission.label) {
+        ForEach(HarnessController.PermissionMode.allCases) { p in Button(p.label) { harness.setPermission(p) } }
+      }
+      HeaderChip(icon: "brain", label: harness.model) {
+        if let sessionModels = harness.currentSessionModels {
+          if !sessionModels.routable { Text("当前会话没有可用模型路由") }
+          ForEach(sessionModels.groups) { group in ForEach(group.models) { item in Button("\(group.name) / \(item.name)") { harness.selectCurrentModel(provider: group.id, model: item.id) } } }
+        } else {
+          Button("刷新会话模型") { harness.refreshSessionModels() }
+          Button("Relay / GPT-5.6 Terra") { harness.selectCurrentModel(provider: "relay", model: "gpt-5.6-terra") }
+        }
+      }
+      Button(action: { harness.showDetails.toggle() }) { Image(systemName: "sidebar.right") }.buttonStyle(.dshGhost)
+    }.padding(.horizontal, DSHSpace.s5).padding(.vertical, DSHSpace.s3)
   }
 }
 
@@ -1550,8 +1690,48 @@ private struct ConversationView: View {
   @EnvironmentObject var harness: HarnessController
   var body: some View {
     ScrollViewReader { proxy in
-      ScrollView { LazyVStack(alignment: .leading, spacing: 16) { if harness.historyHasMore && harness.subagentTranscript == nil { Button("载入更早消息", action: harness.loadOlderHistory).buttonStyle(.bordered).frame(maxWidth: .infinity) }; ForEach(harness.displayedSession?.messages ?? []) { MessageBubble(message: $0).id($0.id) } } .padding(28) }
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: DSHSpace.s4) {
+          if harness.historyHasMore && harness.subagentTranscript == nil {
+            Button("载入更早消息", action: harness.loadOlderHistory).buttonStyle(.dshSecondary).frame(maxWidth: .infinity)
+          }
+          ForEach(harness.displayedSession?.messages ?? []) { message in
+            VStack(alignment: .leading, spacing: DSHSpace.s2) {
+              if let reasoning = message.reasoning { ReasoningBlock(text: reasoning) }
+              MessageBubble(message: message)
+            }.id(message.id)
+          }
+        }.padding(DSHSpace.s6)
+      }
       .onChange(of: harness.displayedSession?.messages) { _, messages in if let last = messages?.last { proxy.scrollTo(last.id, anchor: .bottom) } }
+    }
+  }
+}
+
+/// A model's reasoning/thinking trace, rendered as its own region above the
+/// answer bubble rather than nested inside it — see the ocean-design-system
+/// Agent Note: "推理过程" and the answer are different kinds of content and
+/// shouldn't share one card.
+private struct ReasoningBlock: View {
+  let text: String
+  @State private var expanded = false
+  var body: some View {
+    HStack {
+      VStack(alignment: .leading, spacing: DSHSpace.s2) {
+        Button(action: { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }) {
+          HStack(spacing: 6) {
+            Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).rotationEffect(.degrees(expanded ? 90 : 0))
+            Text("推理过程").font(.system(size: 11, weight: .semibold))
+          }.foregroundStyle(DSHTheme.inkFaint)
+        }.buttonStyle(.plain)
+        if expanded {
+          Text(text).font(.system(.caption, design: .monospaced)).foregroundStyle(DSHTheme.inkSoft).textSelection(.enabled)
+        }
+      }
+      .padding(.horizontal, DSHSpace.s3).padding(.vertical, DSHSpace.s2)
+      .dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
+      .frame(maxWidth: 760, alignment: .leading)
+      Spacer(minLength: 180)
     }
   }
 }
@@ -1560,11 +1740,23 @@ private struct MessageBubble: View {
   @EnvironmentObject var harness: HarnessController
   let message: HarnessController.Message
   var body: some View {
-    HStack { if message.role == .user { Spacer(minLength: 180) }; VStack(alignment: .leading, spacing: 7) { Text(label).font(.caption.weight(.bold)).foregroundStyle(tint); if let reasoning = message.reasoning { DisclosureGroup("推理过程") { Text(reasoning).font(.caption.monospaced()).textSelection(.enabled).foregroundStyle(.secondary) } }; Text(message.text.isEmpty ? "正在思考…" : message.text).textSelection(.enabled).font(.system(.body, design: .rounded)).frame(maxWidth: 760, alignment: .leading); if let attachment = message.attachment { AttachmentPreview(ref: attachment) } }.padding(15).background(background, in: RoundedRectangle(cornerRadius: 14, style: .continuous)); if message.role != .user { Spacer(minLength: 180) } }
+    HStack {
+      if message.role == .user { Spacer(minLength: 180) }
+      VStack(alignment: .leading, spacing: 7) {
+        Text(label).font(.system(size: 10.5, weight: .bold)).foregroundStyle(labelTint)
+        Text(message.text.isEmpty ? "正在思考…" : message.text)
+          .textSelection(.enabled).font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.ink)
+          .frame(maxWidth: 760, alignment: .leading)
+        if let attachment = message.attachment { AttachmentPreview(ref: attachment) }
+      }
+      .padding(DSHSpace.s4)
+      .dshCard(tint: background, radius: DSHRadius.lg)
+      if message.role != .user { Spacer(minLength: 180) }
+    }
   }
   private var label: String { switch message.role { case .user: "你"; case .assistant: "DSH"; case .system: "系统" } }
-  private var tint: Color { message.role == .user ? .cyan : message.role == .assistant ? .mint : .secondary }
-  private var background: Color { message.role == .user ? .cyan.opacity(0.12) : message.role == .assistant ? .mint.opacity(0.10) : .secondary.opacity(0.08) }
+  private var labelTint: Color { message.role == .user ? DSHTheme.accent : message.role == .assistant ? DSHTheme.accent : DSHTheme.inkFaint }
+  private var background: Color { message.role == .user ? DSHTheme.accentSoft : message.role == .assistant ? DSHTheme.surface : DSHTheme.surfaceTint }
 }
 
 private struct Composer: View {
@@ -1572,17 +1764,34 @@ private struct Composer: View {
   var body: some View {
     if harness.isViewingReadOnlySubagent {
       HStack { Image(systemName: "lock.fill"); Text("只读：此子代理已结束，历史不可续写。返回上一级可继续操作。"); Spacer() }
-        .font(.caption).foregroundStyle(.secondary).padding(18)
+        .font(.caption).foregroundStyle(DSHTheme.inkFaint).padding(DSHSpace.s5)
     } else {
-    VStack(spacing: 8) {
-      HStack { if harness.planMode { Button("计划模式 ×", action: harness.togglePlanMode).buttonStyle(.bordered).tint(.orange) }; if !harness.queuedPrompts.isEmpty { Label("已排队 \(harness.queuedPrompts.count)", systemImage: "list.number") .font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(harness.status).font(.caption).foregroundStyle(harness.isRunning ? .orange : .secondary) }
-      QueueDockView()
-      HStack(alignment: .bottom, spacing: 10) {
-        TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).frame(minHeight: 54, maxHeight: 140).padding(7).overlay(RoundedRectangle(cornerRadius: 12).stroke(.secondary.opacity(0.25)))
-        if harness.isRunning { VStack(spacing: 7) { Button("停止", action: harness.stop).buttonStyle(.bordered); Button("排队", action: harness.queueDraft).buttonStyle(.bordered).disabled(harness.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) } } else { Button("发送", action: harness.send).buttonStyle(.borderedProminent).disabled(!harness.canSend) }
+    VStack(spacing: DSHSpace.s2) {
+      HStack {
+        if harness.planMode { Button("计划模式 ×", action: harness.togglePlanMode).buttonStyle(.dshSecondary) }
+        if !harness.queuedPrompts.isEmpty { DSHBadge(text: "已排队 \(harness.queuedPrompts.count)", tone: .warm) }
+        Spacer()
+        Text(harness.status).font(.caption).foregroundStyle(harness.isRunning ? DSHTheme.warm : DSHTheme.inkFaint)
       }
-      HStack { Menu { Button("添加图片", action: harness.pickImage); Button("进入计划模式", action: harness.togglePlanMode); Button("重命名当前会话", action: harness.beginRenameCurrentSession); Button("创建会话分支", action: harness.forkCurrentSession); Button("归档当前会话", action: harness.archiveCurrentSession); Button("新会话", action: harness.newSession); Button("打开工作区", action: harness.openWorkspace) } label: { Image(systemName: "plus") }; if let image = harness.draftImage { Label(image.url.lastPathComponent, systemImage: "photo").font(.caption).lineLimit(1); Button(action: { harness.draftImage = nil }) { Image(systemName: "xmark.circle.fill") }.buttonStyle(.borderless) }; Text(harness.planMode ? "描述任务以生成计划" : "描述你想要构建的内容").font(.caption).foregroundStyle(.secondary); Spacer(); Menu { Button("关闭推理") { harness.reasoningEffort = "off"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "off") }; Button("高") { harness.reasoningEffort = "high"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "high") }; Button("最大") { harness.reasoningEffort = "max"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "max") } } label: { Text("\(harness.provider) / \(harness.model) · \(harness.reasoningEffort)").font(.caption.monospaced()).foregroundStyle(.secondary) } }
-    }.padding(18)
+      QueueDockView()
+      HStack(alignment: .bottom, spacing: DSHSpace.s3) {
+        TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).scrollContentBackground(.hidden)
+          .frame(minHeight: 54, maxHeight: 140).padding(DSHSpace.s2).dshCard(tint: DSHTheme.surface, radius: DSHRadius.lg)
+        if harness.isRunning {
+          VStack(spacing: 7) {
+            Button("停止", action: harness.stop).buttonStyle(.dshSecondary)
+            Button("排队", action: harness.queueDraft).buttonStyle(.dshSecondary).disabled(harness.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          }
+        } else { Button("发送", action: harness.send).buttonStyle(.dshPrimary).disabled(!harness.canSend) }
+      }
+      HStack {
+        Menu { Button("添加图片", action: harness.pickImage); Button("进入计划模式", action: harness.togglePlanMode); Button("重命名当前会话", action: harness.beginRenameCurrentSession); Button("创建会话分支", action: harness.forkCurrentSession); Button("归档当前会话", action: harness.archiveCurrentSession); Button("新会话", action: harness.newSession); Button("打开工作区", action: harness.openWorkspace) } label: { Image(systemName: "plus") }.foregroundStyle(DSHTheme.inkSoft)
+        if let image = harness.draftImage { Label(image.url.lastPathComponent, systemImage: "photo").font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(1); Button(action: { harness.draftImage = nil }) { Image(systemName: "xmark.circle.fill") }.buttonStyle(.dshGhost) }
+        Text(harness.planMode ? "描述任务以生成计划" : "描述你想要构建的内容").font(.caption).foregroundStyle(DSHTheme.inkFaint)
+        Spacer()
+        Menu { Button("关闭推理") { harness.reasoningEffort = "off"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "off") }; Button("高") { harness.reasoningEffort = "high"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "high") }; Button("最大") { harness.reasoningEffort = "max"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "max") } } label: { Text("\(harness.provider) / \(harness.model) · \(harness.reasoningEffort)").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(DSHTheme.inkFaint) }
+      }
+    }.padding(DSHSpace.s5)
     }
   }
 }
@@ -1590,11 +1799,24 @@ private struct Composer: View {
 private struct DetailsPanel: View {
   @EnvironmentObject var harness: HarnessController
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      HStack { Text("详情").font(.headline); Spacer(); Button(action: { harness.showDetails = false }) { Image(systemName: "xmark") }.buttonStyle(.borderless) }
+    VStack(alignment: .leading, spacing: DSHSpace.s4) {
+      HStack { Text("详情").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink); Spacer(); Button(action: { harness.showDetails = false }) { Image(systemName: "xmark") }.buttonStyle(.dshGhost) }
       NativeDashboard()
-      if let tool = harness.selectedTool { VStack(alignment: .leading, spacing: 10) { Label(tool.name, systemImage: icon(for: tool.state)); Text(tool.summary).font(.caption).foregroundStyle(.secondary); Divider(); ScrollView { NativeToolPresentationView(tool: tool).frame(maxWidth: .infinity, alignment: .leading) } } } else { Spacer(); VStack(spacing: 10) { Image(systemName: "sidebar.right").font(.title2).foregroundStyle(.secondary); Text("点击消息流中的工具行查看详情").multilineTextAlignment(.center).foregroundStyle(.secondary) }; Spacer() }
-    }.padding(18)
+      if let tool = harness.selectedTool {
+        VStack(alignment: .leading, spacing: DSHSpace.s2) {
+          Label(tool.name, systemImage: icon(for: tool.state)).foregroundStyle(DSHTheme.ink)
+          Text(tool.summary).font(.caption).foregroundStyle(DSHTheme.inkFaint)
+          ScrollView { NativeToolPresentationView(tool: tool).frame(maxWidth: .infinity, alignment: .leading) }
+        }
+      } else {
+        Spacer()
+        VStack(spacing: DSHSpace.s2) {
+          Image(systemName: "sidebar.right").font(.title2).foregroundStyle(DSHTheme.inkFaint)
+          Text("点击消息流中的工具行查看详情").multilineTextAlignment(.center).foregroundStyle(DSHTheme.inkFaint)
+        }
+        Spacer()
+      }
+    }.padding(DSHSpace.s4)
   }
   private func icon(for state: HarnessController.ToolActivity.State) -> String { switch state { case .running: "hourglass"; case .succeeded: "checkmark.circle"; case .failed: "exclamationmark.triangle" } }
 }
@@ -1603,24 +1825,26 @@ private struct SessionSearchView: View {
   @EnvironmentObject var harness: HarnessController
   @State private var query = ""
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text("搜索会话").font(.title2.weight(.bold))
+    VStack(alignment: .leading, spacing: DSHSpace.s4) {
+      Text("搜索会话").font(.system(size: 18, weight: .semibold)).foregroundStyle(DSHTheme.ink)
       TextField("搜索会话…", text: $query)
-        .textFieldStyle(.roundedBorder)
+        .dshField(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
         .onChange(of: query) { _, text in harness.searchSessions(text) }
-      List {
-        ForEach(harness.searchResults) { result in
-          Button(action: { harness.openHostSessionID(result.sessionId); harness.showSessionSearch = false }) {
-            VStack(alignment: .leading, spacing: 4) {
-              Text(harness.hostSessions.first(where: { $0.sessionId == result.sessionId })?.title ?? result.sessionId)
-              Text(result.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            }
-          }.buttonStyle(.plain)
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: DSHSpace.s2) {
+          ForEach(harness.searchResults) { result in
+            Button(action: { harness.openHostSessionID(result.sessionId); harness.showSessionSearch = false }) {
+              VStack(alignment: .leading, spacing: 4) {
+                Text(harness.hostSessions.first(where: { $0.sessionId == result.sessionId })?.title ?? result.sessionId).foregroundStyle(DSHTheme.ink)
+                Text(result.snippet).font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(2)
+              }.padding(DSHSpace.s3).frame(maxWidth: .infinity, alignment: .leading).dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
+            }.buttonStyle(.plain)
+          }
+          if harness.searchHasMore { Text("结果较多，请缩小搜索范围。").font(.caption).foregroundStyle(DSHTheme.inkFaint) }
         }
-        if harness.searchHasMore { Text("结果较多，请缩小搜索范围。").font(.caption).foregroundStyle(.secondary) }
       }
-      HStack { Spacer(); Button("关闭") { harness.showSessionSearch = false } }
-    }.padding(24).frame(width: 520, height: 520)
+      HStack { Spacer(); Button("关闭") { harness.showSessionSearch = false }.buttonStyle(.dshSecondary) }
+    }.padding(DSHSpace.s5).frame(width: 520, height: 520).background(DSHTheme.surface)
   }
 }
 
@@ -1628,10 +1852,28 @@ private struct SettingsView: View {
   @EnvironmentObject var harness: HarnessController
   @State private var section = "通用"
   private let sections = ["通用", "模型", "提供方", "插件", "Agent 预设"]
-  var body: some View { HStack(spacing: 0) { List(sections, id: \.self, selection: $section) { Text($0) }.frame(width: 150); Divider(); VStack(alignment: .leading, spacing: 16) { Text(section).font(.title2.weight(.bold)); settingsBody; Spacer(); HStack { Button("打开配置文件", action: harness.openHostSettingsDocument); Spacer(); Button("关闭") { harness.showSettings = false }.keyboardShortcut(.defaultAction) } }.padding(24).frame(width: 600, height: 480) } }
-  @ViewBuilder private var settingsBody: some View { switch section { case "通用": Picker("默认 Agent preset", selection: $harness.preset) { ForEach(HarnessController.Preset.allCases) { Text($0.label).tag($0) } }.onChange(of: harness.preset) { _, v in harness.setPreset(v) }; Picker("默认权限", selection: $harness.permission) { ForEach(HarnessController.PermissionMode.allCases) { Text($0.label).tag($0) } }.onChange(of: harness.permission) { _, v in harness.setPermission(v) }; Text("当前会话保持原有 preset；新会话使用新的默认配置。").font(.caption).foregroundStyle(.secondary)
-  case "模型": Picker("提供方", selection: $harness.provider) { Text("Relay（本机）").tag("relay"); Text("DeepSeek 官方").tag("deepseek") }.pickerStyle(.segmented); Picker("模型", selection: $harness.model) { ForEach(harness.availableModels) { group in ForEach(group.models) { model in Text("\(group.name) / \(model.name)").tag(model.id) } }; if harness.availableModels.isEmpty { Text("GPT-5.6 Terra").tag("gpt-5.6-terra") } }; Button("刷新 Host 模型目录", action: harness.refreshModelConfiguration).buttonStyle(.bordered); SecureField(harness.provider == "relay" ? "Relay API Key（写入 DSH Host）" : "DeepSeek API Key（写入 DSH Host）", text: $harness.apiKey); Button("保存凭据", action: harness.saveCredential).buttonStyle(.bordered).disabled(harness.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty); TextField("可选 API Base URL", text: $harness.baseURL); Text(harness.hasCredential ? "凭据已可用" : "请提供 API Key").font(.caption).foregroundStyle(harness.hasCredential ? .green : .orange)
-  case "提供方": Button("刷新提供方配置", action: harness.refreshProviderConfiguration).buttonStyle(.bordered); if let settings = harness.settingsDescription, let pi = settings.namespaces.first(where: { $0.ns == "llm-pi-ai" }) { Text(settings.writable ? "配置可写 · revision \(pi.revision)" : "配置只读").font(.caption).foregroundStyle(settings.writable ? .green : .orange); ForEach(harness.configurableProviders.filter { $0.settingsNs == pi.ns }) { provider in HStack { Text(provider.displayName); Spacer(); Button("编辑") { harness.openProviderAuthoring(provider) }.buttonStyle(.bordered).disabled(!settings.writable) } }; Button("添加自定义提供方") { harness.openProviderAuthoring() }.buttonStyle(.borderedProminent).disabled(!settings.writable) } else { Text("llm-pi-ai 未由当前 Host 提供。").foregroundStyle(.secondary) }
-  case "插件": Text("已安装插件由内置 DSH runtime 管理。").foregroundStyle(.secondary); Button("刷新真实 Host 设置", action: harness.refreshSettings).buttonStyle(.bordered); if let settings = harness.settingsDescription { Text(settings.writable ? "配置可写" : "配置只读").font(.caption).foregroundStyle(settings.writable ? .green : .orange); ForEach(settings.namespaces) { ns in HStack { Label("\(ns.ns) · \(ns.applies)", systemImage: "puzzlepiece"); Spacer(); Button("编辑") { harness.openSettingsEditor(ns: ns) }.buttonStyle(.bordered).disabled(!settings.writable) } }; Divider(); Text("凭据").font(.headline); ForEach(Array(Set(harness.configurableProviders.compactMap { provider in harness.providerCredentialReference(provider) } + ["DEEPSEEK_API_KEY"])).sorted(), id: \.self) { ref in HStack { Text(ref).font(.system(.body, design: .monospaced)); Spacer(); Text((harness.credentialStates[ref]?.configured ?? false) ? "已配置" : "未配置").font(.caption).foregroundStyle((harness.credentialStates[ref]?.configured ?? false) ? .green : .orange) } }; Text("在命名空间编辑器里可写入或清除 API Key。").font(.caption).foregroundStyle(.secondary) } else { Text("正在读取 Host 设置…").font(.caption).foregroundStyle(.secondary) }
-  default: Text("选择新会话使用的 Agent 能力组合。").foregroundStyle(.secondary); ForEach(HarnessController.Preset.allCases) { p in Button(action: { harness.setPreset(p) }) { VStack(alignment: .leading) { Text(p.label).font(.headline); Text(p.detail).font(.caption).foregroundStyle(.secondary) } }.buttonStyle(.plain).padding(.vertical, 4) } } }
+  var body: some View {
+    HStack(spacing: 0) {
+      VStack(alignment: .leading, spacing: 2) {
+        ForEach(sections, id: \.self) { s in
+          Button(action: { section = s }) { Text(s).frame(maxWidth: .infinity, alignment: .leading) }
+            .buttonStyle(.plain).font(.system(size: 12.5)).foregroundStyle(section == s ? DSHTheme.ink : DSHTheme.inkSoft)
+            .padding(.horizontal, DSHSpace.s3).padding(.vertical, 8)
+            .background(section == s ? DSHTheme.surfaceTint2 : .clear, in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
+        }
+        Spacer()
+      }.padding(DSHSpace.s3).frame(width: 160).background(DSHTheme.surfaceTint)
+      VStack(alignment: .leading, spacing: DSHSpace.s4) {
+        Text(section).font(.system(size: 18, weight: .semibold)).foregroundStyle(DSHTheme.ink)
+        settingsBody
+        Spacer()
+        HStack { Button("打开配置文件", action: harness.openHostSettingsDocument).buttonStyle(.dshSecondary); Spacer(); Button("关闭") { harness.showSettings = false }.buttonStyle(.dshPrimary).keyboardShortcut(.defaultAction) }
+      }.padding(DSHSpace.s5).frame(width: 600, height: 480).background(DSHTheme.surface)
+    }
+  }
+  @ViewBuilder private var settingsBody: some View { switch section { case "通用": Picker("默认 Agent preset", selection: $harness.preset) { ForEach(HarnessController.Preset.allCases) { Text($0.label).tag($0) } }.onChange(of: harness.preset) { _, v in harness.setPreset(v) }; Picker("默认权限", selection: $harness.permission) { ForEach(HarnessController.PermissionMode.allCases) { Text($0.label).tag($0) } }.onChange(of: harness.permission) { _, v in harness.setPermission(v) }; Text("当前会话保持原有 preset；新会话使用新的默认配置。").font(.caption).foregroundStyle(DSHTheme.inkFaint)
+  case "模型": Picker("提供方", selection: $harness.provider) { Text("Relay（本机）").tag("relay"); Text("DeepSeek 官方").tag("deepseek") }.pickerStyle(.segmented); Picker("模型", selection: $harness.model) { ForEach(harness.availableModels) { group in ForEach(group.models) { model in Text("\(group.name) / \(model.name)").tag(model.id) } }; if harness.availableModels.isEmpty { Text("GPT-5.6 Terra").tag("gpt-5.6-terra") } }; Button("刷新 Host 模型目录", action: harness.refreshModelConfiguration).buttonStyle(.dshSecondary); SecureField(harness.provider == "relay" ? "Relay API Key（写入 DSH Host）" : "DeepSeek API Key（写入 DSH Host）", text: $harness.apiKey).dshField(); Button("保存凭据", action: harness.saveCredential).buttonStyle(.dshSecondary).disabled(harness.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty); TextField("可选 API Base URL", text: $harness.baseURL).dshField(); Text(harness.hasCredential ? "凭据已可用" : "请提供 API Key").font(.caption).foregroundStyle(harness.hasCredential ? DSHTheme.accent : DSHTheme.warm)
+  case "提供方": Button("刷新提供方配置", action: harness.refreshProviderConfiguration).buttonStyle(.dshSecondary); if let settings = harness.settingsDescription, let pi = settings.namespaces.first(where: { $0.ns == "llm-pi-ai" }) { Text(settings.writable ? "配置可写 · revision \(pi.revision)" : "配置只读").font(.caption).foregroundStyle(settings.writable ? DSHTheme.accent : DSHTheme.warm); ForEach(harness.configurableProviders.filter { $0.settingsNs == pi.ns }) { provider in HStack { Text(provider.displayName).foregroundStyle(DSHTheme.ink); Spacer(); Button("编辑") { harness.openProviderAuthoring(provider) }.buttonStyle(.dshSecondary).disabled(!settings.writable) } }; Button("添加自定义提供方") { harness.openProviderAuthoring() }.buttonStyle(.dshPrimary).disabled(!settings.writable) } else { Text("llm-pi-ai 未由当前 Host 提供。").foregroundStyle(DSHTheme.inkFaint) }
+  case "插件": Text("已安装插件由内置 DSH runtime 管理。").foregroundStyle(DSHTheme.inkFaint); Button("刷新真实 Host 设置", action: harness.refreshSettings).buttonStyle(.dshSecondary); if let settings = harness.settingsDescription { Text(settings.writable ? "配置可写" : "配置只读").font(.caption).foregroundStyle(settings.writable ? DSHTheme.accent : DSHTheme.warm); ForEach(settings.namespaces) { ns in HStack { Label("\(ns.ns) · \(ns.applies)", systemImage: "puzzlepiece").foregroundStyle(DSHTheme.ink); Spacer(); Button("编辑") { harness.openSettingsEditor(ns: ns) }.buttonStyle(.dshSecondary).disabled(!settings.writable) } }; Text("凭据").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink).padding(.top, DSHSpace.s2); ForEach(Array(Set(harness.configurableProviders.compactMap { provider in harness.providerCredentialReference(provider) } + ["DEEPSEEK_API_KEY"])).sorted(), id: \.self) { ref in HStack { Text(ref).font(.system(.body, design: .monospaced)).foregroundStyle(DSHTheme.ink); Spacer(); Text((harness.credentialStates[ref]?.configured ?? false) ? "已配置" : "未配置").font(.caption).foregroundStyle((harness.credentialStates[ref]?.configured ?? false) ? DSHTheme.accent : DSHTheme.warm) } }; Text("在命名空间编辑器里可写入或清除 API Key。").font(.caption).foregroundStyle(DSHTheme.inkFaint) } else { Text("正在读取 Host 设置…").font(.caption).foregroundStyle(DSHTheme.inkFaint) }
+  default: Text("选择新会话使用的 Agent 能力组合。").foregroundStyle(DSHTheme.inkFaint); ForEach(HarnessController.Preset.allCases) { p in Button(action: { harness.setPreset(p) }) { VStack(alignment: .leading) { Text(p.label).font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink); Text(p.detail).font(.caption).foregroundStyle(DSHTheme.inkFaint) } }.buttonStyle(.plain).padding(.vertical, 4) } } }
 }
