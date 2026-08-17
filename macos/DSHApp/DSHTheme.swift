@@ -38,26 +38,33 @@ enum DSHTheme {
   // washes stacked on top. canvas < surface < surfaceTint < surfaceTint2
   // is still the depth ladder; depth now reads as "more jelly layers",
   // and stacked layers deepen naturally because of the alpha.
+  //
+  // Restraint rule (user feedback: "哪里都是主色调…不高级"): every token
+  // in this section is *neutral* — white or gray washes with no visible
+  // aqua. The turquoise family below is allowed only on things that carry
+  // state; if a background is just structure, it stays neutral.
 
-  static let canvas = dynamic(light: (0.918, 0.980, 0.973, 1), dark: (0.043, 0.125, 0.141, 1))
-  static let surface = dynamic(light: (1.0, 1.0, 1.0, 0.72), dark: (1.0, 1.0, 1.0, 0.07))
-  static let surfaceTint = dynamic(light: (0.804, 0.945, 0.937, 0.55), dark: (0.290, 0.871, 0.824, 0.08))
-  static let surfaceTint2 = dynamic(light: (0.729, 0.914, 0.902, 0.65), dark: (0.290, 0.871, 0.824, 0.13))
+  static let canvas = dynamic(light: (0.961, 0.976, 0.973, 1), dark: (0.055, 0.090, 0.094, 1))
+  static let surface = dynamic(light: (1.0, 1.0, 1.0, 0.78), dark: (1.0, 1.0, 1.0, 0.06))
+  static let surfaceTint = dynamic(light: (0.263, 0.341, 0.329, 0.055), dark: (1.0, 1.0, 1.0, 0.045))
+  static let surfaceTint2 = dynamic(light: (0.263, 0.341, 0.329, 0.10), dark: (1.0, 1.0, 1.0, 0.09))
   /// Editable controls need stronger separation than passive settings rows.
-  static let fieldFill = dynamic(light: (1.0, 1.0, 1.0, 0.85), dark: (1.0, 1.0, 1.0, 0.06))
-  static let fieldStroke = dynamic(light: (0.573, 0.769, 0.749, 1), dark: (0.290, 0.871, 0.824, 0.35))
+  static let fieldFill = dynamic(light: (1.0, 1.0, 1.0, 0.90), dark: (1.0, 1.0, 1.0, 0.05))
+  static let fieldStroke = dynamic(light: (0.263, 0.341, 0.329, 0.32), dark: (1.0, 1.0, 1.0, 0.20))
 
   /// Sidebar background — a thinner wash than content cards, so the sea
   /// canvas shows through strongest at the window's edge.
-  static let sidebarBg = dynamic(light: (1.0, 1.0, 1.0, 0.40), dark: (1.0, 1.0, 1.0, 0.03))
-  static let sidebarSelected = dynamic(light: (0.678, 0.898, 0.882, 0.75), dark: (0.290, 0.871, 0.824, 0.18))
+  static let sidebarBg = dynamic(light: (1.0, 1.0, 1.0, 0.35), dark: (1.0, 1.0, 1.0, 0.025))
+  /// Selection is state, so it may carry a *hint* of the accent — the one
+  /// tinted background in the neutral section, kept just above threshold.
+  static let sidebarSelected = dynamic(light: (0.173, 0.773, 0.722, 0.16), dark: (0.290, 0.871, 0.824, 0.13))
 
-  /// The sea itself — a soft vertical drift behind everything. Views that
-  /// paint the window floor should prefer this over flat `canvas`.
+  /// The sea itself — barely-there. The jelly look now comes from the
+  /// translucent layering; the water color only whispers at the floor.
   static let canvasGradient = LinearGradient(
     colors: [
-      dynamic(light: (0.941, 0.992, 0.984, 1), dark: (0.055, 0.153, 0.169, 1)),
-      dynamic(light: (0.851, 0.957, 0.961, 1), dark: (0.031, 0.098, 0.118, 1)),
+      dynamic(light: (0.973, 0.984, 0.980, 1), dark: (0.063, 0.102, 0.106, 1)),
+      dynamic(light: (0.937, 0.965, 0.961, 1), dark: (0.039, 0.071, 0.075, 1)),
     ],
     startPoint: .top, endPoint: .bottom)
 
@@ -70,15 +77,15 @@ enum DSHTheme {
   static let accent = dynamic(light: (0.039, 0.494, 0.463, 1), dark: (0.427, 0.898, 0.847, 1))
   static let accentBright = dynamic(light: (0.173, 0.773, 0.722, 1), dark: (0.376, 0.925, 0.871, 1))
   /// Translucent aqua fill for the primary action — pairs with `accent` foreground.
-  static let accentWash = dynamic(light: (0.565, 0.898, 0.859, 0.60), dark: (0.290, 0.871, 0.824, 0.20))
-  static let accentSoft = dynamic(light: (0.702, 0.933, 0.906, 0.45), dark: (0.290, 0.871, 0.824, 0.12))
+  static let accentWash = dynamic(light: (0.173, 0.773, 0.722, 0.22), dark: (0.290, 0.871, 0.824, 0.16))
+  static let accentSoft = dynamic(light: (0.173, 0.773, 0.722, 0.13), dark: (0.290, 0.871, 0.824, 0.10))
 
   // MARK: Semantic — attention / destructive, kept distinct from the accent hue.
 
   static let warm = dynamic(light: (0.851, 0.604, 0.169, 1), dark: (0.937, 0.757, 0.404, 1))
-  static let warmSoft = dynamic(light: (0.980, 0.878, 0.596, 0.45), dark: (0.937, 0.757, 0.404, 0.14))
+  static let warmSoft = dynamic(light: (0.851, 0.604, 0.169, 0.15), dark: (0.937, 0.757, 0.404, 0.14))
   static let coral = dynamic(light: (0.886, 0.439, 0.373, 1), dark: (0.945, 0.604, 0.541, 1))
-  static let coralSoft = dynamic(light: (0.973, 0.749, 0.702, 0.40), dark: (0.945, 0.604, 0.541, 0.14))
+  static let coralSoft = dynamic(light: (0.886, 0.439, 0.373, 0.13), dark: (0.945, 0.604, 0.541, 0.14))
 }
 
 /// Four-step corner radius scale — every rounded shape in the app should

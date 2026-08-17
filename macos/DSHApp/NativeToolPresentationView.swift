@@ -25,7 +25,7 @@ struct NativeToolPresentationView: View {
       VStack(alignment: .leading, spacing: DSHSpace.s2) {
         if let description = view.description { Text(description).font(.caption).foregroundStyle(DSHTheme.inkSoft) }
         if let cwd = view.cwd { Label(cwd, systemImage: "folder").font(.caption.monospaced()).foregroundStyle(DSHTheme.inkSoft) }
-        HStack(spacing: DSHSpace.s2) { Text("$").foregroundStyle(DSHTheme.accent); Text(view.title ?? "").textSelection(.enabled) }
+        HStack(spacing: DSHSpace.s2) { Text("$").foregroundStyle(DSHTheme.inkFaint); Text(view.title ?? "").textSelection(.enabled) }
           .font(.system(.caption, design: .monospaced).weight(.medium))
         code(view.output ?? tool.output)
           .padding(.top, DSHSpace.s1)
@@ -220,7 +220,9 @@ private struct Card<Content: View, Trailing: View>: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: DSHSpace.s3) {
-      HStack(spacing: DSHSpace.s2) { Image(systemName: icon).foregroundStyle(DSHTheme.accent); Text(title).font(.caption.weight(.semibold)).lineLimit(1); Spacer(); trailing }
+      // 卡片头图标是结构不是状态——保持中性灰，别让整条会话流铺满主色
+      // （见 2026-08-17-jelly-sea-restraint.md）。
+      HStack(spacing: DSHSpace.s2) { Image(systemName: icon).foregroundStyle(DSHTheme.inkSoft); Text(title).font(.caption.weight(.semibold)).lineLimit(1); Spacer(); trailing }
       content
     }
     .padding(DSHSpace.s3)
