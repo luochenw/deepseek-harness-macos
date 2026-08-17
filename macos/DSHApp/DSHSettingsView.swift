@@ -42,6 +42,7 @@ struct SettingsView: View {
           .padding(.trailing, DSHSpace.s2)
           .padding(.vertical, DSHSpace.s1)
         }
+        .scrollIndicators(.visible, axes: .vertical)
         .frame(maxHeight: .infinity)
 
         HStack {
@@ -157,7 +158,7 @@ private struct ModelSettingsSection: View {
           }
         )) {
           ForEach(harness.availableModels) { group in
-            Text(group.name).tag(group.id)
+            Text(group.nativeDisplayName).tag(group.id)
           }
         }
 
@@ -219,7 +220,7 @@ private struct CustomConfigurationSettingsSection: View {
         .help("刷新自定义配置")
       }
 
-      Text("为任意兼容端点配置 API 地址、协议、模型 ID 和 API Key。已有名为 Relay 的旧路由会在这里按自定义配置继续兼容，不需要新用户拥有该路由。")
+      Text("为任意兼容端点配置 API 地址、协议、模型 ID 和 API Key。已有历史路由会继续按自定义配置兼容，不需要新用户预先具备某个固定提供方。")
         .font(.caption)
         .foregroundStyle(DSHTheme.inkFaint)
         .fixedSize(horizontal: false, vertical: true)

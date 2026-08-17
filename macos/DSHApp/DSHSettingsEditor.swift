@@ -69,6 +69,10 @@ struct SettingsEditorView: View {
         .frame(minHeight: 200)
         .padding(DSHSpace.s2)
         .dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)
+        .overlay {
+          RoundedRectangle(cornerRadius: DSHRadius.md, style: .continuous)
+            .strokeBorder(DSHTheme.fieldStroke, lineWidth: 1)
+        }
 
       if let error {
         Text(error).font(.caption).foregroundStyle(DSHTheme.coral)
@@ -85,9 +89,12 @@ struct SettingsEditorView: View {
 
       VStack(alignment: .leading, spacing: DSHSpace.s3) {
         Text("凭据").font(.headline).foregroundStyle(DSHTheme.ink)
-        TextField("凭据引用", text: $credentialRef, prompt: Text("例如 CUSTOM_API_KEY"))
+        Text("凭据引用").dshSectionLabel()
+        TextField("例如 CUSTOM_API_KEY", text: $credentialRef)
           .dshField()
-        SecureField("写入新值（留空保持不变）", text: $credentialValue).dshField()
+        Text("新凭据").dshSectionLabel()
+        SecureField("写入新值（留空保持不变）", text: $credentialValue)
+          .dshField()
         HStack(spacing: DSHSpace.s2) {
           Button("写凭据") { saveCredential() }
             .buttonStyle(.dshPrimary)
@@ -112,6 +119,9 @@ struct SettingsEditorView: View {
   private func load(_ source: DSHSettingsNamespace) {
     jsonText = Self.prettyJSON(source.value)
     baseline = Self.plainValue(source.value) as? [String: Any] ?? [:]
+    if credentialRef.isEmpty {
+      credentialRef = source.value.credentialReferences().first ?? ""
+    }
   }
 
   private func save() {
@@ -130,7 +140,10 @@ struct SettingsEditorView: View {
       ns: namespace.ns,
       ops: ops,
       revision: currentNamespace.revision,
-      success: { _ in harness.showSettingsEditor = false },
+      success: { _ in
+        harness.showSettingsEditor = false
+        harness.refreshModelConfiguration()
+      },
       conflict: {
         conflict = true
         harness.refreshSettings()

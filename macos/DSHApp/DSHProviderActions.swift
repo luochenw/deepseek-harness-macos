@@ -18,7 +18,7 @@ extension HarnessController {
           self.credentialStates = credentials
         }
       } catch {
-        await MainActor.run { self.status = "提供方配置读取失败：\(error.localizedDescription)" }
+        await MainActor.run { self.status = "自定义配置读取失败：\(error.localizedDescription)" }
       }
     }
   }
@@ -48,7 +48,7 @@ extension HarnessController {
               try await hostClient.setCredential(ref: credentialRef, value: credentialValue)
             }
             await MainActor.run {
-              self.status = "提供方已保存"
+              self.status = "自定义配置已保存"
               self.showProviderAuthoring = false
               completion(.success(()))
               self.refreshModelConfiguration()

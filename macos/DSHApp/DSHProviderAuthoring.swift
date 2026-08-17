@@ -69,18 +69,22 @@ struct ProviderAuthoringView: View {
   private var basicInfoSection: some View {
     VStack(alignment: .leading, spacing: DSHSpace.s3) {
       Text("连接信息").dshSectionLabel()
-      TextField("配置 ID（小写字母开头，可含数字和短横线）", text: $route)
+      Text("配置 ID").dshSectionLabel()
+      TextField("小写字母开头，可含数字和短横线", text: $route)
         .disabled(provider != nil)
         .dshField()
-      TextField("显示名称（可选）", text: $displayName)
+      Text("显示名称（可选）").dshSectionLabel()
+      TextField("例如 团队网关", text: $displayName)
         .dshField()
-      TextField("API 地址", text: $baseURL, prompt: Text("https://api.example.com/v1"))
+      Text("API 地址").dshSectionLabel()
+      TextField("https://api.example.com/v1", text: $baseURL)
         .dshField()
       Picker("API 协议", selection: $api) {
         ForEach(protocols, id: \.self) { Text($0).tag($0) }
       }
       .tint(DSHTheme.accent)
-      TextField("模型 ID（使用逗号分隔）", text: $models)
+      Text("模型 ID").dshSectionLabel()
+      TextField("使用逗号分隔，例如 gpt-4.1, claude-sonnet-4", text: $models)
         .dshField()
     }
     .padding(DSHSpace.s4)

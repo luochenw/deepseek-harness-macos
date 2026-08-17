@@ -10,9 +10,11 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/test-macos-native.sh [--smoke [APP_PATH]]
 
-Without arguments, typechecks all production Swift sources. This includes the
-compile-time fixtures in macos/DSHApp/NativeContractCheck.swift, which exercise
-native RPC envelope, prompt, settings-patch, queue, and attachment wire types.
+Without arguments, typechecks all production Swift sources and checks that the
+native Settings surface stays scrollable, uses visible field chrome, and does
+not restore the legacy Relay-only model entry. This includes the compile-time
+fixtures in macos/DSHApp/NativeContractCheck.swift, which exercise native RPC
+envelope, prompt, settings-patch, queue, and attachment wire types.
 
 --smoke [APP_PATH] additionally starts the packaged DSH Host and verifies a
 small read-only Host API surface. Build the app first, or pass its path.
@@ -37,6 +39,7 @@ command -v plutil >/dev/null || { echo "plutil is required (macOS only)." >&2; e
 # a second source list or a synthetic test project that could drift from builds.
 swiftc -typecheck -parse-as-library "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI
 plutil -lint "$ROOT/macos/DSHApp/Info.plist" >/dev/null
+"$ROOT/scripts/test-settings-ui.sh"
 echo "native-contract: OK"
 
 if [[ "$MODE" == "smoke" ]]; then

@@ -15,6 +15,12 @@ struct DSHCredentialView: Decodable { let configured: Bool; let source: String?;
 struct DSHCredentialCatalog: Decodable { let credentials: [String: DSHCredentialView] }
 struct DSHCredentialRefsPayload: Encodable { let refs: [String] }
 
+extension DSHModelGroup {
+  /// Preserve the legacy route ID on the wire while presenting it as the
+  /// generic custom-configuration entry everywhere in the native UI.
+  var nativeDisplayName: String { id == "relay" ? "自定义配置" : name }
+}
+
 /// llm.discoverModels draft payload (llm.d.ts): `settingsNs` selects the
 /// adapter family; `provider` names an existing route (answered from the
 /// adapter registry, no endpoint needed); `baseURL`/`api`/`apiKey` describe a

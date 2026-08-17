@@ -35,8 +35,8 @@ open "dist/DeepSeek Harness.app"
 ## 使用
 
 1. 打开 App 并选择工作区。此操作授予 DSH 在该目录内进行本地文件与终端操作的入口。
-2. 打开运行配置。原生设置页会从 Host 读取真实 provider、模型目录与凭据状态。Relay 作为 `llm-pi-ai.providers.relay` 路由配置，可编辑 route、显示名称、Base URL、API 协议、模型列表，并通过 revisioned Host settings mutation 保存。
-3. API Key 通过 Host 的 write-only credential API 保存或清除；原生 App 不读取或显示保存后的 secret 值。未提供可用凭据时，运行按钮不可用。
+2. 打开设置。原生设置页会从 Host 读取真实模型目录、配置清单与凭据状态。通过「自定义配置」接入任意兼容端点，填写显示名称、API 地址、协议、模型 ID 与 API Key，并通过 revisioned Host settings mutation 保存。
+3. API Key 通过 Host 的 write-only credential API 写入、轮换或清除；原生 App 不读取或显示保存后的 secret 值。已有名为 `relay` 的路由会作为自定义配置继续可编辑，不再被当作用户必须拥有的提供方。
 4. 输入任务后点击运行。
 5. Command-W 选择工作区；Command-Shift-K 清空原生会话视图；Command-O 在 Finder 中打开当前工作区。
 

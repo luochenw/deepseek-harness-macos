@@ -406,7 +406,7 @@ final class HarnessController: ObservableObject {
     guard !provider.isEmpty, !model.isEmpty else { return "Host 默认模型" }
     if let group = availableModels.first(where: { $0.id == provider }), let match = group.models.first(where: { $0.id == model }) {
       let suffix = match.reasoning == nil ? "" : " · \(reasoningEffort)"
-      return "\(group.name) / \(match.name)\(suffix)"
+      return "\(group.nativeDisplayName) / \(match.name)\(suffix)"
     }
     return "\(provider) / \(model)"
   }
@@ -515,6 +515,10 @@ final class HarnessController: ObservableObject {
         self.refreshModelConfiguration()
         self.refreshSettings()
         self.refreshPresets()
+        // init() created the launch placeholder before the Host was up;
+        // give it its persistent session now, or the first send always
+        // fails with "Host 未连接" — see attachHostSessionToCurrentPlaceholder.
+        if self.hostCurrentSessionID == nil { self.attachHostSessionToCurrentPlaceholder() }
       case .failure(let error):
         self.hostStatus = "Host 启动失败：\(error.localizedDescription)"
       }
@@ -821,12 +825,20 @@ final class HarnessController: ObservableObject {
     Task {
       do {
         async let sessions = hostClient.sessions()
-        async let workspaces = hostClient.workspaces()
-        let (nextSessions, nextWorkspaces) = try await (sessions, workspaces)
+        async let workspaces = hostClient.workspaceSnapshot()
+        let (nextSessions, snapshot) = try await (sessions, workspaces)
+        // session.list returns every persisted session — per workspace.d.ts,
+        // "archived sessions stay in their workspace's sessionIds account;
+        // grouping surfaces hide them". Subtracting the registry's archive
+        // set here is that hiding; without it, archiving a session looked
+        // like a no-op in the sidebar (the rows came straight back on the
+        // next refresh) even though the Host had archived it just fine.
+        let archived = Set(snapshot.archivedSessionIds)
+        let visibleSessions = nextSessions.filter { !archived.contains($0.sessionId) }
         await MainActor.run {
-          self.hostSessions = nextSessions
-          self.hostWorkspaces = nextWorkspaces
-          self.hostStatus = "Host 已同步 \(nextSessions.count) 个会话 / \(nextWorkspaces.count) 个工作区"
+          self.hostSessions = visibleSessions
+          self.hostWorkspaces = snapshot.items
+          self.hostStatus = "Host 已同步 \(visibleSessions.count) 个会话 / \(snapshot.items.count) 个工作区"
         }
       } catch {
         await MainActor.run { self.hostStatus = "Host 同步失败：\(error.localizedDescription)" }
@@ -914,6 +926,17 @@ final class HarnessController: ObservableObject {
     subagentPath = []
     subagentTranscript = nil
     selectedWorkflowRunID = nil
+    attachHostSessionToCurrentPlaceholder()
+  }
+
+  /// Create the persistent Host session backing the currently-selected local
+  /// placeholder. Split out of `newSession()` because init() runs
+  /// `newSession()` before `startPersistentHost()` — the launch placeholder
+  /// is created while `hostClient` is still nil, and without a post-connect
+  /// retry it stays Host-less forever: every send on a fresh launch died with
+  /// "Host 未连接，无法发送" until the user manually hit ⌘N. The connect
+  /// callback now calls this when no Host session is bound yet.
+  func attachHostSessionToCurrentPlaceholder() {
     guard let hostClient else { return }
     let cwd = workspace?.path
     let presetId = preset == .creator ? "cordis" : preset.rawValue
@@ -2096,7 +2119,7 @@ private struct ComposerModelMenu: View {
         Button("刷新模型目录", action: harness.refreshModelConfiguration)
       } else {
         ForEach(harness.availableModels) { group in
-          Menu(group.name) {
+          Menu(group.nativeDisplayName) {
             ForEach(group.models) { model in
               Button(action: { harness.selectCurrentModel(provider: group.id, model: model.id) }) {
                 if harness.provider == group.id && harness.model == model.id { Label(model.name, systemImage: "checkmark") }

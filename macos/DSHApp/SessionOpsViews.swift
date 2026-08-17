@@ -292,7 +292,7 @@ struct DiscoveredModelsSheet: View {
             ForEach(models) { model in DiscoveredModelRowView(model: model) }
           }
         }
-        Text("把需要的模型 ID 粘贴到「提供方 → 编辑」的模型 ID 列表中保存；发现结果不会自动写入配置。")
+        Text("把需要的模型 ID 粘贴到「自定义配置 → 编辑」的模型 ID 列表中保存；发现结果不会自动写入配置。")
           .font(.caption2).foregroundStyle(DSHTheme.inkFaint)
       }
       HStack { Spacer(); Button("关闭") { dismiss() }.buttonStyle(.dshSecondary).keyboardShortcut(.cancelAction) }

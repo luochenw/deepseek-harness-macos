@@ -35,8 +35,8 @@ The result is `dist/DeepSeek Harness.app`, roughly 340–570MB depending on the 
 ## Usage
 
 1. Open the app and choose a workspace. This grants DSH local file and terminal access inside that directory.
-2. Open run settings. The native settings page reads real providers, model catalog, and credential status from the Host. Relay is configured as the `llm-pi-ai.providers.relay` route — edit its route, display name, base URL, API protocol, and model list, saved through revisioned Host settings mutations.
-3. API keys are saved/cleared through the Host's write-only credential API; the native app never reads back or displays a saved secret value. The run button is disabled until a usable credential is configured.
+2. Open Settings. The native page reads the real model catalog, configuration inventory, and credential status from the Host. Add a **Custom Configuration** for any compatible endpoint, then set its name, base URL, API protocol, model IDs, and API key through revisioned Host settings mutations.
+3. API keys are saved, rotated, or cleared through the Host's write-only credential API; the native app never reads back or displays a saved secret value. Existing routes, including an older route named `relay`, remain editable as custom configurations rather than being treated as a required provider.
 4. Type a task and run.
 5. ⌘W chooses a workspace; ⌘⇧K clears the native conversation view; ⌘O opens the current workspace in Finder.
 
