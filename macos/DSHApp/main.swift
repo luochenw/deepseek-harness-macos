@@ -737,7 +737,7 @@ final class HarnessController: ObservableObject {
       // the local echo send() already appended (the outgoing first message
       // may carry the workspace-context appendix, hence prefix matching).
       // Queue drains, slash fallbacks, and other clients still land here.
-      if liveSourceKind(payload) == nil || liveSourceKind(payload) == "user", let text = liveMessageText(payload) {
+      if liveSourceKind(payload) == nil || liveSourceKind(payload) == "user", let text = liveMessageText(payload).map(userDisplayText) {
         let lastUser = sessions[index].messages.last(where: { $0.role == .user })?.text
         if let lastUser, text == lastUser || text.hasPrefix(lastUser) {} else {
           sessions[index].messages.append(Message(role: .user, text: text))
@@ -1419,7 +1419,7 @@ final class HarnessController: ObservableObject {
         // Only real typed input becomes a bubble; injected user-role
         // contexts (13KB instruction snapshots…) stay out of the transcript.
         guard messageSourceKind(message) == nil || messageSourceKind(message) == "user" else { continue }
-        if let text = textFromMessage(message) { result.append(Message(role: .user, text: text, timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(message))) }
+        if let text = textFromMessage(message) { result.append(Message(role: .user, text: userDisplayText(text), timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(message))) }
       case "assistant/message":
         let payload = historyMessage(data)
         if let text = textFromMessage(payload) {
@@ -1529,6 +1529,16 @@ final class HarnessController: ObservableObject {
   /// plumbing and must never render as conversation bubbles.
   private func messageSourceKind(_ value: DSHJSONValue) -> String? {
     value.object?["source"]?.object?["kind"]?.string
+  }
+
+  /// Display text of a user message: the outgoing first prompt carries the
+  /// machine-facing workspace-context appendix (send() appends it after a
+  /// blank line) — the transcript shows the message as typed, so cut from
+  /// the marker on. Matched by marker only: the appendix wording has
+  /// already changed once and stored sessions keep the old phrasing.
+  private func userDisplayText(_ text: String) -> String {
+    guard let range = text.range(of: "\n\n[工作区上下文]") else { return text }
+    return String(text[..<range.lowerBound])
   }
 
   private func anyValue(_ value: DSHJSONValue) -> Any {
