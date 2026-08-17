@@ -1,0 +1,35 @@
+name: Bug report
+description: Something in the native app is broken or behaves unexpectedly.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Open the app and choose workspace …
+        2. Run task …
+        3. Expected …, but got …
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: e.g. macOS 15.5 (Apple Silicon)
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: App version or commit
+      description: Release tag (e.g. v0.1.0) if you downloaded a build, or `git rev-parse --short HEAD` if you built from source.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Console output, the app's error diagnostics panel, or a screenshot. Please remove API keys and private paths.

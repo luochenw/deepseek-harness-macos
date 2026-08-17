@@ -103,12 +103,15 @@ git push origin main
 这是个开源项目，发布指"打一个 tag + GitHub Release"，不是内部部署平台。
 
 ```bash
+cd dist && ditto -c -k --keepParent "DeepSeek Harness.app" "DeepSeek-Harness-<version>-arm64.zip" && cd ..
 gh release create v<version> \
   --title "v<version>" \
-  --notes-file <release-notes.md>
+  --notes-file <release-notes.md> \
+  "dist/DeepSeek-Harness-<version>-arm64.zip"
 ```
 
-- Release 不附带 `dist/*.app`（572MB+，且是本机 ad-hoc 签名，换机器构建结果不同）——附带构建说明链接，让使用者自己跑 `./scripts/build-macos-app.sh`，或另行讨论是否要做 notarized DMG 分发。
+- Release **附带 ad-hoc 签名的 zip**（arm64，未 notarize）——决策见 [Agent Note](.agents/notes/implemented/architecture/2026-08-17-adhoc-release-distribution.md)。Release notes 必须写清 Gatekeeper 首次打开步骤（隐私与安全性 → 仍要打开，或 `xattr -rd com.apple.quarantine`），并给出「从源码构建」替代路径。
+- 以后拿到 Developer ID 后升级为签名 + notarize + DMG，并补 Homebrew cask；流程不变，只换打包一步。
 - 每次发版前确认 Step 1 的三条验证命令都过。
 
 ## 速查

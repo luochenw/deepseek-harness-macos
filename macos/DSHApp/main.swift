@@ -1786,7 +1786,13 @@ final class HarnessController: ObservableObject {
   }
 
   var dshHome: URL {
-    FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/DeepSeek Harness/dsh", isDirectory: true)
+    // DSH_APP_HOME 只影响本 App 的配置根；$HOME 骗不过
+    // homeDirectoryForCurrentUser（passwd 解析），所以隔离实例（演示、
+    // 截图、并行测试）需要一个显式出口。
+    if let override = ProcessInfo.processInfo.environment["DSH_APP_HOME"], !override.isEmpty {
+      return URL(fileURLWithPath: override, isDirectory: true)
+    }
+    return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/DeepSeek Harness/dsh", isDirectory: true)
   }
   private var resources: URL { Bundle.main.resourceURL! }
   private var runtime: URL { resources.appendingPathComponent("Runtime") }

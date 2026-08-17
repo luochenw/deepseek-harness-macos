@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose a new native feature or a web-parity gap to close.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's missing?
+      description: Describe the gap independent of any particular solution. If it's a web-parity gap, check [WEB_PARITY.md](../../macos/WEB_PARITY.md) first — it may already be tracked.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should the native app do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional, but appreciated — this project records decisions with their rejected alternatives (see .agents/notes/).

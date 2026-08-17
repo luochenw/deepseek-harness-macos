@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-contract:
+    name: Typecheck + native contract
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Typecheck all production sources + UI contract checks
+        run: ./scripts/test-macos-native.sh
