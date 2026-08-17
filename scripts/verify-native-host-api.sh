@@ -44,4 +44,11 @@ assert_rpc workspace.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.r
 assert_rpc settings.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||typeof d.result.value?.writable!=="boolean"||!Array.isArray(d.result.value?.namespaces)) process.exit(1)'
 assert_rpc llm.models '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.groups)) process.exit(1)'
 assert_rpc agentPreset.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.presets)) process.exit(1)'
+
+# Write-path check: every other assertion above is read-only. ui-theme is a
+# fresh $DSH_HOME's known seed value ({"preference":"system"}, revision 0),
+# so this exercises the real settings.update -> persist -> settings.describe
+# round trip a Settings UI edit takes, not just that the RPC call is accepted.
+assert_rpc settings.update '{"ns":"ui-theme","patch":{"preference":"dark"},"expectedRevision":0}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||d.result.value?.value?.preference!=="dark"||d.result.value?.revision!==1) process.exit(1)'
+assert_rpc settings.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); const ns=(d.result?.value?.namespaces||[]).find(n=>n.ns==="ui-theme"); if(d.result?.ok!==true||ns?.value?.preference!=="dark"||ns?.revision!==1) process.exit(1)'
 echo "native-host-api-smoke: OK ($URL)"

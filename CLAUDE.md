@@ -40,8 +40,14 @@
 这个代码库是**按功能域拆文件**的（见 AGENTS.md），天然适合并行：
 
 - **只读 / 探查**：读 RPC 协议、读上游 `work/deepseek-harness-reference` 参考副本、方案调研——大胆并行用 `Explore` / `general-purpose` 子 agent，互不冲突。
-- **写代码并行**：不同功能域（比如"补 diff 渲染卡片"和"补 workflow 详情钻取"）分属不同的 `DSH<Feature>.swift` / `Native<Feature>View.swift` 文件 → 可以并行改，互不覆盖。**`main.swift` 例外**——它是单一 `HarnessController` 的核心，多个并行改动同时碰它极易冲突，涉及 `main.swift` 的改动串行做，或者拆到 `extension HarnessController` 的独立文件里再引用。
+- **写代码并行**：不同功能域（比如"补 diff 渲染卡片"和"补 workflow 详情钻取"）分属不同的 `DSH<Feature>.swift` / `Native<Feature>View.swift` 文件 → 可以并行改，互不覆盖。**`main.swift` 不再是"例外可以碰"，而是冻结**——新状态/新逻辑/新 View 一律不进这个文件，规则见下面「质量规范」。这同时也解决了并行冲突：大家都不往同一个文件里写，天然没有冲突面。
 - 一律直接在当前分支上改（这是个人维护的开源项目，不强制 worktree/PR 流程），但落笔前 `git status` 确认没有别的改动会被覆盖。
+
+## 质量规范
+
+- **main.swift 冻结**：`main.swift` 只保留 App 入口、`HarnessController` 类声明与核心生命周期——新的 `@Published` 状态、controller 方法、顶层 View **一律不再**写进这个文件，哪怕是"核心流程"。新状态/新逻辑写成 `DSH<Feature>.swift` 里的 `extension HarnessController`（没有对应文件就新建一个）；新界面写成独立的 `<Feature>View.swift` / `Native<Feature>View.swift`。这条规则配了 gate，不是口头约定：`./scripts/test-macos-native.sh` 会检查 `main.swift` 行数不超过基线，超了直接报错退出。
+- 现状 3364 行的 `main.swift` 是历史债，本身不违反冻结令（冻结令管的是"新增"，不要求现在就拆），拆分是单独的分阶段计划，见 [Agent Note](.agents/notes/proposed/architecture/2026-08-18-quality-remediation-plan.md)。
+- 改行为的代码（不是纯文档/纯 UI 文案）优先带上能验证的手段——现阶段是契约 fixture（`NativeContractCheck.swift`）+ smoke（`--smoke`），单测基建落地后（见上面 Note 的 Phase 1）新逻辑改动要带对应单测。
 
 ## CLAUDE.md 组织方式：不拆子目录
 

@@ -43,14 +43,19 @@ you do not need to register it anywhere.
 
 There is **one** `@MainActor final class HarnessController: ObservableObject`
 (defined in `main.swift`) that owns essentially all app state as `@Published`
-properties and all business logic as methods. Feature-specific logic is added
-via `extension HarnessController { ... }` in a dedicated `DSH<Feature>.swift`
-file rather than growing `main.swift` further — e.g. subagent navigation
-lives in `DSHSubagents.swift`'s wire types plus the `openSubagent` /
-`navigateUpSubagent` / `interruptSubagent` methods in `main.swift`, settings
-mutation lives in `DSHSettingsMutate.swift` / `DSHSettingsActions.swift`, and
-so on. SwiftUI views read state via `@EnvironmentObject private var harness:
-HarnessController` and never hold their own copy of Host-derived state.
+properties and all business logic as methods. `main.swift` is **frozen**: it
+keeps its existing ~3364 lines of history but takes no new `@Published`
+state, no new controller methods, and no new top-level View structs (see
+CLAUDE.md's "质量规范" — `./scripts/test-macos-native.sh` enforces this as a
+line-count gate, not just a convention). All *new* feature-specific logic is
+added via `extension HarnessController { ... }` in a dedicated
+`DSH<Feature>.swift` file — e.g. settings mutation lives in
+`DSHSettingsMutate.swift` / `DSHSettingsActions.swift`. (Some older logic,
+like the subagent-navigation methods, still lives inline in `main.swift` from
+before the freeze; that's tracked as migration debt in the Agent Note linked
+from CLAUDE.md, not a pattern to copy for new code.) SwiftUI views read state
+via `@EnvironmentObject private var harness: HarnessController` and never
+hold their own copy of Host-derived state.
 
 When adding a feature:
 1. New wire types (`Encodable`/`Decodable` structs mirroring a Host RPC
@@ -58,10 +63,10 @@ When adding a feature:
    existing `DSH`-prefixed naming (`DSHSubagentEntry`, `DSHWorkspaceView`, …).
 2. New `DSHHostClient` methods go in `DSHHostClientExtensions.swift` (or
    `DSHHostProtocol.swift` if they're core session/workspace surface).
-3. New `@Published` state and controller methods go on `HarnessController`
-   — either inline in `main.swift` for core flows, or as an
-   `extension HarnessController` in the feature file if the file already
-   exists for that domain.
+3. New `@Published` state and controller methods go in an
+   `extension HarnessController` in the matching `DSH<Feature>.swift` file
+   (create one if the domain doesn't have one yet). Never inline them in
+   `main.swift`, even for "core" flows — that door is closed by the freeze.
 4. New views go in their own `<Feature>View.swift`.
 
 ## RPC & event protocol

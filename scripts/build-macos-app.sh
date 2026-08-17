@@ -21,6 +21,28 @@ DSH_SOURCE="${DSH_SOURCE:-$(npm root -g 2>/dev/null)/@deepseek-ai/dsh}"
   exit 1
 }
 
+# Two sessions can legitimately build in the same checkout around the same
+# time (see CLAUDE.md's 多 Agent 并行) — without this lock, one run's cleanup
+# sweep below could delete another run's in-progress stage dir, or its
+# ".previous" backup mid-swap at the end. Waits rather than fails so both
+# builds still complete; if a run is killed before its `trap` can fire, the
+# stale "$ROOT/dist/.build.lock" it leaves behind is safe to `rmdir` by hand.
+mkdir -p "$ROOT/dist"
+LOCK_DIR="$ROOT/dist/.build.lock"
+while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+  echo "Another build is in progress (lock: $LOCK_DIR) — waiting..." >&2
+  sleep 2
+done
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+
+# Each run's STAGE dir has a fresh random suffix, so a run that gets killed or
+# crashes mid-build leaves its stage dir (and a dangling "$APP.previous" from
+# the swap below) behind forever — nothing else ever names it again to clean
+# it up. Sweep those before staging a new build (safe now that the lock above
+# rules out a concurrently running build owning one of these).
+find "$ROOT/dist" -maxdepth 1 -name ".DeepSeek-Harness-stage-*.app" -exec rm -rf {} +
+rm -rf "$APP.previous"
+
 rm -rf "$STAGE"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/Runtime"
 swiftc -parse-as-library "$ROOT"/macos/DSHApp/*.swift -o "$STAGE/Contents/MacOS/DSH" -framework AppKit -framework SwiftUI

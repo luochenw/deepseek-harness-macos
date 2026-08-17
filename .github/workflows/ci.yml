@@ -12,9 +12,17 @@ concurrency:
 
 jobs:
   native-contract:
-    name: Typecheck + native contract
+    name: Typecheck + unit + build + smoke
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Typecheck all production sources + UI contract checks
         run: ./scripts/test-macos-native.sh
+      - name: Unit tests (macos/DSHTests)
+        run: ./scripts/test-macos-native.sh --unit
+      - name: Install DSH runtime (bundled into the build)
+        run: npm install -g @deepseek-ai/dsh
+      - name: Build DeepSeek Harness.app
+        run: ./scripts/build-macos-app.sh
+      - name: Smoke test the packaged Host (read + write RPC paths)
+        run: ./scripts/test-macos-native.sh --smoke
