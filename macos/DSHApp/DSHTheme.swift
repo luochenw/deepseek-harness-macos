@@ -1,64 +1,60 @@
 import SwiftUI
 import AppKit
 
-/// Ocean-toned design tokens — the single source of color/radius/spacing
+/// Fresh light-blue design tokens — the single source of color/radius/spacing
 /// for the whole app. See
-/// .agents/notes/implemented/architecture/2026-08-17-ocean-design-system.md.
+/// .agents/notes/implemented/architecture/2026-08-17-fresh-light-palette.md.
 /// Every view should read colors/radii/spacing from here rather than
 /// inlining new literals, so the palette stays consistent across the
 /// ~40-file surface it's applied to.
 ///
-/// Deliberately low-chroma: the first two passes at this palette read as
-/// "too heavy" (user feedback, twice) — regions are told apart by a whisper
-/// of hue and lightness, not a visibly "colored" block, and saturated color
-/// is reserved for the few spots that carry real state (primary action,
-/// running indicator, warning/error), not for decoration.
+/// Light-only by design: the app forces `.aqua` appearance at launch
+/// (DSHNativeApp.init), so there is exactly one palette here — airy
+/// near-white surfaces with a whisper of cool blue, slate-blue text
+/// (deliberately not pure black), and a clear sky-blue accent reserved
+/// for the few spots that carry real state (primary action, running
+/// indicator, warning/error), not for decoration.
 enum DSHTheme {
-  /// Builds a `Color` that redraws itself from light/dark sRGB triples as
-  /// the system appearance changes — no Asset Catalog needed (this project
-  /// deliberately has no Xcode project; see AGENTS.md).
-  private static func dynamic(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
-    Color(NSColor(name: nil) { appearance in
-      let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-      let c = isDark ? dark : light
-      return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: 1)
-    })
-  }
+  // MARK: Text — slate blue, not black.
 
-  // MARK: Text
-
-  static let ink = dynamic(light: (0.149, 0.188, 0.180), dark: (0.886, 0.914, 0.906))
-  static let inkSoft = dynamic(light: (0.384, 0.431, 0.420), dark: (0.576, 0.631, 0.616))
-  static let inkFaint = dynamic(light: (0.561, 0.608, 0.596), dark: (0.404, 0.455, 0.435))
+  static let ink = Color(red: 0.169, green: 0.227, blue: 0.286)
+  static let inkSoft = Color(red: 0.361, green: 0.435, blue: 0.502)
+  static let inkFaint = Color(red: 0.561, green: 0.631, blue: 0.690)
 
   // MARK: Surfaces — canvas < surface < surfaceTint < surfaceTint2 forms the
   // depth ladder regions are told apart by; nothing here is a border.
 
-  static let canvas = dynamic(light: (0.980, 0.984, 0.980), dark: (0.090, 0.125, 0.122))
-  static let surface = dynamic(light: (1.0, 1.0, 1.0), dark: (0.118, 0.161, 0.157))
-  static let surfaceTint = dynamic(light: (0.953, 0.961, 0.957), dark: (0.129, 0.173, 0.169))
-  static let surfaceTint2 = dynamic(light: (0.922, 0.933, 0.929), dark: (0.149, 0.192, 0.184))
+  static let canvas = Color(red: 0.973, green: 0.984, blue: 0.992)
+  static let surface = Color(red: 1.0, green: 1.0, blue: 1.0)
+  static let surfaceTint = Color(red: 0.945, green: 0.965, blue: 0.980)
+  static let surfaceTint2 = Color(red: 0.906, green: 0.941, blue: 0.965)
+  /// Editable controls need stronger separation than passive settings rows.
+  static let fieldFill = Color(red: 0.992, green: 0.996, blue: 1.0)
+  static let fieldStroke = Color(red: 0.655, green: 0.745, blue: 0.816)
 
   /// Sidebar background — a hair off `canvas`, closer to a recessed neutral
   /// panel than a "colored block".
-  static let sidebarBg = dynamic(light: (0.945, 0.957, 0.953), dark: (0.098, 0.133, 0.129))
-  static let sidebarSelected = dynamic(light: (0.894, 0.914, 0.906), dark: (0.129, 0.169, 0.161))
+  static let sidebarBg = Color(red: 0.953, green: 0.973, blue: 0.984)
+  static let sidebarSelected = Color(red: 0.886, green: 0.933, blue: 0.965)
 
-  // MARK: Accent — one brand color plus a brighter "live/active" step.
-  // Keep the bright step reserved for running/selected state, not decoration.
+  // MARK: Accent — one clear sky-blue family. `accent` is the text/icon
+  // step (deep enough to read on the light washes), `accentBright` is
+  // reserved for running/selected indicators, `accentWash` is the light
+  // fill behind the primary action — filled controls stay light-bodied,
+  // only their label carries the color.
 
-  static let accent = dynamic(light: (0.361, 0.545, 0.522), dark: (0.435, 0.690, 0.651))
-  static let accentBright = dynamic(light: (0.247, 0.612, 0.565), dark: (0.373, 0.745, 0.690))
-  /// Foreground drawn on top of an accent-filled surface (buttons, selected chips).
-  static let accentContrast = Color(red: 0.043, green: 0.129, blue: 0.122)
-  static let accentSoft = dynamic(light: (0.906, 0.937, 0.929), dark: (0.133, 0.200, 0.188))
+  static let accent = Color(red: 0.055, green: 0.435, blue: 0.663)
+  static let accentBright = Color(red: 0.153, green: 0.627, blue: 0.871)
+  /// Light sky fill for the primary action — pairs with `accent` foreground.
+  static let accentWash = Color(red: 0.812, green: 0.914, blue: 0.969)
+  static let accentSoft = Color(red: 0.890, green: 0.953, blue: 0.988)
 
   // MARK: Semantic — attention / destructive, kept distinct from the accent hue.
 
-  static let warm = dynamic(light: (0.749, 0.631, 0.475), dark: (0.796, 0.690, 0.533))
-  static let warmSoft = dynamic(light: (0.945, 0.918, 0.878), dark: (0.180, 0.153, 0.110))
-  static let coral = dynamic(light: (0.737, 0.506, 0.443), dark: (0.784, 0.573, 0.514))
-  static let coralSoft = dynamic(light: (0.949, 0.894, 0.875), dark: (0.180, 0.129, 0.106))
+  static let warm = Color(red: 0.820, green: 0.573, blue: 0.196)
+  static let warmSoft = Color(red: 0.996, green: 0.953, blue: 0.878)
+  static let coral = Color(red: 0.851, green: 0.416, blue: 0.369)
+  static let coralSoft = Color(red: 0.992, green: 0.925, blue: 0.914)
 }
 
 /// Four-step corner radius scale — every rounded shape in the app should
@@ -139,12 +135,11 @@ struct DSHSectionLabel: ViewModifier {
   }
 }
 
-/// Flat field chrome for `TextField`/`SecureField`: a background block
-/// instead of the system bezel, matching the app-wide "no strokes" surface
-/// language. The single source for text-input styling — every sheet's
-/// single-line input should use this rather than reimplementing it locally.
+/// Field chrome for `TextField`/`SecureField`. A restrained one-point outline
+/// makes editable controls recognizable without turning passive content into
+/// a field-shaped surface.
 struct DSHFieldBackground: ViewModifier {
-  var tint: Color = DSHTheme.surface
+  var tint: Color = DSHTheme.fieldFill
   var radius: CGFloat = DSHRadius.sm
   func body(content: Content) -> some View {
     content
@@ -152,7 +147,12 @@ struct DSHFieldBackground: ViewModifier {
       .foregroundStyle(DSHTheme.ink)
       .padding(.horizontal, DSHSpace.s3)
       .padding(.vertical, DSHSpace.s2)
+      .frame(minHeight: 36)
       .background(tint, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+          .strokeBorder(DSHTheme.fieldStroke, lineWidth: 1)
+      }
   }
 }
 
@@ -163,7 +163,7 @@ extension View {
     background(tint, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
   }
   func dshSectionLabel() -> some View { modifier(DSHSectionLabel()) }
-  func dshField(tint: Color = DSHTheme.surface, radius: CGFloat = DSHRadius.sm) -> some View {
+  func dshField(tint: Color = DSHTheme.fieldFill, radius: CGFloat = DSHRadius.sm) -> some View {
     modifier(DSHFieldBackground(tint: tint, radius: radius))
   }
 }
@@ -175,8 +175,8 @@ struct DSHPrimaryButtonStyle: ButtonStyle {
     configuration.label
       .font(.system(size: 13, weight: .semibold))
       .padding(.horizontal, DSHSpace.s4).padding(.vertical, 10)
-      .background(DSHTheme.accentBright, in: RoundedRectangle(cornerRadius: DSHRadius.md, style: .continuous))
-      .foregroundStyle(DSHTheme.accentContrast)
+      .background(DSHTheme.accentWash, in: RoundedRectangle(cornerRadius: DSHRadius.md, style: .continuous))
+      .foregroundStyle(DSHTheme.accent)
       .opacity(configuration.isPressed ? 0.82 : 1)
   }
 }

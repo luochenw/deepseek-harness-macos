@@ -14,6 +14,12 @@ private let defaultModel = "gpt-5.6-terra"
 struct DSHNativeApp: App {
   @StateObject private var controller = HarnessController()
 
+  init() {
+    // 全 app 强制浅色外观（含 sheet/alert）：清新明亮浅色主题，深色模式
+    // 不再支持 — 见 .agents/notes/implemented/architecture/2026-08-17-fresh-light-palette.md
+    NSApplication.shared.appearance = NSAppearance(named: .aqua)
+  }
+
   var body: some Scene {
     WindowGroup(appName) {
       ContentView()
