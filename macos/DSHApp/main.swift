@@ -1917,7 +1917,13 @@ private struct SidebarRowChrome: View {
   let statusKind: DSHStatusDot.Kind
   let isActive: Bool
   let action: () -> Void
+  /// Parent rows that float controls above this chrome (the ⋮ overlay)
+  /// pass their own whole-row hover here — the overlay swallows pointer
+  /// events, so the chrome's local onHover alone would drop the wash the
+  /// moment the cursor reaches the button.
+  var forceHover: Bool = false
   @State private var hovering = false
+  private var hoverActive: Bool { hovering || forceHover }
   var body: some View {
     Button(action: action) {
       HStack(spacing: DSHSpace.s2) {
@@ -1937,12 +1943,12 @@ private struct SidebarRowChrome: View {
       // Hover is structure feedback, not state — neutral wash; only the
       // selected row keeps the accent-tinted background.
       .background(
-        isActive ? DSHTheme.sidebarSelected : hovering ? DSHTheme.surfaceTint2 : .clear,
+        isActive ? DSHTheme.sidebarSelected : hoverActive ? DSHTheme.surfaceTint2 : .clear,
         in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
-    .animation(.easeOut(duration: 0.12), value: hovering)
+    .animation(.easeOut(duration: 0.12), value: hoverActive)
   }
   /// Minute-granularity timestamp — `Text(_, style: .relative)` ticks with
   /// seconds, which reads as visual noise in a static list.
@@ -1970,7 +1976,8 @@ private struct SidebarSessionRow: View {
       date: Date(timeIntervalSince1970: session.updatedAt / 1000),
       statusKind: session.running ? .live : .idle,
       isActive: harness.hostCurrentSessionID == session.sessionId,
-      action: { harness.openHostSession(session) }
+      action: { harness.openHostSession(session) },
+      forceHover: hovering
     )
     // Hover-revealed ⋯ trigger; clicking opens an app-styled action panel
     // (popover with our own rows) rather than a system NSMenu, which can't
@@ -1979,6 +1986,7 @@ private struct SidebarSessionRow: View {
       if hovering || showActions {
         Button(action: { showActions.toggle() }) {
           Image(systemName: "ellipsis")
+            .rotationEffect(.degrees(90))
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(DSHTheme.inkSoft)
             .frame(width: 24, height: 22)
