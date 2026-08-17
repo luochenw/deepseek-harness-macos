@@ -2939,10 +2939,10 @@ private struct Composer: View {
             .menuStyle(.borderlessButton).fixedSize().foregroundStyle(DSHTheme.inkSoft).help("更多操作")
           Button(action: harness.pickImage) { Image(systemName: "paperclip") }.buttonStyle(.borderless).foregroundStyle(DSHTheme.inkSoft).help("添加图片")
           // Manual dictation only fills the composer for review; only a
-          // wake-word-initiated utterance auto-sends.
+          // wake-word-initiated utterance auto-sends (switchable in 设置→语音).
           VoiceInputButton { text, viaWake in
             harness.draft += (harness.draft.isEmpty ? "" : " ") + text
-            if viaWake, harness.canSend { harness.send() }
+            if viaWake, VoiceSettings.wakeAutoSend, harness.canSend { harness.send() }
           }
           Spacer()
           ComposerModelMenu()

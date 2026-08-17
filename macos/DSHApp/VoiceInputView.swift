@@ -58,6 +58,9 @@ struct VoiceInputButton: View {
         }
       }
       .buttonStyle(.borderless)
+      // 悬浮圈的声呐涟漪跟随听写状态（唤醒或手动开始都算）——
+      // 见 FloatingBubble.swift 的 VoiceWakeSignal。
+      .onChange(of: isActive) { _, active in VoiceWakeSignal.shared.listening = active }
       .help(helpText)
       // Denied/failed states get a visible, actionable explainer — a silent
       // grey button reads as "voice is broken". Note: an ad-hoc-signed app
@@ -111,6 +114,7 @@ struct VoiceInputButton: View {
         // right-click step. An explicit opt-out afterwards sticks (the
         // once-marker keeps this from re-arming).
         if newState == .idle, oldState == .listening || oldState == .transcribing,
+           VoiceSettings.wakeAutoEnableOnFirstUse,
            !VoiceSettings.wakeEnabled, !UserDefaults.standard.bool(forKey: VoiceSettings.wakeAutoEnabledOnceKey) {
           UserDefaults.standard.set(true, forKey: VoiceSettings.wakeAutoEnabledOnceKey)
           UserDefaults.standard.set(true, forKey: VoiceSettings.wakeEnabledKey)

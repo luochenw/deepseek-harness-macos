@@ -8,6 +8,8 @@ import SwiftUI
 /// settings namespaces.
 struct VoiceSettingsView: View {
   @AppStorage(VoiceSettings.wakeEnabledKey) private var wakeEnabled = false
+  @AppStorage(VoiceSettings.wakeAutoEnableKey) private var wakeAutoEnable = true
+  @AppStorage(VoiceSettings.wakeAutoSendKey) private var wakeAutoSend = true
   @AppStorage(VoiceSettings.wakePhraseKey) private var wakePhrase = VoiceSettings.defaultWakePhrase
   @AppStorage(VoiceSettings.engineKey) private var engine = "apple"
   @AppStorage(VoiceSettings.sttEndpointKey) private var sttEndpoint = ""
@@ -18,9 +20,11 @@ struct VoiceSettingsView: View {
       VStack(alignment: .leading, spacing: DSHSpace.s2) {
         Text("唤醒词").dshSectionLabel()
         Toggle("启用唤醒词（麦克风常驻监听）", isOn: $wakeEnabled).foregroundStyle(DSHTheme.ink)
+        Toggle("首次使用麦克风后自动开启唤醒词", isOn: $wakeAutoEnable).foregroundStyle(DSHTheme.ink)
+        Toggle("唤醒识别的内容自动发送", isOn: $wakeAutoSend).foregroundStyle(DSHTheme.ink)
         TextField("唤醒短语", text: $wakePhrase, prompt: Text(VoiceSettings.defaultWakePhrase))
           .dshField()
-        Text("开启后 app 持续在本机监听麦克风，听到唤醒短语即开始聆听（等同点击麦克风按钮）。匹配忽略空格与标点；仅使用系统离线中文识别，音频不出本机。默认关闭；常驻监听时麦克风按钮上会显示橙色圆点。")
+        Text("常驻监听只用系统离线中文识别，音频不出本机；监听中麦克风按钮显示橙色圆点。点击麦克风的手动听写只把文字填进输入框、从不自动发送；唤醒词听写默认自动发送，可用上方开关关闭。手动关闭唤醒词后不会再被自动开启。")
           .font(.caption).foregroundStyle(DSHTheme.inkFaint).fixedSize(horizontal: false, vertical: true)
       }
       .padding(DSHSpace.s3).dshCard(tint: DSHTheme.surfaceTint, radius: DSHRadius.md)

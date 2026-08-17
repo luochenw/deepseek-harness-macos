@@ -55,6 +55,17 @@ enum VoiceSettings {
   /// Set the first time wake gets auto-enabled after a successful talk
   /// session — so an explicit later opt-out is never overridden again.
   static let wakeAutoEnabledOnceKey = "dsh.voice.wakeAutoEnabledOnce"
+  /// Whether the first successful talk session auto-enables wake (default on).
+  static let wakeAutoEnableKey = "dsh.voice.wakeAutoEnable"
+  static var wakeAutoEnableOnFirstUse: Bool {
+    UserDefaults.standard.object(forKey: wakeAutoEnableKey) == nil ? true : UserDefaults.standard.bool(forKey: wakeAutoEnableKey)
+  }
+  /// Whether a wake-word-initiated utterance auto-sends (default on); a
+  /// manual mic click never auto-sends regardless.
+  static let wakeAutoSendKey = "dsh.voice.wakeAutoSend"
+  static var wakeAutoSend: Bool {
+    UserDefaults.standard.object(forKey: wakeAutoSendKey) == nil ? true : UserDefaults.standard.bool(forKey: wakeAutoSendKey)
+  }
   static let wakePhraseKey = "dsh.voice.wakePhrase"
   static let engineKey = "dsh.voice.engine" // "apple" (default) | "local"
   static let sttEndpointKey = "dsh.voice.sttEndpoint"
