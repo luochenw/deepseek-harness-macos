@@ -347,9 +347,25 @@ final class HarnessController: ObservableObject {
   private var forceStopDeadline: DispatchWorkItem?
   private var runningSessionID: UUID?
 
+  /// `~/Documents/DeepSeek Harness`, created on first use. Used only when no
+  /// workspace has ever been chosen — keeps `workspace` non-nil (and
+  /// `canSend` usable) without forcing a file-picker dialog before the very
+  /// first message. The Host registers it as a real workspace the first time
+  /// `newSession()` creates a session with this cwd, same as it already does
+  /// for a workspace restored from UserDefaults.
+  private static func defaultWorkspaceURL() -> URL? {
+    guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+    let url = documents.appendingPathComponent("DeepSeek Harness", isDirectory: true)
+    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+  }
+
   init() {
     if let path = UserDefaults.standard.string(forKey: workspaceKey), FileManager.default.fileExists(atPath: path) {
       workspace = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+    } else if let defaultURL = Self.defaultWorkspaceURL() {
+      workspace = defaultURL
+      UserDefaults.standard.set(defaultURL.path, forKey: workspaceKey)
     }
     apiKey = ProcessInfo.processInfo.environment["RELAY_API_KEY"] ?? ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"] ?? ""
     baseURL = ProcessInfo.processInfo.environment["DEEPSEEK_BASE_URL"] ?? ""
@@ -386,11 +402,15 @@ final class HarnessController: ObservableObject {
     var id: String { workspace?.workspaceId ?? "__ungrouped__" }
   }
 
-  /// `hostSessions` grouped by which host workspace's `sessionIds` claims
-  /// each one, current workspace first — see
-  /// .agents/notes/proposed/architecture/2026-08-17-ocean-design-system.md.
-  /// A session not claimed by any workspace falls into an "其他" group
-  /// rather than being dropped.
+  /// `hostSessions` grouped by matching each session's own working directory
+  /// (`DSHSessionSummary.cwd`) against each workspace's folder path — see
+  /// .agents/notes/implemented/architecture/2026-08-17-ocean-design-system.md.
+  /// Not `DSHWorkspaceView.sessionIds`: a parallel investigation into the same
+  /// grouping feature checked a real `workspace.json` on disk and found that
+  /// field empty even for a workspace with sessions under it, so the Host
+  /// isn't maintaining that list in practice — `cwd` is populated per-session
+  /// and is the reliable signal. A session whose `cwd` doesn't match any
+  /// known workspace falls into an "其他" group rather than being dropped.
   var sessionGroups: [WorkspaceSessionGroup] {
     let visible = hostSessions.filter { $0.origin != "subagent" }
     guard !hostWorkspaces.isEmpty else {
@@ -398,23 +418,23 @@ final class HarnessController: ObservableObject {
     }
     var claimed = Set<String>()
     var groups: [WorkspaceSessionGroup] = hostWorkspaces.compactMap { ws in
-      let ids = Set(ws.sessionIds)
-      let members = visible.filter { ids.contains($0.sessionId) }.sorted { $0.updatedAt > $1.updatedAt }
+      let members = visible.filter { $0.cwd == ws.path }.sorted { $0.updatedAt > $1.updatedAt }
       guard !members.isEmpty else { return nil }
       members.forEach { claimed.insert($0.sessionId) }
       return WorkspaceSessionGroup(workspace: ws, sessions: members)
     }
     let orphans = visible.filter { !claimed.contains($0.sessionId) }.sorted { $0.updatedAt > $1.updatedAt }
     if !orphans.isEmpty { groups.append(WorkspaceSessionGroup(workspace: nil, sessions: orphans)) }
-    // `workspace` is already standardized (see `registerWorkspace`/`init`);
-    // `DSHWorkspaceView.path` is a Host-echoed string that isn't guaranteed
-    // to match byte-for-byte (trailing slash, symlink resolution), so
-    // standardize it the same way before comparing — otherwise the current
-    // workspace's group silently falls out of "pinned first" ordering.
+    // `workspace` is a locally `.standardizedFileURL` path, not the raw
+    // Host-echoed `ws.path` string the grouping above compares against
+    // itself — normalize both sides here too, otherwise the current
+    // workspace's group can silently fall out of "pinned first" ordering
+    // (unlike the grouping match above, this compares a local URL against a
+    // Host string, so it needs the normalization the Host-to-Host match doesn't).
     let currentPath = workspace?.standardizedFileURL.path
     groups.sort { a, b in
-      let aCurrent = currentPath != nil && URL(fileURLWithPath: a.workspace?.path ?? "").standardizedFileURL.path == currentPath
-      let bCurrent = currentPath != nil && URL(fileURLWithPath: b.workspace?.path ?? "").standardizedFileURL.path == currentPath
+      let aCurrent = currentPath != nil && a.workspace.map { URL(fileURLWithPath: $0.path).standardizedFileURL.path } == currentPath
+      let bCurrent = currentPath != nil && b.workspace.map { URL(fileURLWithPath: $0.path).standardizedFileURL.path } == currentPath
       if aCurrent != bCurrent { return aCurrent }
       return (a.sessions.first?.updatedAt ?? 0) > (b.sessions.first?.updatedAt ?? 0)
     }
@@ -1548,17 +1568,26 @@ private struct Sidebar: View {
           Button(action: harness.refreshHostSnapshots) { Image(systemName: "arrow.clockwise") }.buttonStyle(.dshGhost)
           Text("\(harness.hostSessions.count > 0 ? harness.hostSessions.count : harness.sessions.count)").font(.system(size: 10.5)).foregroundStyle(DSHTheme.inkFaint)
         }
-        ScrollView {
-          LazyVStack(alignment: .leading, spacing: DSHSpace.s4) {
-            if !harness.hostSessions.isEmpty {
-              ForEach(harness.sessionGroups) { group in
-                VStack(alignment: .leading, spacing: 3) {
-                  Text(group.workspace?.title ?? "其他").dshSectionLabel().padding(.leading, 2)
-                  ForEach(group.sessions) { session in SidebarSessionRow(session: session) }
+        if harness.hostSessions.isEmpty && harness.sessions.isEmpty {
+          SidebarEmptySessionState()
+        } else {
+          ScrollView {
+            LazyVStack(alignment: .leading, spacing: DSHSpace.s4) {
+              if !harness.hostSessions.isEmpty {
+                let groups = harness.sessionGroups
+                // Degrade to a flat list with no section labels when every
+                // session landed in the single headerless "其他" bucket —
+                // don't show grouping chrome when there's nothing to group.
+                let showHeaders = !(groups.count == 1 && groups[0].workspace == nil)
+                ForEach(groups) { group in
+                  VStack(alignment: .leading, spacing: 3) {
+                    if showHeaders { Text(group.workspace?.title ?? "其他").dshSectionLabel().padding(.leading, 2) }
+                    ForEach(group.sessions) { session in SidebarSessionRow(session: session) }
+                  }
                 }
+              } else {
+                ForEach(harness.sessions) { session in SidebarLocalSessionRow(session: session) }
               }
-            } else {
-              ForEach(harness.sessions) { session in SidebarLocalSessionRow(session: session) }
             }
           }
         }
@@ -1636,6 +1665,19 @@ private struct SidebarLocalSessionRow: View {
   }
 }
 
+private struct SidebarEmptySessionState: View {
+  @EnvironmentObject var harness: HarnessController
+  var body: some View {
+    VStack(spacing: DSHSpace.s2) {
+      Image(systemName: "bubble.left").font(.title2).foregroundStyle(DSHTheme.inkFaint)
+      Text("还没有会话").font(.caption).foregroundStyle(DSHTheme.inkFaint)
+      Button(action: harness.newSession) { Label("新会话", systemImage: "plus") }.buttonStyle(.dshSecondary)
+    }
+    .frame(maxWidth: .infinity)
+    .padding(.top, DSHSpace.s6)
+  }
+}
+
 private struct HeaderChip<Content: View>: View {
   let icon: String
   let label: String
@@ -1652,6 +1694,24 @@ private struct HeaderChip<Content: View>: View {
 
 private struct ConversationHeader: View {
   @EnvironmentObject var harness: HarnessController
+
+  /// The Host's live summary for the session currently shown — used only to
+  /// decide whether the preset control should be locked, see `presetLocked`.
+  private var currentSessionSummary: DSHSessionSummary? {
+    harness.hostSessions.first { $0.sessionId == harness.hostCurrentSessionID }
+  }
+  /// True once the Host has real presets to offer AND the displayed session
+  /// already has turn history — in that state `selectCurrentPreset` would be
+  /// rejected by the Host with `agent-preset-locked`, so the control must not
+  /// stay clickable and silently fail. The local `setPreset` path (used when
+  /// `hostPresets` is empty, i.e. it only affects the *next* new session) is
+  /// never rejected and stays untouched.
+  private var presetLocked: Bool {
+    guard !harness.hostPresets.isEmpty, let summary = currentSessionSummary else { return false }
+    return summary.blank == false
+  }
+  private var lockedPresetLabel: String { currentSessionSummary?.agentPreset ?? harness.preset.label }
+
   var body: some View {
     HStack(spacing: DSHSpace.s2) {
       VStack(alignment: .leading, spacing: 2) {
@@ -1665,9 +1725,17 @@ private struct ConversationHeader: View {
         Text(harness.workspace?.path ?? "选择工作区后开始").font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
       }
       Spacer()
-      HeaderChip(icon: "cpu", label: harness.preset.label) {
-        if harness.hostPresets.isEmpty { ForEach(HarnessController.Preset.allCases) { p in Button(p.label) { harness.setPreset(p) } } }
-        else { ForEach(harness.hostPresets.filter { $0.broken == nil }) { p in Button(p.name ?? p.id) { harness.selectCurrentPreset(p.id) } } }
+      if presetLocked {
+        HStack(spacing: 6) { Image(systemName: "lock.fill").font(.system(size: 11)); Text(lockedPresetLabel).font(.system(size: 11.5)) }
+          .padding(.horizontal, DSHSpace.s3).padding(.vertical, 6)
+          .background(DSHTheme.warmSoft, in: Capsule())
+          .foregroundStyle(DSHTheme.warm)
+          .help("会话已开始运行，Agent Preset 无法再切换（Host 会拒绝：agent-preset-locked）")
+      } else {
+        HeaderChip(icon: "cpu", label: harness.preset.label) {
+          if harness.hostPresets.isEmpty { ForEach(HarnessController.Preset.allCases) { p in Button(p.label) { harness.setPreset(p) } } }
+          else { ForEach(harness.hostPresets.filter { $0.broken == nil }) { p in Button(p.name ?? p.id) { harness.selectCurrentPreset(p.id) } } }
+        }
       }
       HeaderChip(icon: "lock.shield", label: harness.permission.label) {
         ForEach(HarnessController.PermissionMode.allCases) { p in Button(p.label) { harness.setPermission(p) } }
@@ -1695,16 +1763,33 @@ private struct ConversationView: View {
           if harness.historyHasMore && harness.subagentTranscript == nil {
             Button("载入更早消息", action: harness.loadOlderHistory).buttonStyle(.dshSecondary).frame(maxWidth: .infinity)
           }
-          ForEach(harness.displayedSession?.messages ?? []) { message in
-            VStack(alignment: .leading, spacing: DSHSpace.s2) {
-              if let reasoning = message.reasoning { ReasoningBlock(text: reasoning) }
-              MessageBubble(message: message)
-            }.id(message.id)
+          let messages = harness.displayedSession?.messages ?? []
+          if messages.isEmpty {
+            ConversationEmptyState()
+          } else {
+            ForEach(messages) { message in
+              VStack(alignment: .leading, spacing: DSHSpace.s2) {
+                if let reasoning = message.reasoning { ReasoningBlock(text: reasoning) }
+                MessageBubble(message: message)
+              }.id(message.id)
+            }
           }
-        }.padding(DSHSpace.s6)
+        }.frame(maxWidth: .infinity).padding(DSHSpace.s6)
       }
       .onChange(of: harness.displayedSession?.messages) { _, messages in if let last = messages?.last { proxy.scrollTo(last.id, anchor: .bottom) } }
     }
+  }
+}
+
+private struct ConversationEmptyState: View {
+  var body: some View {
+    VStack(spacing: DSHSpace.s2) {
+      Image(systemName: "bubble.left").font(.system(size: 26)).foregroundStyle(DSHTheme.inkFaint)
+      Text("还没有消息").font(.callout).foregroundStyle(DSHTheme.inkFaint)
+      Text("在下方输入内容开始对话").font(.caption).foregroundStyle(DSHTheme.inkFaint)
+    }
+    .frame(maxWidth: .infinity)
+    .padding(.top, DSHSpace.s7)
   }
 }
 
@@ -1754,9 +1839,13 @@ private struct MessageBubble: View {
       if message.role != .user { Spacer(minLength: 180) }
     }
   }
+  // Role is already carried by alignment (user right, assistant/system left)
+  // and by the background depth step below — the label doesn't also need to
+  // be in brand color on every single message, that reads as noisy over a
+  // long conversation. Color here stays reserved for state, not decoration.
   private var label: String { switch message.role { case .user: "你"; case .assistant: "DSH"; case .system: "系统" } }
-  private var labelTint: Color { message.role == .user ? DSHTheme.accent : message.role == .assistant ? DSHTheme.accent : DSHTheme.inkFaint }
-  private var background: Color { message.role == .user ? DSHTheme.accentSoft : message.role == .assistant ? DSHTheme.surface : DSHTheme.surfaceTint }
+  private var labelTint: Color { DSHTheme.inkFaint }
+  private var background: Color { message.role == .user ? DSHTheme.surfaceTint2 : message.role == .assistant ? DSHTheme.surface : DSHTheme.surfaceTint }
 }
 
 private struct Composer: View {
