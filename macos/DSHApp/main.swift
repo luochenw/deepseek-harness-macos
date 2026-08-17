@@ -2479,9 +2479,17 @@ private struct WaveBand: Shape {
 /// waves) at time `t` — the shared artwork behind the animated running
 /// indicator and the static end-of-turn marker. Colors are the icon
 /// generator's constants — keep the two in sync when the icon changes.
+/// Drawn at its native 26 pt then scaled to `size`, so the wave/moon
+/// constants never need retuning when the display size changes.
 private struct WaveIconArt: View {
   let t: Double
+  var size: CGFloat = 18
   var body: some View {
+    artwork
+      .scaleEffect(size / 26)
+      .frame(width: size, height: size)
+  }
+  private var artwork: some View {
     ZStack {
       RoundedRectangle(cornerRadius: 6.5, style: .continuous)
         .fill(LinearGradient(
