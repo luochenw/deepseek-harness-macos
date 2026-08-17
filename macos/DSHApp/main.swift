@@ -443,7 +443,11 @@ final class HarnessController: ObservableObject {
   struct WorkspaceSessionGroup: Identifiable {
     let workspace: DSHWorkspaceView?
     let sessions: [DSHSessionSummary]
-    var id: String { workspace?.workspaceId ?? "__ungrouped__" }
+    /// Directory-derived header for sessions whose cwd matches no registered
+    /// workspace — grouping stays meaningful even when the registry shrinks.
+    var fallbackTitle: String?
+    var id: String { workspace?.workspaceId ?? "cwd:\(fallbackTitle ?? "其他")" }
+    var title: String { workspace?.title ?? fallbackTitle ?? "其他" }
   }
 
   /// `hostSessions` grouped by matching each session's own working directory
@@ -467,8 +471,19 @@ final class HarnessController: ObservableObject {
       members.forEach { claimed.insert($0.sessionId) }
       return WorkspaceSessionGroup(workspace: ws, sessions: members)
     }
-    let orphans = visible.filter { !claimed.contains($0.sessionId) }.sorted { $0.updatedAt > $1.updatedAt }
-    if !orphans.isEmpty { groups.append(WorkspaceSessionGroup(workspace: nil, sessions: orphans)) }
+    // Orphans bucket by their own directory name instead of one flat "其他":
+    // deleting registry entries must not make the sidebar's分类 disappear.
+    let orphans = visible.filter { !claimed.contains($0.sessionId) }
+    let orphanBuckets = Dictionary(grouping: orphans) { session in
+      session.cwd.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "其他"
+    }
+    for (folderName, members) in orphanBuckets.sorted(by: { ($0.value.first?.updatedAt ?? 0) > ($1.value.first?.updatedAt ?? 0) }) {
+      groups.append(WorkspaceSessionGroup(
+        workspace: nil,
+        sessions: members.sorted { $0.updatedAt > $1.updatedAt },
+        fallbackTitle: folderName
+      ))
+    }
     // `workspace` is a locally `.standardizedFileURL` path, not the raw
     // Host-echoed `ws.path` string the grouping above compares against
     // itself — normalize both sides here too, otherwise the current
@@ -1904,12 +1919,13 @@ private struct Sidebar: View {
               if !harness.hostSessions.isEmpty {
                 let groups = harness.sessionGroups
                 // Degrade to a flat list with no section labels when every
-                // session landed in the single headerless "其他" bucket —
-                // don't show grouping chrome when there's nothing to group.
-                let showHeaders = !(groups.count == 1 && groups[0].workspace == nil)
+                // session landed in one bucket with no name to show — with
+                // directory-derived fallback titles that's nearly never, so
+                // the分类 headers stay visible regardless of registry churn.
+                let showHeaders = !(groups.count == 1 && groups[0].workspace == nil && groups[0].fallbackTitle == nil)
                 ForEach(groups) { group in
                   VStack(alignment: .leading, spacing: 3) {
-                    if showHeaders { Text(group.workspace?.title ?? "其他").dshSectionLabel().padding(.leading, 2) }
+                    if showHeaders { Text(group.title).dshSectionLabel().padding(.leading, 2) }
                     ForEach(group.sessions) { session in SidebarSessionRow(session: session) }
                   }
                 }

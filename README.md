@@ -2,9 +2,16 @@
 
 English | [中文](README.zh.md)
 
+[![CI](https://github.com/luochenw/deepseek-harness-macos/actions/workflows/ci.yml/badge.svg)](https://github.com/luochenw/deepseek-harness-macos/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/luochenw/deepseek-harness-macos)](https://github.com/luochenw/deepseek-harness-macos/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)
+
 An independent, **unofficial** SwiftUI/AppKit native macOS client for [DSH](https://github.com/deepseek-ai/deepseek-harness) (DeepSeek Harness) — not a WebView or Electron wrapper, and not affiliated with or endorsed by DeepSeek AI. The window, workspace picker, session view, composer, run state, folder actions, settings panels, menu bar, and system notifications are all built with native macOS APIs.
 
 Agent reasoning, tools, MCP, terminal, filesystem, and subagents are still provided by the bundled DSH runtime. The app embeds Node.js and a complete DSH runtime, so it doesn't depend on a system-wide Node or `dsh` install to run.
+
+![Main window: native three-pane UI running a task in a sample workspace](docs/screenshots/hero.png)
 
 ## Native features
 
@@ -18,6 +25,22 @@ Agent reasoning, tools, MCP, terminal, filesystem, and subagents are still provi
 - Bundles a universal Node.js + DSH runtime — no dependency on a global npm install or the Finder's `PATH`.
 
 See [macos/WEB_PARITY.md](macos/WEB_PARITY.md) for the living matrix of what's implemented against the web client, what's native-only, and what's still open.
+
+| Live subagent overlay | Native settings |
+| --- | --- |
+| ![Subagent transcripts stream in an overlay on the conversation](docs/screenshots/subagent.png) | ![Settings: model catalog and custom endpoint configurations](docs/screenshots/settings.png) |
+
+## Install
+
+Grab the zip from the [latest release](https://github.com/luochenw/deepseek-harness-macos/releases/latest) (Apple Silicon, macOS 13+), unzip, and drag **DeepSeek Harness.app** into `/Applications`.
+
+> **Gatekeeper:** release builds are ad-hoc signed, not notarized — macOS blocks the first launch. Open **System Settings → Privacy & Security** and click **Open Anyway**, or run:
+>
+> ```bash
+> xattr -rd com.apple.quarantine "/Applications/DeepSeek Harness.app"
+> ```
+>
+> Prefer not to trust an un-notarized binary? Build from source below — one command, and the result is self-contained.
 
 ## Build
 
