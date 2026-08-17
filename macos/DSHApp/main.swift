@@ -84,6 +84,10 @@ final class HarnessController: ObservableObject {
     var messages: [Message]
     var isRunning = false
     var hasUnread = false
+    /// The backing persistent Host session, once known — the durable join
+    /// key for event routing and row reuse (title matching is only the
+    /// fallback for rows created before the id existed).
+    var hostSessionId: String?
   }
 
   struct PendingApproval: Identifiable {
@@ -577,6 +581,22 @@ final class HarnessController: ObservableObject {
     case "session/event":
       guard let sessionID = frame["sessionId"] as? String,
             let event = frame["event"] as? [String: Any] else { return }
+      // Turn boundaries route for EVERY session before the current-session
+      // filter below: the sidebar's live dot reads `hostSessions[i].running`
+      // and a background row's own flag/unread must move without the session
+      // being displayed — sessions run concurrently on the Host and the UI
+      // used to drop these frames wholesale.
+      if let kind = event["type"] as? String, kind == "turn/start" || kind == "turn/end" {
+        let running = kind == "turn/start"
+        if let i = hostSessions.firstIndex(where: { $0.sessionId == sessionID }) { hostSessions[i].running = running }
+        if sessionID != hostCurrentSessionID, let row = sessions.firstIndex(where: { $0.hostSessionId == sessionID }) {
+          sessions[row].isRunning = running
+          if !running {
+            sessions[row].hasUnread = true
+            sessions[row].updatedAt = Date()
+          }
+        }
+      }
       if let address = activeSubagentAddress, sessionID == address.childSessionId {
         applyLiveSubagentEvent(event)
       } else if sessionID == hostCurrentSessionID {
@@ -589,6 +609,9 @@ final class HarnessController: ObservableObject {
             let key = frame["key"] as? String, let value = frame["value"] else { return }
       applyProjection(key: key, value: value)
     case "session/queue":
+      // Scope to the displayed session — with concurrent sessions, another
+      // session's queue push must not overwrite this composer's dock.
+      if let sid = frame["sessionId"] as? String, sid != hostCurrentSessionID { return }
       if let items = frame["items"] as? [[String: Any]] {
         queueItems = items.compactMap { item in
           guard let id = item["id"] as? String else { return nil }
@@ -1091,6 +1114,9 @@ final class HarnessController: ObservableObject {
 
   /// Back to the launch default page: nothing selected, empty-state hero in
   /// the conversation pane, and the next send lazily creates a fresh session.
+  /// Every session-scoped global resets too — a blank new conversation used
+  /// to keep the previous session's running flag (stop button, blocked
+  /// send) and usage figures.
   private func clearToDefaultPage() {
     hostCurrentSessionID = nil
     selectedSessionID = nil
@@ -1099,6 +1125,16 @@ final class HarnessController: ObservableObject {
     subagentPath = []
     subagentTranscript = nil
     selectedWorkflowRunID = nil
+    isRunning = false
+    todos = []
+    hostPlanActive = false
+    goal = nil
+    tokenUsage = nil
+    contextPressure = nil
+    sessionStats = nil
+    queueItems = []
+    runNotice = nil
+    retryNotice = nil
   }
 
   /// Create the persistent Host session backing the currently-selected local
@@ -1127,6 +1163,7 @@ final class HarnessController: ObservableObject {
         await MainActor.run {
           self.hostCurrentSessionID = created.sessionId
           if let index = self.selectedSessionIndex {
+            self.sessions[index].hostSessionId = created.sessionId
             self.sessions[index].messages = [Message(role: .system, text: "已连接到持久 DSH 会话。")]}
           self.refreshHostSnapshots()
         }
@@ -1151,7 +1188,12 @@ final class HarnessController: ObservableObject {
 
   func selectSession(_ id: UUID) {
     selectedSessionID = id
-    if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].hasUnread = false }
+    if let index = sessions.firstIndex(where: { $0.id == id }) {
+      sessions[index].hasUnread = false
+      // The global flag follows the selected row — a placeholder row
+      // switched to while another session runs must not inherit its state.
+      isRunning = sessions[index].isRunning
+    }
   }
 
   func openHostSession(_ summary: DSHSessionSummary) {
@@ -1160,8 +1202,19 @@ final class HarnessController: ObservableObject {
     subagentPath = []
     subagentTranscript = nil
     selectedWorkflowRunID = nil
-    if let existing = sessions.firstIndex(where: { $0.title == summary.title && $0.workspaceName == (summary.cwd ?? "") }) {
+    // Durable host-id match first; the legacy title+workspace pair only
+    // rescues rows created before the id existed (renames broke it).
+    if let existing = sessions.firstIndex(where: { $0.hostSessionId == summary.sessionId })
+      ?? sessions.firstIndex(where: { $0.hostSessionId == nil && $0.title == summary.title && $0.workspaceName == (summary.cwd ?? "") }) {
+      sessions[existing].hostSessionId = summary.sessionId
+      sessions[existing].hasUnread = false
       selectedSessionID = sessions[existing].id
+      // Re-selecting an already-open row previously kept every
+      // session-scoped global (running flag, usage strip, todos, goal,
+      // queue…) from whichever session was displayed before — the composer
+      // wore the old session's state on the new one. The row's own flag
+      // wins over the snapshot: mux turn events keep it fresher.
+      syncSessionScopedState(from: summary, rowRunning: sessions[existing].isRunning)
       return
     }
     let local = Session(
@@ -1170,23 +1223,30 @@ final class HarnessController: ObservableObject {
       updatedAt: Date(timeIntervalSince1970: summary.updatedAt / 1000),
       messages: [Message(role: .system, text: "已打开持久 DSH 会话。历史事件、工具、审批与子代理将从 Host 流同步。")],
       isRunning: summary.running,
+      hostSessionId: summary.sessionId,
     )
     sessions.insert(local, at: 0)
     selectedSessionID = local.id
-    // Attaching to a session that is already mid-turn (app relaunch, or
-    // opening a running session from the sidebar) must arm the *global*
-    // running flag too — the composer's stop button and the transcript
-    // tail's animation both read it, and until now only a local send()
-    // ever set it, so a resumed run showed the settled UI while streaming.
-    isRunning = summary.running
+    syncSessionScopedState(from: summary, rowRunning: summary.running)
+    status = summary.running ? "持久会话正在运行" : "正在载入持久会话"
+    loadHistory(sessionId: summary.sessionId, localSessionID: local.id)
+  }
+
+  /// Session-scoped globals follow the displayed session. Attaching to a
+  /// mid-turn session (relaunch, sidebar switch) must arm the *global*
+  /// running flag — the composer's stop button and the transcript tail
+  /// animation read it, and only a local send() used to set it.
+  private func syncSessionScopedState(from summary: DSHSessionSummary, rowRunning: Bool) {
+    isRunning = rowRunning || summary.running
     todos = summary.projections?.values.todos ?? []
     hostPlanActive = summary.projections?.values.plan?.active ?? false
     goal = summary.projections?.values.goal
     tokenUsage = summary.projections?.values.tokenUsage
     contextPressure = summary.projections?.values.contextPressure
     sessionStats = summary.projections?.values.sessionStats
-    status = summary.running ? "持久会话正在运行" : "正在载入持久会话"
-    loadHistory(sessionId: summary.sessionId, localSessionID: local.id)
+    queueItems = []  // repopulated by this session's own queue push
+    runNotice = nil
+    retryNotice = nil
     loadSubagents(parentSessionId: summary.sessionId)
     refreshSessionModels()
     loadSkills(sessionId: summary.sessionId)

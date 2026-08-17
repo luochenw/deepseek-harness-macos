@@ -39,7 +39,9 @@ struct DSHHostDescription: Decodable {
 struct DSHSessionSummary: Decodable, Identifiable {
   let sessionId: String
   let updatedAt: Double
-  let running: Bool
+  /// Mutable: the mux stream's turn/start / turn/end frames keep this live
+  /// between snapshot refreshes (the sidebar dot reads it).
+  var running: Bool
   let blank: Bool
   let cwd: String?
   let agentPreset: String?
