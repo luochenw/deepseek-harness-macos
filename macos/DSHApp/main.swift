@@ -2071,10 +2071,11 @@ private struct MessageBubble: View {
       }
     case .assistant:
       VStack(alignment: .leading, spacing: 7) {
-        Text(message.text.isEmpty ? "正在思考…" : message.text)
-          .textSelection(.enabled).font(.system(.body, design: .rounded))
-          .foregroundStyle(message.text.isEmpty ? DSHTheme.inkFaint : DSHTheme.ink)
-          .frame(maxWidth: 760, alignment: .leading)
+        if message.text.isEmpty {
+          Text("正在思考…").font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
+        } else {
+          MarkdownText(text: message.text).frame(maxWidth: 760, alignment: .leading)
+        }
         if let attachment = message.attachment { AttachmentPreview(ref: attachment) }
         if let messageId = message.hostMessageId { FeedbackBar(messageId: messageId) }
       }
@@ -2223,9 +2224,12 @@ private struct Composer: View {
           .frame(minHeight: 54, maxHeight: 140)
           .overlay(alignment: .topLeading) {
             if harness.draft.isEmpty {
+              // Insets must mirror TextEditor's own text origin (NSTextView:
+              // textContainerInset 0, lineFragmentPadding 5) or the insertion
+              // point and this placeholder sit visibly misaligned.
               Text(harness.hostPlanActive ? "描述任务以生成计划" : "描述你想要构建的内容")
                 .font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
-                .padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
+                .padding(.leading, 5).allowsHitTesting(false)
             }
           }
         if let image = harness.draftImage {
