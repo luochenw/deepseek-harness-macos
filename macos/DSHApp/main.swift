@@ -1268,15 +1268,30 @@ final class HarnessController: ObservableObject {
 
 
   func selectCurrentModel(provider: String, model: String, reasoning: String? = nil) {
-    self.provider = provider
-    self.model = model
-    if let reasoning { self.reasoningEffort = reasoning }
     guard let hostClient, let sessionId = hostCurrentSessionID else { return }
+    let effort = reasoning ?? reasoningEffort
     Task {
       do {
-        try await hostClient.selectModel(sessionId: sessionId, provider: provider, model: model, reasoningEffort: reasoning ?? self.reasoningEffort)
-        await MainActor.run { self.status = "已切换到 \(provider) / \(model)" }
-      } catch { await MainActor.run { self.appendSystem("模型切换失败：\(error.localizedDescription)") } }
+        try await hostClient.selectModel(sessionId: sessionId, provider: provider, model: model, reasoningEffort: effort)
+        // Only reflect the switch locally once the Host actually accepts it —
+        // setting these before the round-trip left stale/wrong state showing
+        // (e.g. reasoningEffort flipped to "high" locally even when the Host
+        // rejected that level for this model).
+        await MainActor.run {
+          self.provider = provider
+          self.model = model
+          if let reasoning { self.reasoningEffort = reasoning }
+          self.status = "已切换到 \(provider) / \(model)"
+        }
+      } catch {
+        await MainActor.run {
+          if let rpc = error as? DSHRPCError, rpc.code == "UNSUPPORTED_REASONING_EFFORT" {
+            self.status = "当前模型不支持这个推理强度"
+          } else {
+            self.status = "模型切换失败：\(error.localizedDescription)"
+          }
+        }
+      }
     }
   }
 
