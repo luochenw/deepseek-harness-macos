@@ -2173,9 +2173,22 @@ private struct ConversationHeader: View {
   }
 }
 
+/// Distance from the transcript's content bottom to the viewport bottom —
+/// see ConversationView.pinnedToBottom.
+private struct ConversationBottomDistanceKey: PreferenceKey {
+  static var defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 private struct ConversationView: View {
   @EnvironmentObject var harness: HarnessController
+  /// Follow-mode: auto-scroll tracks streaming output only while the user
+  /// is already parked near the bottom. Scrolling up breaks the pin (so
+  /// reading history during a running turn isn't yanked back down);
+  /// returning to the bottom re-engages it.
+  @State private var pinnedToBottom = true
   var body: some View {
+    GeometryReader { viewport in
     ScrollViewReader { proxy in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: DSHSpace.s4) {
@@ -2214,8 +2227,32 @@ private struct ConversationView: View {
           // AppKit-level because "始终显示滚动条" otherwise forces the
           // thick legacy bar.
           .dshThinScrollers()
+          // Content-bottom-to-viewport-bottom distance, measured on every
+          // layout pass: ~0 when parked at the bottom, grows as the user
+          // scrolls up. Drives the follow-mode pin.
+          .background(GeometryReader { content in
+            Color.clear.preference(
+              key: ConversationBottomDistanceKey.self,
+              value: content.frame(in: .named("dshConversationScroll")).maxY - viewport.size.height)
+          })
       }
-      .onChange(of: harness.displayedSession?.messages) { _, messages in if let last = messages?.last { proxy.scrollTo(last.id, anchor: .bottom) } }
+      .coordinateSpace(name: "dshConversationScroll")
+      .onPreferenceChange(ConversationBottomDistanceKey.self) { distance in
+        pinnedToBottom = distance < 80
+      }
+      .onChange(of: harness.displayedSession?.messages) { _, messages in
+        guard let last = messages?.last else { return }
+        // Follow only while pinned — except the user's own send, which
+        // always snaps down so the new turn starts in view.
+        if pinnedToBottom || last.role == .user { proxy.scrollTo(last.id, anchor: .bottom) }
+      }
+      // Switching sessions (or opening a subagent transcript) resets the
+      // pin — a freshly opened transcript always lands at its bottom.
+      .onChange(of: harness.displayedSession?.id) { _, _ in
+        pinnedToBottom = true
+        if let last = harness.displayedSession?.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+      }
+    }
     }
   }
 
