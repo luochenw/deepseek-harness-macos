@@ -10,7 +10,7 @@ extension HarnessController {
         async let providersTask = hostClient.providers()
         async let settingsTask = hostClient.settings()
         let (providers, settings) = try await (providersTask, settingsTask)
-        let refs = Self.credentialRefs(providers: providers, settings: settings)
+        let refs = Self.credentialReferences(in: settings)
         let credentials = try await hostClient.credentials(refs: refs)
         await MainActor.run {
           self.configurableProviders = providers
@@ -51,7 +51,7 @@ extension HarnessController {
               self.status = "提供方已保存"
               self.showProviderAuthoring = false
               completion(.success(()))
-              self.refreshProviderConfiguration()
+              self.refreshModelConfiguration()
             }
           } catch {
             await MainActor.run { completion(.failure(error)) }
@@ -66,18 +66,4 @@ extension HarnessController {
     )
   }
 
-  private static func credentialRefs(providers: [DSHConfigurableProvider], settings: DSHSettingsDescription) -> [String] {
-    let namespaces = Dictionary(uniqueKeysWithValues: settings.namespaces.map { ($0.ns, $0) })
-    let refs = providers.compactMap { provider -> String? in
-      guard let namespace = namespaces[provider.settingsNs],
-            let profile = namespace.value.objectValue(at: provider.settingsPath),
-            let ref = profile.apiKeyEnv, !ref.isEmpty else { return nil }
-      return ref
-    }
-    // LOCAL_RELAY_API_KEY/RELAY_API_KEY/DEEPSEEK_API_KEY are the built-in
-    // default route's credential refs. No provider profile references them
-    // explicitly, so without hardcoding them here the default route's
-    // credential-configured badge never lights up in the UI.
-    return Array(Set(refs + ["LOCAL_RELAY_API_KEY", "RELAY_API_KEY", "DEEPSEEK_API_KEY"])).sorted()
-  }
 }

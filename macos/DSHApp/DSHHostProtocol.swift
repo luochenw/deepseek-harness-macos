@@ -212,8 +212,9 @@ actor DSHHostClient {
     try await call("session.models", payload: DSHSessionIDModelPayload(sessionId: sessionId), as: DSHSessionModels.self)
   }
 
-  func selectModel(sessionId: String, provider: String, model: String, reasoningEffort: String? = nil) async throws {
-    _ = try await call("session.selectModel", payload: DSHSelectModelPayload(sessionId: sessionId, provider: provider, model: model, reasoningEffort: reasoningEffort), as: DSHSelectModelResult.self)
+  @discardableResult
+  func selectModel(sessionId: String, provider: String, model: String, reasoningEffort: String? = nil) async throws -> DSHSelectedModel {
+    try await call("session.selectModel", payload: DSHSelectModelPayload(sessionId: sessionId, provider: provider, model: model, reasoningEffort: reasoningEffort), as: DSHSelectModelResult.self).selected
   }
 
   func renameSession(_ sessionId: String, title: String) async throws -> String {

@@ -6,9 +6,8 @@ private let appName = "DeepSeek Harness"
 private let workspaceKey = "dsh.workspace"
 private let modelKey = "dsh.model"
 private let providerKey = "dsh.provider"
+private let reasoningEffortKey = "dsh.reasoningEffort"
 private let presetKey = "dsh.preset"
-private let defaultProvider = "relay"
-private let defaultModel = "gpt-5.6-terra"
 
 @main
 struct DSHNativeApp: App {
@@ -292,11 +291,10 @@ final class HarnessController: ObservableObject {
   @Published var renameDraft = ""
   @Published var searchResults: [DSHSessionSearchItem] = []
   @Published var searchHasMore = false
-  @Published var showDetails = true
+  @Published var showDetails = false
   @Published var selectedTool: ToolActivity?
-  @Published var apiKey = ""
-  @Published var provider = defaultProvider
-  @Published var model = defaultModel
+  @Published var provider = ""
+  @Published var model = ""
   @Published var reasoningEffort = "high"
   @Published var preset: Preset = .code
   @Published var activeTools: [ToolActivity] = []
@@ -366,9 +364,9 @@ final class HarnessController: ObservableObject {
       workspace = defaultURL
       UserDefaults.standard.set(defaultURL.path, forKey: workspaceKey)
     }
-    apiKey = ProcessInfo.processInfo.environment["RELAY_API_KEY"] ?? ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"] ?? ""
-    provider = UserDefaults.standard.string(forKey: providerKey) ?? defaultProvider
-    model = UserDefaults.standard.string(forKey: modelKey) ?? defaultModel
+    provider = UserDefaults.standard.string(forKey: providerKey) ?? ""
+    model = UserDefaults.standard.string(forKey: modelKey) ?? ""
+    reasoningEffort = UserDefaults.standard.string(forKey: reasoningEffortKey) ?? "high"
     preset = Preset(rawValue: UserDefaults.standard.string(forKey: presetKey) ?? Preset.code.rawValue) ?? .code
     seedConfigurationFromUserDSHIfNeeded()
     nativeAlerts.attach()
@@ -385,13 +383,43 @@ final class HarnessController: ObservableObject {
   /// overlays the selected top-level session, never replaces it in `sessions`.
   var displayedSession: Session? { subagentTranscript ?? selectedSession }
   var hasCredential: Bool {
-    if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
-    return FileManager.default.fileExists(atPath: dshHome.appendingPathComponent(".credentials.yaml").path)
+    guard let settings = settingsDescription else { return false }
+    return Self.llmCredentialReferences(in: settings).contains { credentialStates[$0]?.configured == true }
   }
   /// A one-shot subagent's transcript is a frozen, read-only overlay — see
   /// the subagent-transcript-redesign Agent Note.
   var isViewingReadOnlySubagent: Bool { subagentTranscript != nil && activeSubagentAddress?.mode != "continuable" }
   var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && workspace != nil && hasCredential && !isRunning && !isViewingReadOnlySubagent }
+  /// The currently-selected model's catalog entry, when the live catalog
+  /// lists it. Carries the adapter-owned reasoning metadata (nil for a model
+  /// with no selectable effort).
+  var currentModelEntry: DSHModelCatalogModel? {
+    availableModels.first(where: { $0.id == provider })?.models.first(where: { $0.id == model })
+  }
+  /// Friendly "<group> / <model> · <effort>" label for the composer/settings
+  /// model picker — falls back to the raw ids when the live catalog hasn't
+  /// loaded yet (or no longer lists the currently-selected pair). The effort
+  /// suffix appears only when the model actually advertises selectable
+  /// efforts — printing "· high" next to a model whose adapter only accepts
+  /// "off" was part of the "界面一个说法、Host 另一个说法" bug.
+  var currentModelLabel: String {
+    guard !provider.isEmpty, !model.isEmpty else { return "Host 默认模型" }
+    if let group = availableModels.first(where: { $0.id == provider }), let match = group.models.first(where: { $0.id == model }) {
+      let suffix = match.reasoning == nil ? "" : " · \(reasoningEffort)"
+      return "\(group.name) / \(match.name)\(suffix)"
+    }
+    return "\(provider) / \(model)"
+  }
+  /// Clamp a requested effort to what the target model actually advertises:
+  /// the requested level when offered, else the adapter default, else the
+  /// first offered level; nil (omit the field on the wire) for a model with
+  /// no reasoning metadata — pi-ai rejects any named level beyond "off" there.
+  func advertisedEffort(provider: String, model: String, requested: String?) -> String? {
+    guard let entry = availableModels.first(where: { $0.id == provider })?.models.first(where: { $0.id == model }),
+          let reasoning = entry.reasoning else { return nil }
+    if let requested, reasoning.efforts.contains(where: { $0.id == requested }) { return requested }
+    return reasoning.defaultEffort ?? reasoning.efforts.first?.id
+  }
 
   struct WorkspaceSessionGroup: Identifiable {
     let workspace: DSHWorkspaceView?
@@ -439,9 +467,9 @@ final class HarnessController: ObservableObject {
   }
 
   /// Seed the app-local DSH home from the user's existing ~/.dsh configuration
-  /// when the app home has no credentials yet. This makes the bundled Host work
-  /// with the same Relay/DeepSeek providers the user already configured, so a
-  /// fresh install can send prompts without re-entering keys.
+  /// when the app home has no credentials yet. Existing routes and secrets are
+  /// preserved verbatim; the native UI does not create a product-specific
+  /// default route for a new install.
   private func seedConfigurationFromUserDSHIfNeeded() {
     let fm = FileManager.default
     let userDSH = fm.homeDirectoryForCurrentUser.appendingPathComponent(".dsh", isDirectory: true)
@@ -456,14 +484,7 @@ final class HarnessController: ObservableObject {
         let target = appHome.appendingPathComponent(name)
         if fm.fileExists(atPath: source.path) { try fm.copyItem(at: source, to: target) }
       }
-      let profile = appHome.appendingPathComponent("profiles/headless", isDirectory: true)
-      try fm.createDirectory(at: profile, withIntermediateDirectories: true)
-      let patch = profile.appendingPathComponent("cordis.patch.yml")
-      if !fm.fileExists(atPath: patch.path) {
-        let content = "- id: agent-default-model\n  config:\n    provider: relay\n    model: ark/deepseek-v4-flash\n"
-        try content.write(to: patch, atomically: true, encoding: .utf8)
-      }
-      status = "已导入 ~/.dsh 的 Relay 配置"
+      status = "已导入 ~/.dsh 的模型配置"
     } catch {
       status = "导入 ~/.dsh 配置失败：\(error.localizedDescription)"
     }
@@ -575,8 +596,14 @@ final class HarnessController: ObservableObject {
     guard let kind = event["type"] as? String, let data = event["data"] as? [String: Any], let index = selectedSessionIndex else { return }
     switch kind {
     case "assistant/chunk":
+      // Anchor on whether the *last* message is already this turn's
+      // assistant reply, not "the last assistant message anywhere" — with
+      // no placeholder seeding a fresh bubble on send() (see send()'s
+      // comment), the previous turn's assistant message would otherwise
+      // still be the most recent assistant-role entry and silently absorb
+      // the new turn's first delta.
       if let chunk = data["chunk"] as? [String: Any], chunk["type"] as? String == "text-delta", let delta = chunk["textDelta"] as? String {
-        if let last = sessions[index].messages.lastIndex(where: { $0.role == .assistant }) { sessions[index].messages[last].text += delta }
+        if sessions[index].messages.last?.role == .assistant { sessions[index].messages[sessions[index].messages.count - 1].text += delta }
         else { sessions[index].messages.append(Message(role: .assistant, text: delta)) }
       }
     case "assistant/message":
@@ -665,7 +692,7 @@ final class HarnessController: ObservableObject {
     switch kind {
     case "assistant/chunk":
       if let chunk = data["chunk"] as? [String: Any], chunk["type"] as? String == "text-delta", let delta = chunk["textDelta"] as? String {
-        if let last = subagentTranscript?.messages.lastIndex(where: { $0.role == .assistant }) { subagentTranscript?.messages[last].text += delta }
+        if subagentTranscript?.messages.last?.role == .assistant, let count = subagentTranscript?.messages.count { subagentTranscript?.messages[count - 1].text += delta }
         else { subagentTranscript?.messages.append(Message(role: .assistant, text: delta)) }
       }
     case "assistant/message":
@@ -728,16 +755,6 @@ final class HarnessController: ObservableObject {
     }
   }
 
-  func saveCredential() {
-    let value = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-    let ref = provider == "relay" ? "RELAY_API_KEY" : "DEEPSEEK_API_KEY"
-    guard let hostClient, !value.isEmpty else { return }
-    Task {
-      do { try await hostClient.setCredential(ref: ref, value: value); await MainActor.run { self.apiKey = ""; self.status = "凭据已通过 DSH Host 保存"; self.refreshModelConfiguration() } }
-      catch { await MainActor.run { self.status = "保存凭据失败：\(error.localizedDescription)" } }
-    }
-  }
-
   func refreshSessionModels() {
     guard let hostClient, let sessionId = hostCurrentSessionID else { return }
     Task {
@@ -760,10 +777,24 @@ final class HarnessController: ObservableObject {
     Task {
       do {
         async let models = hostClient.models()
-        async let credentials = hostClient.credentials(refs: ["RELAY_API_KEY", "DEEPSEEK_API_KEY"])
         async let providers = hostClient.providers()
-        let (nextModels, nextCredentials, nextProviders) = try await (models, credentials, providers)
-        await MainActor.run { self.availableModels = nextModels; self.credentialStates = nextCredentials; self.configurableProviders = nextProviders }
+        async let settings = hostClient.settings()
+        let (nextModels, nextProviders, nextSettings) = try await (models, providers, settings)
+        let refs = Self.credentialReferences(in: nextSettings)
+        let credentials = try await hostClient.credentials(refs: refs)
+        await MainActor.run {
+          self.availableModels = nextModels
+          self.credentialStates = credentials
+          self.configurableProviders = nextProviders
+          self.settingsDescription = nextSettings
+          if !self.provider.isEmpty,
+             !nextModels.contains(where: { group in group.id == self.provider && group.models.contains(where: { $0.id == self.model }) }) {
+            self.provider = ""
+            self.model = ""
+            UserDefaults.standard.removeObject(forKey: providerKey)
+            UserDefaults.standard.removeObject(forKey: modelKey)
+          }
+        }
       } catch { await MainActor.run { self.status = "模型配置读取失败：\(error.localizedDescription)" } }
     }
   }
@@ -886,6 +917,19 @@ final class HarnessController: ObservableObject {
     guard let hostClient else { return }
     let cwd = workspace?.path
     let presetId = preset == .creator ? "cordis" : preset.rawValue
+    // Capture the composer's advertised selection before hopping off the main
+    // actor — `session.create` takes no model, so without an explicit
+    // `session.selectModel` right after, the Host silently runs its own
+    // config default (`agent-default-model` in the app-scoped DSH home) while
+    // the composer label keeps showing this local state. That mismatch is
+    // exactly the "picked GPT-5.6 Terra, Host errored about
+    // ark/deepseek-v4-flash" bug — see the composer-consolidation Agent Note.
+    let (chosenProvider, chosenModel) = (provider, model)
+    // Clamped, not raw `reasoningEffort`: pushing a level the model never
+    // advertised (the stored "high" against an effort-less relay model) would
+    // fail the whole selectModel call and leave the session on the config
+    // default — the very bug this push exists to fix.
+    let chosenEffort = advertisedEffort(provider: provider, model: model, requested: reasoningEffort)
     Task {
       do {
         let created = try await hostClient.createSession(cwd: cwd, agentPreset: presetId)
@@ -895,6 +939,16 @@ final class HarnessController: ObservableObject {
             self.sessions[index].messages = [Message(role: .system, text: "已连接到持久 DSH 会话。")]}
           self.refreshHostSnapshots()
         }
+        if !chosenProvider.isEmpty, !chosenModel.isEmpty {
+          do {
+            try await hostClient.selectModel(sessionId: created.sessionId, provider: chosenProvider, model: chosenModel, reasoningEffort: chosenEffort)
+          } catch {
+            await MainActor.run { self.appendSystem("新会话未能应用所选模型（\(chosenProvider) / \(chosenModel)）：\(error.localizedDescription)") }
+          }
+        }
+        // Sync back from the Host either way so the composer label reflects
+        // the session's real model, not an unconfirmed local wish.
+        await MainActor.run { self.refreshSessionModels() }
       } catch {
         await MainActor.run { self.appendSystem("持久会话创建失败：\(error.localizedDescription)") }
       }
@@ -1296,7 +1350,11 @@ final class HarnessController: ObservableObject {
     draftImage = nil
     let preview = image == nil ? text : "\(text)\n[图片附件：\(image!.url.lastPathComponent)]"
     sessions[sessionIndex].messages.append(Message(role: .user, text: preview))
-    sessions[sessionIndex].messages.append(Message(role: .assistant, text: "正在由持久 DSH Host 处理…"))
+    // No placeholder assistant bubble here — `assistant/chunk` (above) opens
+    // a fresh bubble itself on the first delta; a synchronous placeholder
+    // previously left either a glued-together "处理中…<real text>" bubble or
+    // a dangling stale line once real content replaced it (never cleaned up
+    // — see .agents/notes/implemented/bug-fix/2026-08-17-composer-consolidation.md).
     sessions[sessionIndex].isRunning = true
     isRunning = true
     status = "持久 Host 正在处理"
@@ -1365,15 +1423,39 @@ final class HarnessController: ObservableObject {
 
 
 
+  /// `reasoning` nil means "don't ask for a specific effort" — sent to the
+  /// Host as an omitted field (not a fallback to whatever `reasoningEffort`
+  /// happened to be left at), so switching to a model that doesn't support
+  /// the previously-selected model's effort (e.g. Relay's models have no
+  /// `reasoning.efforts` at all, so "high"/"max" from a DeepSeek-official
+  /// pick get rejected as `model-unavailable`) lets the Host fall back to
+  /// that model's own default instead of failing the switch outright.
   func selectCurrentModel(provider: String, model: String, reasoning: String? = nil) {
-    self.provider = provider
-    self.model = model
+    let nextProvider = provider.trimmingCharacters(in: .whitespacesAndNewlines)
+    let nextModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !nextProvider.isEmpty, !nextModel.isEmpty else { return }
+    self.provider = nextProvider
+    self.model = nextModel
     if let reasoning { self.reasoningEffort = reasoning }
+    // Persist the full triple — restoring provider/model but resetting the
+    // effort would recreate invalid pairs on relaunch (e.g. a model that only
+    // supports "off" coming back with the hardcoded "high" default).
+    UserDefaults.standard.set(nextProvider, forKey: providerKey)
+    UserDefaults.standard.set(nextModel, forKey: modelKey)
+    UserDefaults.standard.set(reasoningEffort, forKey: reasoningEffortKey)
+    // No live session yet: keep the local choice; newSession() pushes it via
+    // session.selectModel the moment the next session is created.
     guard let hostClient, let sessionId = hostCurrentSessionID else { return }
     Task {
       do {
-        try await hostClient.selectModel(sessionId: sessionId, provider: provider, model: model, reasoningEffort: reasoning ?? self.reasoningEffort)
-        await MainActor.run { self.status = "已切换到 \(provider) / \(model)" }
+        let selected = try await hostClient.selectModel(sessionId: sessionId, provider: nextProvider, model: nextModel, reasoningEffort: reasoning)
+        await MainActor.run {
+          // Sync back whatever effort the Host actually resolved to (its
+          // own default when we omitted one) so the composer label doesn't
+          // keep showing a stale effort the switch didn't actually request.
+          if let resolved = selected.reasoningEffort { self.reasoningEffort = resolved }
+          self.status = "已切换到 \(nextProvider) / \(nextModel)"
+        }
       } catch { await MainActor.run { self.appendSystem("模型切换失败：\(error.localizedDescription)") } }
     }
   }
@@ -1957,27 +2039,94 @@ private struct Composer: View {
       GoalBar()
       QueueDockView()
       if harness.draft.hasPrefix("/") { CommandPaletteView() }
-      HStack(alignment: .bottom, spacing: DSHSpace.s3) {
-        VoiceInputButton { text in harness.draft += (harness.draft.isEmpty ? "" : " ") + text; if harness.canSend { harness.send() } }
+      // Text field and every compose-time control (attachments, voice,
+      // model picker, send/stop) share one bordered box, matching the
+      // consolidated-composer redesign — see
+      // .agents/notes/implemented/bug-fix/2026-08-17-composer-consolidation.md.
+      VStack(alignment: .leading, spacing: DSHSpace.s2) {
         TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).scrollContentBackground(.hidden)
-          .frame(minHeight: 54, maxHeight: 140).padding(DSHSpace.s2).dshCard(tint: DSHTheme.surface, radius: DSHRadius.lg)
-        if harness.isRunning {
-          VStack(spacing: 7) {
+          .frame(minHeight: 54, maxHeight: 140)
+          .overlay(alignment: .topLeading) {
+            if harness.draft.isEmpty {
+              Text(harness.hostPlanActive ? "描述任务以生成计划" : "描述你想要构建的内容")
+                .font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
+                .padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
+            }
+          }
+        if let image = harness.draftImage {
+          HStack(spacing: 6) {
+            Label(image.url.lastPathComponent, systemImage: "photo").font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(1)
+            Button(action: { harness.draftImage = nil }) { Image(systemName: "xmark.circle.fill") }.buttonStyle(.dshGhost)
+            Spacer()
+          }
+        }
+        HStack(spacing: DSHSpace.s3) {
+          Menu { Button("进入计划模式", action: harness.enterPlanMode); Button("设定目标") { harness.draft = "/goal " }; Divider(); Button("重命名当前会话", action: harness.beginRenameCurrentSession); Button("创建会话分支", action: harness.forkCurrentSession); Button("归档当前会话", action: harness.archiveCurrentSession); Button("导出会话日志", action: harness.exportCurrentSessionLog); Button("查看归档会话") { harness.showArchivedSessions = true }; Divider(); Button("新会话", action: harness.newSession); Button("打开工作区", action: harness.openWorkspace) } label: { Image(systemName: "ellipsis.circle") }
+            .menuStyle(.borderlessButton).fixedSize().foregroundStyle(DSHTheme.inkSoft).help("更多操作")
+          Button(action: harness.pickImage) { Image(systemName: "paperclip") }.buttonStyle(.borderless).foregroundStyle(DSHTheme.inkSoft).help("添加图片")
+          VoiceInputButton { text in harness.draft += (harness.draft.isEmpty ? "" : " ") + text; if harness.canSend { harness.send() } }
+          ComposerModelMenu()
+          Spacer()
+          StatusStrip()
+          if harness.isRunning {
             Button("停止", action: harness.stop).buttonStyle(.dshSecondary)
             Button("排队", action: harness.queueDraft).buttonStyle(.dshSecondary).disabled(harness.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          }
-        } else { Button("发送", action: harness.send).buttonStyle(.dshPrimary).disabled(!harness.canSend) }
+          } else { Button("发送", action: harness.send).buttonStyle(.dshPrimary).disabled(!harness.canSend) }
+        }
       }
-      HStack {
-        Menu { Button("添加图片", action: harness.pickImage); Button("进入计划模式", action: harness.enterPlanMode); Button("设定目标") { harness.draft = "/goal " }; Button("重命名当前会话", action: harness.beginRenameCurrentSession); Button("创建会话分支", action: harness.forkCurrentSession); Button("归档当前会话", action: harness.archiveCurrentSession); Button("导出会话日志", action: harness.exportCurrentSessionLog); Button("查看归档会话") { harness.showArchivedSessions = true }; Button("新会话", action: harness.newSession); Button("打开工作区", action: harness.openWorkspace) } label: { Image(systemName: "plus") }.foregroundStyle(DSHTheme.inkSoft)
-        if let image = harness.draftImage { Label(image.url.lastPathComponent, systemImage: "photo").font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(1); Button(action: { harness.draftImage = nil }) { Image(systemName: "xmark.circle.fill") }.buttonStyle(.dshGhost) }
-        Text(harness.hostPlanActive ? "描述任务以生成计划" : "描述你想要构建的内容").font(.caption).foregroundStyle(DSHTheme.inkFaint)
-        Spacer()
-        StatusStrip()
-        Menu { Button("关闭推理") { harness.reasoningEffort = "off"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "off") }; Button("高") { harness.reasoningEffort = "high"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "high") }; Button("最大") { harness.reasoningEffort = "max"; harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: "max") } } label: { Text("\(harness.provider) / \(harness.model) · \(harness.reasoningEffort)").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(DSHTheme.inkFaint) }
-      }
+      .padding(DSHSpace.s3)
+      .dshCard(tint: DSHTheme.surface, radius: DSHRadius.lg)
     }.padding(DSHSpace.s5)
     }
+  }
+}
+
+/// The composer-docked model/reasoning picker — the only in-app place a
+/// model change actually reaches the Host (`selectCurrentModel` posts
+/// `session.selectModel`). Options are read live from `harness.availableModels`
+/// (`llm.models`'s groups, keyed by real provider id, e.g. "deepseek-official")
+/// rather than a hardcoded relay/deepseek pair, so a tap always names a
+/// provider id the catalog actually has.
+private struct ComposerModelMenu: View {
+  @EnvironmentObject var harness: HarnessController
+  var body: some View {
+    Menu {
+      if harness.availableModels.isEmpty {
+        Text("尚未读到 Host 模型目录")
+        Button("刷新模型目录", action: harness.refreshModelConfiguration)
+      } else {
+        ForEach(harness.availableModels) { group in
+          Menu(group.name) {
+            ForEach(group.models) { model in
+              Button(action: { harness.selectCurrentModel(provider: group.id, model: model.id) }) {
+                if harness.provider == group.id && harness.model == model.id { Label(model.name, systemImage: "checkmark") }
+                else { Text(model.name) }
+              }
+            }
+          }
+        }
+        // Effort rows come from the selected model's adapter-advertised
+        // levels, mirroring the upstream web composer: a fixed off/high/max
+        // list offered levels the adapter would reject outright
+        // (hand-declared relay models advertise none at all). No metadata →
+        // no effort submenu, matching "an adapter without reasoning metadata
+        // leaves the Effort row absent" in the model-selection contract.
+        if let reasoning = harness.currentModelEntry?.reasoning {
+          Divider()
+          Menu("推理强度") {
+            ForEach(reasoning.efforts) { effort in
+              Button(action: { harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: effort.id) }) {
+                if harness.reasoningEffort == effort.id { Label(effort.name, systemImage: "checkmark") }
+                else { Text(effort.name) }
+              }
+            }
+          }
+        }
+      }
+    } label: {
+      Text(harness.currentModelLabel).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(DSHTheme.inkFaint)
+    }
+    .menuStyle(.borderlessButton).fixedSize()
   }
 }
 
@@ -2064,35 +2213,4 @@ private struct SessionSearchView: View {
       HStack { Spacer(); Button("关闭") { harness.showSessionSearch = false }.buttonStyle(.dshSecondary) }
     }.padding(DSHSpace.s5).frame(width: 520, height: 520).background(DSHTheme.surface)
   }
-}
-
-private struct SettingsView: View {
-  @EnvironmentObject var harness: HarnessController
-  @State private var section = "通用"
-  private let sections = ["通用", "模型", "提供方", "插件", "语音", "Agent 预设"]
-  var body: some View {
-    HStack(spacing: 0) {
-      VStack(alignment: .leading, spacing: 2) {
-        ForEach(sections, id: \.self) { s in
-          Button(action: { section = s }) { Text(s).frame(maxWidth: .infinity, alignment: .leading) }
-            .buttonStyle(.plain).font(.system(size: 12.5)).foregroundStyle(section == s ? DSHTheme.ink : DSHTheme.inkSoft)
-            .padding(.horizontal, DSHSpace.s3).padding(.vertical, 8)
-            .background(section == s ? DSHTheme.surfaceTint2 : .clear, in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
-        }
-        Spacer()
-      }.padding(DSHSpace.s3).frame(width: 160).background(DSHTheme.surfaceTint)
-      VStack(alignment: .leading, spacing: DSHSpace.s4) {
-        Text(section).font(.system(size: 18, weight: .semibold)).foregroundStyle(DSHTheme.ink)
-        settingsBody
-        Spacer()
-        HStack { Button("打开配置文件", action: harness.openHostSettingsDocument).buttonStyle(.dshSecondary); Spacer(); Button("关闭") { harness.showSettings = false }.buttonStyle(.dshPrimary).keyboardShortcut(.defaultAction) }
-      }.padding(DSHSpace.s5).frame(width: 600, height: 480).background(DSHTheme.surface)
-    }
-  }
-  @ViewBuilder private var settingsBody: some View { switch section { case "通用": Picker("默认 Agent preset", selection: $harness.preset) { ForEach(HarnessController.Preset.allCases) { Text($0.label).tag($0) } }.onChange(of: harness.preset) { _, v in harness.setPreset(v) }; Text("当前会话保持原有 preset；新会话使用新的默认配置。").font(.caption).foregroundStyle(DSHTheme.inkFaint)
-  case "模型": Picker("提供方", selection: $harness.provider) { Text("Relay（本机）").tag("relay"); Text("DeepSeek 官方").tag("deepseek") }.pickerStyle(.segmented); Picker("模型", selection: $harness.model) { ForEach(harness.availableModels) { group in ForEach(group.models) { model in Text("\(group.name) / \(model.name)").tag(model.id) } } }.disabled(harness.availableModels.isEmpty); if harness.availableModels.isEmpty { Text("尚未读到 Host 模型目录，点击下方刷新").font(.caption).foregroundStyle(DSHTheme.inkFaint) }; Button("刷新 Host 模型目录", action: harness.refreshModelConfiguration).buttonStyle(.dshSecondary); SecureField(harness.provider == "relay" ? "Relay API Key（写入 DSH Host）" : "DeepSeek API Key（写入 DSH Host）", text: $harness.apiKey).dshField(); Button("保存凭据", action: harness.saveCredential).buttonStyle(.dshSecondary).disabled(harness.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty); Text(harness.hasCredential ? "凭据已可用" : "请提供 API Key").font(.caption).foregroundStyle(harness.hasCredential ? DSHTheme.accent : DSHTheme.warm)
-  case "提供方": Button("刷新提供方配置", action: harness.refreshProviderConfiguration).buttonStyle(.dshSecondary); if let settings = harness.settingsDescription, let pi = settings.namespaces.first(where: { $0.ns == "llm-pi-ai" }) { Text(settings.writable ? "配置可写 · revision \(pi.revision)" : "配置只读").font(.caption).foregroundStyle(settings.writable ? DSHTheme.accent : DSHTheme.warm); ForEach(harness.configurableProviders.filter { $0.settingsNs == pi.ns }) { provider in HStack { Text(provider.displayName).foregroundStyle(DSHTheme.ink); Spacer(); Button("编辑") { harness.openProviderAuthoring(provider) }.buttonStyle(.dshSecondary).disabled(!settings.writable) } }; Button("添加自定义提供方") { harness.openProviderAuthoring() }.buttonStyle(.dshPrimary).disabled(!settings.writable) } else { Text("llm-pi-ai 未由当前 Host 提供。").foregroundStyle(DSHTheme.inkFaint) }
-  case "插件": Text("已安装插件由内置 DSH runtime 管理。").foregroundStyle(DSHTheme.inkFaint); Button("刷新真实 Host 设置", action: harness.refreshSettings).buttonStyle(.dshSecondary); if let settings = harness.settingsDescription { Text(settings.writable ? "配置可写" : "配置只读").font(.caption).foregroundStyle(settings.writable ? DSHTheme.accent : DSHTheme.warm); ForEach(settings.namespaces) { ns in HStack { Label("\(ns.ns) · \(ns.applies)", systemImage: "puzzlepiece").foregroundStyle(DSHTheme.ink); Spacer(); Button("编辑") { harness.openSettingsEditor(ns: ns) }.buttonStyle(.dshSecondary).disabled(!settings.writable) } }; Text("凭据").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink).padding(.top, DSHSpace.s2); ForEach(Array(Set(harness.configurableProviders.compactMap { provider in harness.providerCredentialReference(provider) } + ["DEEPSEEK_API_KEY"])).sorted(), id: \.self) { ref in HStack { Text(ref).font(.system(.body, design: .monospaced)).foregroundStyle(DSHTheme.ink); Spacer(); Text((harness.credentialStates[ref]?.configured ?? false) ? "已配置" : "未配置").font(.caption).foregroundStyle((harness.credentialStates[ref]?.configured ?? false) ? DSHTheme.accent : DSHTheme.warm) } }; Text("在命名空间编辑器里可写入或清除 API Key。").font(.caption).foregroundStyle(DSHTheme.inkFaint) } else { Text("正在读取 Host 设置…").font(.caption).foregroundStyle(DSHTheme.inkFaint) }; HStack { Text("插件运行清单").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink); Spacer(); Button("刷新", action: harness.loadPluginInventory).buttonStyle(.dshGhost) }.padding(.top, DSHSpace.s2); if harness.pluginEntries.isEmpty { Text("点击刷新读取 Cordis 加载器的插件清单。").font(.caption).foregroundStyle(DSHTheme.inkFaint) } else { ForEach(harness.pluginEntries) { entry in HStack { Label(entry.moduleName, systemImage: "shippingbox").foregroundStyle(DSHTheme.ink); Spacer(); Text(entry.fiberPhase ?? (entry.enabled ? "未运行" : "已禁用")).font(.caption).foregroundStyle(entry.fiberPhase == "failed" ? DSHTheme.coral : DSHTheme.inkFaint) } } }
-  case "语音": VoiceSettingsView()
-  default: Text("选择新会话使用的 Agent 能力组合。").foregroundStyle(DSHTheme.inkFaint); ForEach(HarnessController.Preset.allCases) { p in Button(action: { harness.setPreset(p) }) { VStack(alignment: .leading) { Text(p.label).font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink); Text(p.detail).font(.caption).foregroundStyle(DSHTheme.inkFaint) } }.buttonStyle(.plain).padding(.vertical, 4) }; Text("Host Agent Preset 管理").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink).padding(.top, DSHSpace.s3); PresetManagerView() } }
 }

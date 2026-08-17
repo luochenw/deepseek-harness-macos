@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Native editor for the Host-owned llm-pi-ai provider directory. It writes only
+/// Native editor for one Host-owned custom API configuration. It writes only
 /// profile fields it displays and keeps the API-key draft local and write-only.
 struct ProviderAuthoringView: View {
   @EnvironmentObject private var harness: HarnessController
@@ -31,7 +31,7 @@ struct ProviderAuthoringView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: DSHSpace.s5) {
       VStack(alignment: .leading, spacing: DSHSpace.s1) {
-        Text(provider == nil ? "添加自定义提供方" : "编辑提供方")
+        Text(provider == nil ? "添加自定义配置" : "编辑自定义配置")
           .font(.title2.weight(.bold))
           .foregroundStyle(DSHTheme.ink)
         Text("llm-pi-ai · revision \(namespace.revision)")
@@ -68,13 +68,13 @@ struct ProviderAuthoringView: View {
 
   private var basicInfoSection: some View {
     VStack(alignment: .leading, spacing: DSHSpace.s3) {
-      Text("基本信息").dshSectionLabel()
-      TextField("Provider ID（小写字母开头，可含数字和短横线）", text: $route)
+      Text("连接信息").dshSectionLabel()
+      TextField("配置 ID（小写字母开头，可含数字和短横线）", text: $route)
         .disabled(provider != nil)
         .dshField()
-      TextField("显示名称", text: $displayName)
+      TextField("显示名称（可选）", text: $displayName)
         .dshField()
-      TextField("API 地址", text: $baseURL)
+      TextField("API 地址", text: $baseURL, prompt: Text("https://api.example.com/v1"))
         .dshField()
       Picker("API 协议", selection: $api) {
         ForEach(protocols, id: \.self) { Text($0).tag($0) }
@@ -130,7 +130,7 @@ struct ProviderAuthoringView: View {
   private func save() {
     error = nil
     guard provider != nil || !harness.configurableProviders.contains(where: { $0.provider == normalizedRoute }) else {
-      error = "该 Provider ID 已存在。"
+      error = "该配置 ID 已存在。"
       return
     }
     let path = provider?.settingsPath ?? ["providers", normalizedRoute]

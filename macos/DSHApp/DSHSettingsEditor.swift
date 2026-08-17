@@ -23,8 +23,8 @@ extension DSHJSONValue: Encodable {
 /// removed from the described value (no sentinel), so a root-level replace
 /// would erase stored secrets — the diff guarantees untouched keys (secrets
 /// included, since they never appear in either side of the diff) are never
-/// written. Also manages the Relay / DeepSeek API keys through
-/// credentials.set / credentials.unset.
+/// written. It also exposes the Host's generic write-only credential API for
+/// any environment-variable reference declared by a custom configuration.
 struct SettingsEditorView: View {
   @EnvironmentObject var harness: HarnessController
   let namespace: DSHSettingsNamespace
@@ -34,7 +34,7 @@ struct SettingsEditorView: View {
   /// save diff runs against this, so only keys the user actually edited are
   /// sent to the Host.
   @State private var baseline: [String: Any] = [:]
-  @State private var credentialRef = "RELAY_API_KEY"
+  @State private var credentialRef = ""
   @State private var credentialValue = ""
   @State private var error: String?
   @State private var notice: String?
@@ -85,14 +85,16 @@ struct SettingsEditorView: View {
 
       VStack(alignment: .leading, spacing: DSHSpace.s3) {
         Text("凭据").font(.headline).foregroundStyle(DSHTheme.ink)
-        Picker("凭据引用", selection: $credentialRef) {
-          Text("RELAY_API_KEY").tag("RELAY_API_KEY")
-          Text("DEEPSEEK_API_KEY").tag("DEEPSEEK_API_KEY")
-        }.pickerStyle(.segmented)
+        TextField("凭据引用", text: $credentialRef, prompt: Text("例如 CUSTOM_API_KEY"))
+          .dshField()
         SecureField("写入新值（留空保持不变）", text: $credentialValue).dshField()
         HStack(spacing: DSHSpace.s2) {
-          Button("写凭据") { saveCredential() }.buttonStyle(.dshPrimary).disabled(credentialValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          Button("清除凭据") { unsetCredential() }.buttonStyle(.dshSecondary)
+          Button("写凭据") { saveCredential() }
+            .buttonStyle(.dshPrimary)
+            .disabled(normalizedCredentialRef.isEmpty || credentialValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          Button("清除凭据") { unsetCredential() }
+            .buttonStyle(.dshSecondary)
+            .disabled(normalizedCredentialRef.isEmpty)
           Spacer()
           Text(harness.status).font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(1)
           Button("关闭") { harness.showSettingsEditor = false }.buttonStyle(.dshSecondary).keyboardShortcut(.cancelAction)
@@ -138,13 +140,25 @@ struct SettingsEditorView: View {
 
   private func saveCredential() {
     error = nil
-    harness.saveCredential(ref: credentialRef, value: credentialValue)
+    guard !normalizedCredentialRef.isEmpty else {
+      error = "请输入凭据引用。"
+      return
+    }
+    harness.saveCredential(ref: normalizedCredentialRef, value: credentialValue)
     credentialValue = ""
   }
 
   private func unsetCredential() {
     error = nil
-    harness.unsetCredential(ref: credentialRef)
+    guard !normalizedCredentialRef.isEmpty else {
+      error = "请输入凭据引用。"
+      return
+    }
+    harness.unsetCredential(ref: normalizedCredentialRef)
+  }
+
+  private var normalizedCredentialRef: String {
+    credentialRef.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   /// Render a namespace value as pretty JSON text for the editor buffer.

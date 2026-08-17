@@ -1,6 +1,14 @@
 import Foundation
 
-struct DSHModelCatalogModel: Decodable, Identifiable { let id: String; let name: String; var description: String? }
+/// Adapter-owned reasoning metadata on a catalog model (apiproxy
+/// `modelReasoningSchema`). Absent entirely for a model that offers no
+/// selectable effort — hand-declared routes without `reasoningEfforts`, and
+/// catalog models pi-ai marks non-reasoning — in which case the adapter
+/// accepts only "off" (or an omitted effort) at `session.selectModel`; any
+/// other level is rejected with UNSUPPORTED_REASONING_EFFORT.
+struct DSHModelReasoningEffort: Decodable, Identifiable { let id: String; let name: String; var description: String? }
+struct DSHModelReasoning: Decodable { let efforts: [DSHModelReasoningEffort]; let defaultEffort: String? }
+struct DSHModelCatalogModel: Decodable, Identifiable { let id: String; let name: String; var description: String?; var reasoning: DSHModelReasoning? }
 struct DSHModelGroup: Decodable, Identifiable { let id: String; let name: String; let models: [DSHModelCatalogModel] }
 struct DSHModelCatalog: Decodable { let groups: [DSHModelGroup] }
 struct DSHCredentialView: Decodable { let configured: Bool; let source: String?; let writable: Bool }
