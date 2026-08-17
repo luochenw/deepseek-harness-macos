@@ -2222,6 +2222,8 @@ private struct ConversationView: View {
   /// reading history during a running turn isn't yanked back down);
   /// returning to the bottom re-engages it.
   @State private var pinnedToBottom = true
+  @State private var bottomDistance: CGFloat = 0
+  @State private var scrollMonitor: Any?
   var body: some View {
     GeometryReader { viewport in
     ScrollViewReader { proxy in
@@ -2272,20 +2274,67 @@ private struct ConversationView: View {
           })
       }
       .coordinateSpace(name: "dshConversationScroll")
+      // Distance is bookkeeping only — it must never re-engage the pin by
+      // itself. The old `pinned = distance < 80` lost a race during
+      // streaming: every auto-scroll zeroed the distance and re-pinned
+      // before the user's upward scroll could cross the threshold, so the
+      // view kept snapping down. Unpin/repin now follow the user's actual
+      // wheel gestures (below), which fire synchronously.
       .onPreferenceChange(ConversationBottomDistanceKey.self) { distance in
-        pinnedToBottom = distance < 80
+        bottomDistance = distance
       }
       .onChange(of: harness.displayedSession?.messages) { _, messages in
         guard let last = messages?.last else { return }
         // Follow only while pinned — except the user's own send, which
         // always snaps down so the new turn starts in view.
-        if pinnedToBottom || last.role == .user { proxy.scrollTo(last.id, anchor: .bottom) }
+        if last.role == .user { pinnedToBottom = true }
+        if pinnedToBottom { proxy.scrollTo(last.id, anchor: .bottom) }
       }
       // Switching sessions (or opening a subagent transcript) resets the
       // pin — a freshly opened transcript always lands at its bottom.
       .onChange(of: harness.displayedSession?.id) { _, _ in
         pinnedToBottom = true
         if let last = harness.displayedSession?.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+      }
+      .onAppear {
+        guard scrollMonitor == nil else { return }
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+          if event.scrollingDeltaY > 0 {
+            // Scrolling up = reading history: break the pin immediately.
+            pinnedToBottom = false
+          } else if event.scrollingDeltaY < 0, bottomDistance < 120 {
+            // Scrolling down and (nearly) at the bottom: re-engage.
+            pinnedToBottom = true
+          }
+          return event
+        }
+      }
+      .onDisappear {
+        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+        scrollMonitor = nil
+      }
+      // One-tap return to the latest content, icon only — shown whenever
+      // follow mode is off.
+      .overlay(alignment: .bottomTrailing) {
+        if !pinnedToBottom {
+          Button {
+            pinnedToBottom = true
+            if let last = harness.displayedSession?.messages.last {
+              withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
+            }
+          } label: {
+            Image(systemName: "arrow.down")
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(DSHTheme.ink)
+              .frame(width: 34, height: 34)
+              .background(DSHTheme.surface, in: Circle())
+              .overlay(Circle().strokeBorder(DSHTheme.fieldStroke.opacity(0.5), lineWidth: 1))
+              .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+          }
+          .buttonStyle(.plain)
+          .padding(.trailing, DSHSpace.s5).padding(.bottom, DSHSpace.s4)
+          .help("回到最新")
+        }
       }
     }
     }
@@ -2402,15 +2451,18 @@ private struct WaitingWaveIndicator: View {
           .fill(LinearGradient(
             colors: [Color(red: 0.031, green: 0.106, blue: 0.125), Color(red: 0.043, green: 0.216, blue: 0.235), Color(red: 0.039, green: 0.424, blue: 0.404)],
             startPoint: .top, endPoint: .bottom))
-        // 月亮的升落弧线：一个周期内前 82% 走完左下→顶点→右下的半弧
-        // （两端都藏在浪面之下，波浪后画、天然遮挡），其余时间停在浪下,
-        // 读起来就是"月落片刻，再从左边升起"。
+        // 月亮的升落弧线：一个周期内前 82% 走完左下→顶点→右下的半弧，
+        // 其余时间停在海平面之下，读起来就是"月落片刻，再从左边升起"。
+        // 波浪是半透明的遮不住它，所以用海平面遮罩硬裁：月亮只在浪线
+        // 以上可见，升落时被地平线渐渐"吃掉"。
         let cycle = (t / 5.0).truncatingRemainder(dividingBy: 1)
         let arc = min(cycle / 0.82, 1.0)
-        let theta = (Double.pi + 0.55) - arc * (Double.pi + 1.1)
+        let theta = (Double.pi + 0.65) - arc * (Double.pi + 1.3)
         Circle().fill(Color(red: 0.867, green: 0.980, blue: 0.960))
           .frame(width: 4.5, height: 4.5)
           .offset(x: 9.0 * cos(theta), y: -7.5 * sin(theta) + 1.5)
+          .frame(width: 26, height: 26)
+          .mask(alignment: .top) { Rectangle().frame(height: 16) }
         WaveBand(baseY: 0.56, amplitude: 0.07, phase: t * 1.7).fill(Color(red: 0.290, green: 0.871, blue: 0.824).opacity(0.30))
         WaveBand(baseY: 0.66, amplitude: 0.065, phase: t * 2.3 + 2.1).fill(Color(red: 0.376, green: 0.925, blue: 0.871).opacity(0.55))
         WaveBand(baseY: 0.75, amplitude: 0.055, phase: t * 2.9 + 4.4).fill(Color(red: 0.173, green: 0.773, blue: 0.722).opacity(0.95))
