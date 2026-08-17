@@ -57,6 +57,16 @@ struct SettingsView: View {
     }
     .frame(width: 810, height: 580)
     .background(DSHTheme.surface)
+    // 编辑抽屉挂在设置窗口自己身上：挂主窗口会与设置 sheet 抢同一个
+    // 挂载点（一次只能出一个 sheet），设置开着时编辑按钮就没反应。
+    .sheet(isPresented: $harness.showSettingsEditor) {
+      if let namespace = harness.selectedSettingsNamespace { SettingsEditorView(namespace: namespace) }
+    }
+    .sheet(isPresented: $harness.showProviderAuthoring) {
+      if let namespace = harness.settingsDescription?.namespaces.first(where: { $0.ns == "llm-pi-ai" }) {
+        ProviderAuthoringView(namespace: namespace, provider: harness.selectedProviderForAuthoring)
+      }
+    }
     .onAppear {
       harness.refreshModelConfiguration()
       harness.loadPluginInventory()
