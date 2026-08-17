@@ -256,28 +256,34 @@ private struct ModelSettingsSection: View {
       Button("刷新 Host 模型目录", action: harness.refreshModelConfiguration)
         .buttonStyle(.dshSecondary)
 
-      // API keys write straight from here — the credentials service is the
-      // same one provider authoring uses, this is just the faster path for
-      // "粘贴个 key 就能用" without opening an endpoint editor.
-      VStack(alignment: .leading, spacing: DSHSpace.s2) {
-        Text("API Key").dshSectionLabel()
-        if harness.credentialStates.isEmpty {
-          Text("尚未发现凭据引用；添加自定义配置后这里会列出对应的 Key。")
-            .font(.caption).foregroundStyle(DSHTheme.inkFaint)
-        } else {
-          ForEach(harness.credentialStates.keys.sorted(), id: \.self) { reference in
+      // 官方与自定义分开：自定义配置的 Key 内嵌在各自的配置行里；这里
+      // 只留不属于任何自定义配置的官方凭据。LOCAL_ 前缀是本机管道凭据
+      // （两端读同一引用，值改成什么都自洽），不需要用户管理，不展示。
+      let officialRefs = officialCredentialRefs
+      if !officialRefs.isEmpty {
+        VStack(alignment: .leading, spacing: DSHSpace.s2) {
+          Text("官方配置").dshSectionLabel()
+          ForEach(officialRefs, id: \.self) { reference in
             CredentialQuickEntry(reference: reference)
           }
+          Text(harness.hasCredential ? "已检测到可用凭据。" : "尚未检测到可用凭据；粘贴对应引用的 API Key 并保存。")
+            .font(.caption)
+            .foregroundStyle(harness.hasCredential ? DSHTheme.accent : DSHTheme.warm)
         }
-        Text(harness.hasCredential ? "已检测到可用凭据。" : "尚未检测到可用凭据；粘贴对应引用的 API Key 并保存。")
-          .font(.caption)
-          .foregroundStyle(harness.hasCredential ? DSHTheme.accent : DSHTheme.warm)
       }
 
       // 自定义配置 lives inline under the model picker now — switching and
       // endpoint management are one surface, not a separate tab.
       CustomConfigurationSettingsSection()
     }
+  }
+
+  /// Refs not owned by any custom provider and not internal plumbing.
+  private var officialCredentialRefs: [String] {
+    let customRefs = Set(harness.configurableProviders.compactMap { harness.providerCredentialReference($0) })
+    return harness.credentialStates.keys
+      .filter { !customRefs.contains($0) && !$0.hasPrefix("LOCAL_") }
+      .sorted()
   }
 }
 
@@ -344,7 +350,7 @@ private struct CustomConfigurationSettingsSection: View {
   var body: some View {
     VStack(alignment: .leading, spacing: DSHSpace.s4) {
       HStack {
-        Text("通用 API 接入").dshSectionLabel()
+        Text("自定义配置").dshSectionLabel()
         Spacer()
         Button(action: harness.refreshProviderConfiguration) {
           Image(systemName: "arrow.clockwise")
@@ -403,28 +409,34 @@ private struct CustomProviderRow: View {
   }
 
   var body: some View {
-    HStack(alignment: .top, spacing: DSHSpace.s3) {
-      VStack(alignment: .leading, spacing: DSHSpace.s1) {
-        Text(isLegacyRelay ? "自定义配置" : provider.displayName)
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(DSHTheme.ink)
-        Text(isLegacyRelay ? "通用 API 接入" : "配置 ID：\(provider.provider)")
-          .font(.caption)
-          .foregroundStyle(DSHTheme.inkFaint)
-          .lineLimit(1)
-        // 当前配置直接可见（与编辑抽屉同源），不用点进去才知道配了什么。
-        if let profile {
-          detailRow("API 地址", profile.string("baseURL") ?? "—")
-          detailRow("协议", profile.string("api") ?? "—")
-          let models = profile.modelIDs
-          detailRow("模型", models.isEmpty ? "—" : models.joined(separator: "、"))
-          if let keyRef = profile.apiKeyEnv { detailRow("Key 引用", keyRef) }
+    VStack(alignment: .leading, spacing: DSHSpace.s2) {
+      HStack(spacing: DSHSpace.s3) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(isLegacyRelay ? "自定义配置" : provider.displayName)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(DSHTheme.ink)
+          Text(isLegacyRelay ? "通用 API 接入" : "配置 ID：\(provider.provider)")
+            .font(.caption)
+            .foregroundStyle(DSHTheme.inkFaint)
+            .lineLimit(1)
+        }
+        Spacer()
+        DSHBadge(text: credentialConfigured ? "已配置" : "待填写 Key", tone: credentialConfigured ? .accent : .warm)
+        Button("编辑", action: edit)
+          .buttonStyle(.dshSecondary)
+      }
+      // 当前配置直接可见（与编辑抽屉同源），不用点进去才知道配了什么。
+      if let profile {
+        detailRow("API 地址", profile.string("baseURL") ?? "—")
+        detailRow("协议", profile.string("api") ?? "—")
+        let models = profile.modelIDs
+        detailRow("模型", models.isEmpty ? "—" : models.joined(separator: "、"))
+        // 这份配置自己的 Key 就地填写——官方与自定义的凭据不再混在一张
+        // 全局列表里。
+        if let keyRef = profile.apiKeyEnv {
+          CredentialQuickEntry(reference: keyRef)
         }
       }
-      Spacer()
-      DSHBadge(text: credentialConfigured ? "已配置" : "待填写 Key", tone: credentialConfigured ? .accent : .warm)
-      Button("编辑", action: edit)
-        .buttonStyle(.dshSecondary)
     }
     .padding(.vertical, DSHSpace.s2)
   }
