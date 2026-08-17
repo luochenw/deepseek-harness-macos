@@ -21,12 +21,34 @@ private struct ScrollerConfigurator: NSViewRepresentable {
     DispatchQueue.main.async { Self.configure(from: view) }
   }
   private static func configure(from view: NSView) {
-    guard let scrollView = view.enclosingScrollView else { return }
+    guard let scrollView = locate(from: view) else { return }
     scrollView.scrollerStyle = .overlay
     scrollView.autohidesScrollers = true
     scrollView.hasVerticalScroller = true
     scrollView.hasHorizontalScroller = false
     scrollView.verticalScroller?.controlSize = .small
+  }
+
+  /// `enclosingScrollView` covers content placement; the fallback ancestor
+  /// walk covers `.background(...)` placement on views like TextEditor,
+  /// whose scroll view is a sibling subtree rather than an ancestor.
+  private static func locate(from view: NSView) -> NSScrollView? {
+    if let enclosing = view.enclosingScrollView { return enclosing }
+    var ancestor = view.superview
+    var hops = 0
+    while let current = ancestor, hops < 4 {
+      if let found = descendantScrollView(in: current) { return found }
+      ancestor = current.superview
+      hops += 1
+    }
+    return nil
+  }
+  private static func descendantScrollView(in view: NSView) -> NSScrollView? {
+    if let scroll = view as? NSScrollView { return scroll }
+    for subview in view.subviews {
+      if let found = descendantScrollView(in: subview) { return found }
+    }
+    return nil
   }
 }
 

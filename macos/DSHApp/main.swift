@@ -1781,9 +1781,7 @@ private struct Sidebar: View {
           Spacer()
           Button(action: { harness.showSessionSearch = true }) { Image(systemName: "magnifyingglass") }.buttonStyle(.dshGhost)
         }
-        Button(action: harness.chooseWorkspace) {
-          Label(harness.workspaceName, systemImage: "folder").lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-        }.buttonStyle(.dshSecondary).help(harness.workspace?.path ?? "选择工作区")
+        WorkspaceSwitcherButton()
       }
 
       VStack(alignment: .leading, spacing: DSHSpace.s2) {
@@ -2046,6 +2044,9 @@ private struct ConversationHeader: View {
           else { ForEach(harness.hostPresets.filter { $0.broken == nil }) { p in Button(p.name ?? p.id) { harness.selectCurrentPreset(p.id) } } }
         }
       }
+      // Session figures (context / tokens / turns) live up here now — they
+      // are session state, not compose-time controls.
+      StatusStrip()
       Button(action: { harness.showDetails.toggle() }) { Image(systemName: "sidebar.right") }.buttonStyle(.dshGhost)
     }.padding(.horizontal, DSHSpace.s5).padding(.vertical, DSHSpace.s3)
   }
@@ -2534,6 +2535,17 @@ private struct Composer: View {
         TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).scrollContentBackground(.hidden)
           .frame(minHeight: 54, maxHeight: 140)
           .focused($editorFocused)
+          // The editor's own scroll view: thin overlay scroller, never the
+          // always-on gutter bar (background placement — see NativeScrollbars).
+          .dshThinScrollers()
+          // 回车直接发送；Shift+回车换行。Intercepted before the newline is
+          // inserted, so a sent draft doesn't leave a stray empty line.
+          .onKeyPress(.return, phases: .down) { press in
+            if press.modifiers.contains(.shift) { return .ignored }
+            guard harness.canSend else { return .ignored }
+            harness.send()
+            return .handled
+          }
           .overlay(alignment: .topLeading) {
             // Hidden while focused, not just while non-empty: IME marked text
             // (pinyin composition) never reaches the SwiftUI binding, so a
@@ -2560,13 +2572,20 @@ private struct Composer: View {
             .menuStyle(.borderlessButton).fixedSize().foregroundStyle(DSHTheme.inkSoft).help("更多操作")
           Button(action: harness.pickImage) { Image(systemName: "paperclip") }.buttonStyle(.borderless).foregroundStyle(DSHTheme.inkSoft).help("添加图片")
           VoiceInputButton { text in harness.draft += (harness.draft.isEmpty ? "" : " ") + text; if harness.canSend { harness.send() } }
-          ComposerModelMenu()
           Spacer()
-          StatusStrip()
+          ComposerModelMenu()
           if harness.isRunning {
-            Button("停止", action: harness.stop).buttonStyle(.dshSecondary)
-            Button("排队", action: harness.queueDraft).buttonStyle(.dshSecondary).disabled(harness.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          } else { Button("发送", action: harness.send).buttonStyle(.dshPrimary).disabled(!harness.canSend) }
+            Button(action: harness.stop) { Image(systemName: "stop.fill").font(.system(size: 13)) }
+              .buttonStyle(.dshSecondary).help("停止")
+            Button(action: harness.queueDraft) { Image(systemName: "tray.and.arrow.down") }
+              .buttonStyle(.dshSecondary)
+              .disabled(harness.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+              .help("排队：本轮结束后自动发送")
+          } else {
+            Button(action: harness.send) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
+              .buttonStyle(.dshPrimary).disabled(!harness.canSend)
+              .help("发送（回车）")
+          }
         }
       }
       .padding(DSHSpace.s3)
