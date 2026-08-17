@@ -525,6 +525,11 @@ final class VoiceController: NSObject, ObservableObject {
   @Published private(set) var speechEngineNote: String?
   /// Set by the hosting view; receives the trimmed final transcript once per utterance.
   var onFinalText: ((String) -> Void)?
+  /// Fires when an utterance ends WITHOUT usable text — cancel, no-speech
+  /// timeout, or the transcript reduced to nothing after stripping command
+  /// words. The hosting view uses it to restore the composer draft that
+  /// live partials may have overwritten.
+  var onDiscarded: (() -> Void)?
   /// Engine mode note for status display (on-device vs. server fallback).
   var engineNote: String { transcriber.engineNote }
 
@@ -536,8 +541,11 @@ final class VoiceController: NSObject, ObservableObject {
   private var silenceTimer: Timer?
   /// Auto endpoint: stop listening this long after the last new partial
   /// result — user-configurable (设置→语音), floor 1s so natural zh pauses
-  /// don't truncate mid-sentence. Initial wait is unbounded (handlePartial).
+  /// don't truncate mid-sentence.
   private var silenceEndpoint: TimeInterval { VoiceSettings.silenceEndpoint }
+  /// 完全没等到语音的最长等待：超时整段放弃并恢复输入框。比静音定稿窗口
+  /// 长得多——热身空分段不算语音，真实语音一到就换成静音定稿计时。
+  private let noSpeechWindow: TimeInterval = 8.0
 
   init(transcriber: VoiceTranscriber? = nil, synthesizer: VoiceSpeechSynthesizer? = nil) {
     self.enginesInjected = transcriber != nil || synthesizer != nil
@@ -632,6 +640,7 @@ final class VoiceController: NSObject, ObservableObject {
     transcriber.cancelStreaming()
     partialText = ""
     state = .idle
+    onDiscarded?()
   }
 
   // MARK: Speaking
@@ -665,6 +674,7 @@ final class VoiceController: NSObject, ObservableObject {
     do {
       try transcriber.startStreaming()
       state = .listening
+      armNoSpeechTimer()
     } catch {
       state = .denied("语音识别启动失败：\(error.localizedDescription)")
     }
@@ -698,10 +708,12 @@ final class VoiceController: NSObject, ObservableObject {
     }
     state = .idle
     partialText = ""
-    // 剔除句尾的定稿类命令词（"…结束" → "…"）。
+    // 剔除句尾的定稿类命令词（"…结束" → "…"）。剔完为空（比如只说了
+    // 一句"结束"）也必须通知宿主视图：实时分段可能已经把命令词流进了
+    // 输入框，静默返回会把它留在那里。
     let stripped = VoiceSettings.strippingTrailingEndPhrase(text).stripped
     let trimmed = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return }
+    guard !trimmed.isEmpty else { onDiscarded?(); return }
     onFinalText?(trimmed)
   }
 
@@ -709,6 +721,19 @@ final class VoiceController: NSObject, ObservableObject {
     silenceTimer?.invalidate()
     silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceEndpoint, repeats: false) { [weak self] _ in
       Task { @MainActor in self?.stopListening() }
+    }
+  }
+
+  /// Shares the silenceTimer slot: the first real utterance replaces this
+  /// with the (much shorter) silence endpoint via armSilenceTimer.
+  private func armNoSpeechTimer() {
+    silenceTimer?.invalidate()
+    silenceTimer = Timer.scheduledTimer(withTimeInterval: noSpeechWindow, repeats: false) { [weak self] _ in
+      Task { @MainActor in
+        guard let self, self.state == .listening,
+              self.partialText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        self.cancelListening()
+      }
     }
   }
 

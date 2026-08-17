@@ -3009,7 +3009,10 @@ private struct Composer: View {
             onCommit: { text, viaWake in
               let base = dictationBase ?? harness.draft
               dictationBase = nil
-              if VoiceSettings.isCancelCommand(text) {
+              // 空文本 = 放弃（取消、超时无语音、或剔除命令词后一无所剩）
+              // —— 恢复实时分段覆盖前的草稿，绝不派发空任务。
+              if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || VoiceSettings.isCancelCommand(text) {
                 harness.draft = base
                 return
               }

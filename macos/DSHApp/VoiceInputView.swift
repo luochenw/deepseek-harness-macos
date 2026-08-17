@@ -112,6 +112,10 @@ struct VoiceInputButton: View {
       // Single, stable commit hook: the via-wake fact lives on the
       // controller (set by startListening(viaWake:)), not in view state.
       voice.onFinalText = { text in onCommit(text, voice.sessionViaWake) }
+      // Discarded utterances (cancel, no-speech timeout, or nothing left
+      // after stripping command words) commit an empty string so the
+      // composer restores whatever the live partials overwrote.
+      voice.onDiscarded = { onCommit("", voice.sessionViaWake) }
       syncWakeListener()
     }
     // Covers both the settings pane and the context menu writing the defaults.
