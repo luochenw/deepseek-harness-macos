@@ -1,6 +1,6 @@
 # Agent Note: 质量债修复计划 —— 规范补强 + 验证深度 + main.swift 拆分
 
-Status: proposed — Phase 0/1 已完成，Phase 2 仍待做，需等在途功能 session 合并后串行做
+Status: proposed — Phase 0/1/2 已完成，main.swift 3364 → 504 行；待用户确认后挪到 implemented/ 并把 Status 改成过去式
 
 ## Problem
 
@@ -64,8 +64,11 @@ Status: proposed — Phase 0/1 已完成，Phase 2 仍待做，需等在途功�
      - `send()` 是这批里最大最核心的一个方法（~130 行，覆盖懒建会话、slash 命令分发、图片附件编码、Host prompt 提交等全部发送路径），也是全项目目前搬得最长的单个方法。踩了两个新的跨文件可见性坑：① `isCreatingFirstSession`（`private var`，`send()` 内部用于防止懒建会话期间重复触发，读写都要跨文件）——去掉 `private`。② `hostRuntime`（`stopForTermination()` 需要调 `hostRuntime?.stop()`，只读不写）——最初直接去掉 `private` 改成普通 `var`，被隔离 worktree 对抗式 review 抓到：`stopForTermination()` 只读不写，普通 `var` 却把写权限也一并放开给了全模块任何一个 `DSH<Feature>.swift`，跟这份 Note 当时写的"只是放开读取权限"这句话对不上——已改成 `private(set) var`（setter 仍私有、只有同文件内的 `startPersistentHost` 能赋值，getter 放开供跨文件读），补过一轮 typecheck + `--unit` + build + `--smoke` 全绿。
      - 又踩了一次这份 Note 记录过的批次 1 教训：用 `{ printf ...; cat ...; } > file` 拼接新 extension 块时 shell 交互式包装层又把终端转义序列写进了文件——这是第二次踩同一个坑（第一次是批次 8）。没有污染生产文件（中间产物阶段就用 `grep 0x1b` 查出来并作废），改用「Write 工具写 header/footer 纯文本文件 + 只用 `cat 真实文件` 拼接（不掺 printf/echo/花括号分组）」重做，这次还加了一步 Python 逐字节扫描 `\x1b`（比批次 8 单纯目测更可靠的验证手段）确认干净后才落盘。这条坑目前已经踩了两次，以后每批的拼接步骤都必须走这个「纯 cat + 逐字节扫描」流程，不能再凭记忆手写 printf。
      - 验证：typecheck + `--unit`（12/12）+ build + `--smoke`（含写路径）全过；隔离 worktree 对抗式 review 待跑。这批是纯搬运、零行为改动——`send()` 本身逻辑一字未改，只是换了文件；写路径的运行时验证仍然只到 `settings.update` 这一条（Phase 1 就有的已知覆盖缺口），没有专门为这批新增 `prompt`/`send` 的运行时 smoke，评估后认为对等价的纯移动改动不需要新增测试基建，风险由"逐字节 diff 确认搬运前后代码完全一致"这一步兜底。
-   - 还没做：main.swift 目前 1032 行里，HarnessController 类体还有约 14 个方法 + 69 个 `@Published` 属性没动，全部是 Host 生命周期与事件流域（`seedConfigurationFromUserDSHIfNeeded`/`startPersistentHost`/`consumeMuxFrame`/`applyLiveEvent`/`applyLiveSubagentEvent`/`liveMessagePayload`/`liveSourceKind`/`liveIsRelayMessage`/`liveMessageText`/`consumeHostFrame`/`refreshPresets`/`selectCurrentPreset`/`refreshSettings`/`refreshSessionModels`/`refreshModelConfiguration`/`reconnectHostStreams`/`refreshHostSnapshots`）——留到最后做，耦合最重、是事件流的核心。另：`DSHModels.swift` 里的 `toolDetail(_:)`（批次 7 review 发现）、`DSHAttachments.swift` 里的 `loadAttachment(_:)`（批次 9 review 发现，全代码库零调用点，搬移前就是死代码）是已确认的死代码，可在 Phase 2 收尾时一并清掉。
-3. `main.swift` 只留 App 入口 + HarnessController 类声明与 `@Published` 属性 + 核心生命周期，目标 < 800 行，配 `// MARK:` 分区——还没到，当前 1263 行。
+   - ✅ **批次 10 已完成（最后一批）**：Host 生命周期与事件流 18 个成员——`seedConfigurationFromUserDSHIfNeeded`/`startPersistentHost`/`consumeMuxFrame`/`applyLiveEvent`/`applyLiveSubagentEvent`/`liveMessagePayload`/`liveSourceKind`/`liveIsRelayMessage`/`liveMessageText`/`consumeHostFrame`（10 个，事件流/帧消费子域）+ `refreshPresets`/`selectCurrentPreset`/`activePresetLabel`/`refreshSettings`/`refreshSessionModels`/`refreshModelConfiguration`/`reconnectHostStreams`/`refreshHostSnapshots`（8 个，Host 状态刷新子域，比原计划成员列表多了 `activePresetLabel`——一个和 `selectCurrentPreset`/`refreshPresets` 紧耦合的 computed property，物理位置就夹在两者中间，一起搬比拆开更连贯），main.swift 里原本连续的一整块 527 行（490-1016 行）。事件流子域并入既有 `DSHEventSocket.swift`（本来就是这个流的传输层类，消费逻辑搬进来后主题更完整）；状态刷新子域新建 `DSHHostSync.swift`（没有天然既有归宿）。main.swift：1032 → 504 行。这是全部 10 个批次里最大的一批，也是耦合最深的一批——`main.swift` 的历史债拆分到此为止，17 个批次（其中 10 个是方法搬运）全部完成。
+     - 可见性坑是目前最多的一批，因为这批第一次触碰到"写者搬出去、@Published 状态还留在原地"的情况：① `hostStatus`/`hostSessions`/`hostWorkspaces` 三个 `@Published private(set)` 属性——写者（`startPersistentHost`/`consumeMuxFrame`/`consumeHostFrame`/`refreshHostSnapshots`）全部搬出 main.swift，去掉 `private(set)`。② `hostRuntime`——批次 9 时刚改成 `private(set)`（因为当时只有 main.swift 内的 `startPersistentHost` 写它），这批 `startPersistentHost` 本身也搬出去了，`private(set)` 的"同文件可写"条件不再成立，改回普通 `var`（这次不是重复批次 9 的错误：批次 9 时"只放开读权限"是准确的，这批因为写者本身也换了文件，`private(set)` 才变得不再适用——用途不同，不是同一个坑踩两次）。③ `hostEvents`/`muxEvents`（`private var`）——`startPersistentHost`/`reconnectHostStreams` 都要写，两者都搬出主 main.swift，去掉 `private`。④ `resources`/`runtime`/`bundledNode`/`bundledDSH`（`private var` 计算属性，只有 `startPersistentHost` 用）——写者搬出，去掉 `private`；`dshHome` 本来就不是 private（批次 8 之前就有别的文件在用）不用动。⑤ `consumeMuxFrame`/`consumeHostFrame`（原来是 `private func`）——`reconnectHostStreams`（搬进了另一个文件 `DSHHostSync.swift`）需要把它们注册进新建的 `DSHEventSocket` 回调闭包里，跨文件调用，去掉 `private`。⑥ `seedConfigurationFromUserDSHIfNeeded`/`startPersistentHost`（原来是 `private func`）——main.swift 里留下的 `init()` 仍然要调这两个方法，跨文件调用，去掉 `private`。
+     - 这批也是拼接步骤第一次严格照着批次 8/9 教训里定下的流程走（Write 工具写 header/footer 纯文本、只用 `cat 真实文件` 拼接、落盘前 Python 逐字节扫描 `\x1b`），两个新文件（`DSHEventSocket.swift` 追加、`DSHHostSync.swift` 新建）都一次成功，没有再踩第三次转义污染的坑。
+     - 验证：typecheck（0 error）+ `--unit`（12/12）+ build + `--smoke` 全过——这批尤其看重 `--smoke`：它启动打包后的真实 Host 并通过 `DSHHostClient` 建立连接、拉设置快照，这条路径正是 `startPersistentHost`/`DSHEventSocket` 消费逻辑搬运后要保持能跑通的东西，不是碰巧顺带覆盖，是这批最相关的运行时信号。隔离 worktree 对抗式 review 待跑。
+3. ✅ `main.swift` 现在只剩 App 入口 + `HarnessController` 类声明 + `@Published` 属性 + `init()`/`deinit` + 少量计算属性（`sessionGroups`/`dshHome` 等），504 行，远低于 < 800 行的目标。没有额外加 `// MARK:` 分区——剩下的内容本身已经是单一连贯的"状态声明 + 生命周期"区块，不再有多个不同功能域混杂在一起需要用注释分区导航，加分区反而是为了加而加。
 4. （可选、单独开 Note）69 个 `@Published` 分组为子 ObservableObject——改变刷新语义、风险高，不并入本计划。
 
 ### Phase 2 rebase 冲突：合并进 main 前重新对齐
@@ -100,7 +103,7 @@ Phase 1 的 adversarial review workflow（`wams8yndi`）没加 `isolation: 'work
 
 - Phase 0：CLAUDE.md/AGENTS.md 规范落地；`test-macos-native.sh` 对 main.swift 增行直接报错；`build-macos-app.sh` 不再累积 stage 残留。
 - Phase 1：`--unit` 在本地与 CI 可跑且有第一批真实断言；smoke 覆盖至少一条写路径；CI 包含 build + unit + smoke。
-- Phase 2：main.swift < 800 行、有 MARK 分区；全部批次 typecheck + build + smoke 通过；WEB_PARITY.md 与相关 Note 状态同步。
+- Phase 2：✅ main.swift < 800 行（504 行）；全部批次 typecheck + build + smoke 通过；MARK 分区评估后判定不需要（见上文批次 10 后的说明）；WEB_PARITY.md 与相关 Note 状态同步待做（此计划本身是架构/验证改动，不改变 Web parity 状态，评估后判定 WEB_PARITY.md 无需更新）。
 
 ## Risks
 
