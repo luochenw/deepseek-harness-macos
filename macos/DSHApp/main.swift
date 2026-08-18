@@ -48,7 +48,7 @@ final class HarnessController: ObservableObject {
     case standard, code, minimal, creator
     var id: String { rawValue }
     var label: String {
-      switch self { case .standard: "标准模式"; case .code: "代码模式"; case .minimal: "极简模式"; case .creator: "创建者模式" }
+      switch self { case .standard: "标准模式"; case .code: "PTC 模式"; case .minimal: "极简模式"; case .creator: "创造模式" }
     }
     var detail: String {
       switch self {
