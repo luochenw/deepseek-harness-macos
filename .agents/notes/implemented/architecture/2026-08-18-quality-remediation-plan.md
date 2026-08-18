@@ -1,6 +1,6 @@
 # Agent Note: 质量债修复计划 —— 规范补强 + 验证深度 + main.swift 拆分
 
-Status: proposed — Phase 0/1/2 已完成，main.swift 3364 → 504 行；待用户确认后挪到 implemented/ 并把 Status 改成过去式
+Status: implemented — Phase 0/1/2 全部完成，main.swift 3364 → 504 行
 
 ## Problem
 
@@ -12,9 +12,9 @@ Status: proposed — Phase 0/1/2 已完成，main.swift 3364 → 504 行；待�
 
 根因：CLAUDE.md 管住了**流程**（先想清楚、写 Note、验证命令、提交纪律），但没有**质量规范**——没有测试要求、没有文件结构约束、没有 CI 深度要求，且唯一一条 main.swift 约束没有 gate。
 
-## Proposal
+## Decision
 
-按"冲突面从小到大"分三阶段，兼容当前两个在途功能 session：
+按"冲突面从小到大"分三阶段，兼容当时两个在途功能 session：
 
 ### Phase 0 — 立规矩 + 止血（本 session，纯文档/脚本，零冲突，立即）✅ 已完成
 
@@ -99,17 +99,21 @@ Phase 1 的 adversarial review workflow（`wams8yndi`）没加 `isolation: 'work
 - **@Published 拆子 ObservableObject 并入 Phase 2**：改动面从"搬代码"升级为"改刷新语义"，回归风险不同量级 → 拆出去单独决策。
 - **UI 自动化测试（XCUITest 等）现在就上**：没有 Xcode 工程，成本最高、收益排最后 → 先把单测和读写 smoke 立起来，UI 自动化另行评估。
 
-## Acceptance criteria
+## Consequences
 
-- Phase 0：CLAUDE.md/AGENTS.md 规范落地；`test-macos-native.sh` 对 main.swift 增行直接报错；`build-macos-app.sh` 不再累积 stage 残留。
-- Phase 1：`--unit` 在本地与 CI 可跑且有第一批真实断言；smoke 覆盖至少一条写路径；CI 包含 build + unit + smoke。
-- Phase 2：✅ main.swift < 800 行（504 行）；全部批次 typecheck + build + smoke 通过；MARK 分区评估后判定不需要（见上文批次 10 后的说明）；WEB_PARITY.md 与相关 Note 状态同步待做（此计划本身是架构/验证改动，不改变 Web parity 状态，评估后判定 WEB_PARITY.md 无需更新）。
+- **main.swift**：3364 → 504 行（-2860，-85%）。只剩 App 入口（`DSHNativeApp`）+ `HarnessController` 类声明 + 全部 `@Published` 状态 + `init()`/`deinit` + 少量核心计算属性（`sessionGroups`/`dshHome` 等）。没有加 `// MARK:` 分区——剩下的内容评估后判断已经是单一连贯的"状态声明 + 生命周期"区块，加分区没有实际导航收益。
+- **新增/大幅扩充的文件**：`ContentView.swift`/`SidebarView.swift`/`ConversationView.swift`/`ComposerView.swift`（批次 1，view 层）；`DSHWorkspaceActions.swift`/`DSHSessionActions.swift`/`DSHHistory.swift`/`DSHSubagents.swift`/`DSHGoalActions.swift`/`DSHModels.swift`/`DSHSettingsActions.swift`（批次 2-8，既有文件新增 `extension HarnessController`）；`DSHSendActions.swift`/`DSHHostSync.swift`（批次 9-10，全新文件，没有既有 wire-type 文件可并入）；`DSHAttachments.swift`/`DSHQueue.swift`/`DSHEventSocket.swift`（批次 9-10，既有文件扩充）。
+- **main.swift 冻结令现在有实质约束力**：gate 基线从 3364 一路下调到 504，新代码想绕开"写进 extension"的规则会立刻被 `test-macos-native.sh` 拦下来，不再是纸面规范。
+- **验证深度**：`--unit`（12 个断言）+ 扩展后的 `--smoke`（含 `settings.update` 写路径）+ CI 五步流水线全部落地并在本地跑通；10 个 Phase 2 批次每批都过 typecheck + `--unit` + build + `--smoke`，最后一批的 `--smoke` 还实际验证了这批搬运的 Host 连接建立路径。
+- **可见性代价**：`private`/`private(set)` 在这个"按功能域拆文件"架构下已经普遍无法表达"仅内部使用"，只能靠文件组织本身体现意图——这是分批过程中反复验证到的架构性权衡，不是某一批的失误。批次 9→10 之间 `hostRuntime` 从 `private(set)` 又改回普通 `var`（因为写者本身也搬到了另一个文件）是这个权衡的典型例子。
+- **已知遗留项**（不在本计划范围内，留给后续按需处理）：`DSHModels.swift` 的 `toolDetail(_:)`、`DSHAttachments.swift` 的 `loadAttachment(_:)` 是两处移动前就存在的死代码（零调用点），批次 7/9 review 各自发现；69 个 `@Published` 属性未拆分为子 `ObservableObject`（见下方 Alternatives，改变刷新语义、风险不同量级，需要单独一份 Note）。
+- **过程性收获**：识别并修复了一个会反复复现的 shell 拼接坑（`{ printf ...; cat ...; } > file` 会把终端转义序列写进文件）——最终固化为「Write 工具写 header/footer 纯文本 + 只用 `cat 真实文件` 拼接 + 落盘前逐字节扫描 `\x1b`」的标准流程；也把一次性 review workflow 脚本改造成了参数化、可复用的通用脚本（`ds-harness-phase2-batch-review`）。
 
-## Risks
+## Risks（历史记录，实施期间的风险评估）
 
-- 行数 gate 基线写死数字，功能 session 若在合并前仍向 main.swift 加码会先撞 gate——这是预期行为（止血），但需要用户提前知会那两个 session。
-- swiftc 自编 test runner 是非标准方案，断言/报告能力有限；规模长大后可能需要迁移（已在 Alternatives 中预留重评估路径）。
-- Phase 2 纯机械搬运仍可能踩到 `private`/`fileprivate` 可见性问题，typecheck 会暴露，逐批处理。
+- 行数 gate 基线写死数字，功能 session 若在合并前仍向 main.swift 加码会先撞 gate——这是预期行为（止血），已通过用户知会缓解，实施期间未造成阻塞。
+- swiftc 自编 test runner 是非标准方案，断言/报告能力有限；目前 12 个断言规模下够用，规模长大后可能需要迁移（已在 Alternatives 中预留重评估路径）。
+- Phase 2 纯机械搬运确实反复踩到 `private`/`fileprivate` 可见性问题（10 个批次里 8 个批次都有至少一处），全部靠 typecheck 逐批暴露、逐批修复，没有遗漏到运行时才发现的情况。
 
 ## Phase 0 review notes（多 agent 交叉验证，2026-08-18）
 
