@@ -279,33 +279,6 @@ final class HarnessController: ObservableObject {
   @Published var showProviderAuthoring = false
   @Published var selectedProviderForAuthoring: DSHConfigurableProvider?
 
-  func openProviderAuthoring(_ provider: DSHConfigurableProvider? = nil) {
-    selectedProviderForAuthoring = provider
-    showProviderAuthoring = true
-  }
-
-  func openSettingsEditor(ns: DSHSettingsNamespace) {
-    selectedSettingsNamespace = ns
-    showSettingsEditor = true
-  }
-
-  func saveSettings(ns: String, patch: [String: Any], revision: Int, conflict: @escaping () -> Void = {}) {
-    guard let patchValue = DSHJSONPatchValue(patch) else {
-      status = "设置格式无效"
-      return
-    }
-    mutateSettings(
-      ns: ns,
-      ops: [DSHSettingsPathOperation.set(path: [], value: patchValue)],
-      revision: revision,
-      success: { _ in self.showSettingsEditor = false },
-      conflict: conflict
-    )
-  }
-
-  func saveCredential(ref: String, value: String) { guard let hostClient else { return }; Task { do { try await hostClient.setCredential(ref: ref, value: value); await MainActor.run { self.status = "凭据已保存"; self.refreshModelConfiguration() } } catch { await MainActor.run { self.status = "凭据保存失败：\(error.localizedDescription)" } } } }
-  func unsetCredential(ref: String) { guard let hostClient else { return }; Task { do { try await hostClient.unsetCredential(ref: ref); await MainActor.run { self.status = "凭据已清除"; self.refreshModelConfiguration() } } catch { await MainActor.run { self.status = "凭据清除失败：\(error.localizedDescription)" } } } }
-
   @Published var showSettings = false
   @Published var showSessionSearch = false
   @Published var showRenameSession = false
@@ -452,16 +425,6 @@ final class HarnessController: ObservableObject {
       return "\(group.nativeDisplayName) / \(match.name)\(suffix)"
     }
     return "\(provider == "relay" ? "自定义配置" : provider) / \(model)"
-  }
-  /// Clamp a requested effort to what the target model actually advertises:
-  /// the requested level when offered, else the adapter default, else the
-  /// first offered level; nil (omit the field on the wire) for a model with
-  /// no reasoning metadata — pi-ai rejects any named level beyond "off" there.
-  func advertisedEffort(provider: String, model: String, requested: String?) -> String? {
-    guard let entry = availableModels.first(where: { $0.id == provider })?.models.first(where: { $0.id == model }),
-          let reasoning = entry.reasoning else { return nil }
-    if let requested, reasoning.efforts.contains(where: { $0.id == requested }) { return requested }
-    return reasoning.defaultEffort ?? reasoning.efforts.first?.id
   }
 
   struct WorkspaceSessionGroup: Identifiable {
