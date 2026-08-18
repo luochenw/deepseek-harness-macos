@@ -46,7 +46,7 @@
 ## 质量规范
 
 - **main.swift 冻结**：`main.swift` 只保留 App 入口、`HarnessController` 类声明与核心生命周期——新的 `@Published` 状态、controller 方法、顶层 View **一律不再**写进这个文件，哪怕是"核心流程"。新状态/新逻辑写成 `DSH<Feature>.swift` 里的 `extension HarnessController`（没有对应文件就新建一个）；新界面写成独立的 `<Feature>View.swift` / `Native<Feature>View.swift`。这条规则配了 gate，不是口头约定：`./scripts/test-macos-native.sh` 会检查 `main.swift` 行数不超过基线，超了直接报错退出。
-- `main.swift` 的历史债正在分批拆分中（拆一批、gate 基线跟着下调一批，当前 1226 行），进度与决策见 [Agent Note](.agents/notes/proposed/architecture/2026-08-18-quality-remediation-plan.md)。
+- `main.swift` 的历史债正在分批拆分中（拆一批、gate 基线跟着下调一批，当前 1032 行），进度与决策见 [Agent Note](.agents/notes/proposed/architecture/2026-08-18-quality-remediation-plan.md)。
 - 改行为的代码（不是纯文档/纯 UI 文案）优先带上能验证的手段——现阶段是契约 fixture（`NativeContractCheck.swift`）+ smoke（`--smoke`），单测基建落地后（见上面 Note 的 Phase 1）新逻辑改动要带对应单测。
 
 ## CLAUDE.md 组织方式：不拆子目录

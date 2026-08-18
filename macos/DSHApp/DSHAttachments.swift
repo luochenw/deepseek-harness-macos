@@ -20,3 +20,23 @@ final class DSHAttachmentStore: ObservableObject {
     }
   }
 }
+
+extension HarnessController {
+  func loadAttachment(_ ref: DSHAttachmentRef) {
+    guard let hostClient, let sessionId = hostCurrentSessionID else { return }
+    Task { do { let result = try await hostClient.attachment(sessionId: sessionId, attachmentId: ref.attachmentId); await MainActor.run { self.appendSystem("已读取附件：\(result.attachment.name ?? result.attachment.attachmentId)，\(result.attachment.bytes) bytes") } } catch { await MainActor.run { self.appendSystem("附件读取失败：\(error.localizedDescription)") } } }
+  }
+
+  func pickImage() {
+    let panel = NSOpenPanel()
+    panel.title = "选择图片附件"
+    panel.allowedContentTypes = [.png, .jpeg, .webP, .gif]
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = false
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    let ext = url.pathExtension.lowercased()
+    let type = ext == "png" ? "image/png" : ext == "gif" ? "image/gif" : ext == "webp" ? "image/webp" : "image/jpeg"
+    draftImage = DraftImage(url: url, mediaType: type)
+  }
+}

@@ -27,3 +27,39 @@ enum DSHQueueAction: Encodable {
   }
 }
 struct DSHQueueMutationResult: Decodable { let accepted: Bool }
+
+extension HarnessController {
+  func mutateQueue(_ item: DSHQueueItem, action: DSHQueueAction) {
+    guard let hostClient, let sessionId = hostCurrentSessionID else { return }
+    Task {
+      do {
+        try await hostClient.updateQueue(sessionId: sessionId, itemId: item.id, action: action)
+        await MainActor.run { self.status = "队列操作已提交" }
+      } catch { await MainActor.run { self.appendSystem("队列操作失败：\(error.localizedDescription)") } }
+    }
+  }
+
+  /// Submits while a turn is already running, via the same Host RPC `send()`
+  /// uses (`session.prompt` defaults to `mode: "queue"`) — previously this
+  /// only appended to a local array that nothing ever drained once the
+  /// legacy one-shot CLI path was removed, so a message typed while
+  /// "运行中" silently vanished. The Host's own `session/queue` push
+  /// (already wired into `queueItems`) is what actually reflects the queued
+  /// item back into the UI, not local state here.
+  func queueDraft() {
+    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let image = draftImage
+    guard !text.isEmpty || image != nil else { return }
+    guard let hostClient, let hostSessionID = hostCurrentSessionID else { return }
+    draft = ""
+    draftImage = nil
+    Task {
+      do {
+        var content: [DSHPromptContent] = text.isEmpty ? [] : [.text(text)]
+        if let image, let bytes = try? Data(contentsOf: image.url) { content.append(.image(data: bytes.base64EncodedString(), mediaType: image.mediaType, name: image.url.lastPathComponent)) }
+        try await hostClient.prompt(sessionId: hostSessionID, content: content, mode: "queue")
+        await MainActor.run { self.status = "已排队" }
+      } catch { await MainActor.run { self.appendSystem("排队失败：\(error.localizedDescription)") } }
+    }
+  }
+}
