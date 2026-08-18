@@ -4,10 +4,10 @@ import Darwin
 
 private let appName = "DeepSeek Harness"
 let workspaceKey = "dsh.workspace"
-private let modelKey = "dsh.model"
-private let providerKey = "dsh.provider"
-private let reasoningEffortKey = "dsh.reasoningEffort"
-private let presetKey = "dsh.preset"
+let modelKey = "dsh.model"
+let providerKey = "dsh.provider"
+let reasoningEffortKey = "dsh.reasoningEffort"
+let presetKey = "dsh.preset"
 
 @main
 struct DSHNativeApp: App {
@@ -1245,58 +1245,6 @@ final class HarnessController: ObservableObject {
   /// for a GUI app's actual quit path, so `applicationWillTerminate` (wired
   /// in DSHNativeApp) calls this explicitly.
   func stopForTermination() { hostRuntime?.stop() }
-
-
-
-  /// `reasoning` nil means "don't ask for a specific effort" — sent to the
-  /// Host as an omitted field (not a fallback to whatever `reasoningEffort`
-  /// happened to be left at), so switching to a model that doesn't support
-  /// the previously-selected model's effort (e.g. Relay's models have no
-  /// `reasoning.efforts` at all, so "high"/"max" from a DeepSeek-official
-  /// pick get rejected as `model-unavailable`) lets the Host fall back to
-  /// that model's own default instead of failing the switch outright.
-  func selectCurrentModel(provider: String, model: String, reasoning: String? = nil) {
-    let nextProvider = provider.trimmingCharacters(in: .whitespacesAndNewlines)
-    let nextModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !nextProvider.isEmpty, !nextModel.isEmpty else { return }
-    self.provider = nextProvider
-    self.model = nextModel
-    if let reasoning { self.reasoningEffort = reasoning }
-    // Persist the full triple — restoring provider/model but resetting the
-    // effort would recreate invalid pairs on relaunch (e.g. a model that only
-    // supports "off" coming back with the hardcoded "high" default).
-    UserDefaults.standard.set(nextProvider, forKey: providerKey)
-    UserDefaults.standard.set(nextModel, forKey: modelKey)
-    UserDefaults.standard.set(reasoningEffort, forKey: reasoningEffortKey)
-    // No live session yet: keep the local choice; newSession() pushes it via
-    // session.selectModel the moment the next session is created.
-    guard let hostClient, let sessionId = hostCurrentSessionID else { return }
-    Task {
-      do {
-        let selected = try await hostClient.selectModel(sessionId: sessionId, provider: nextProvider, model: nextModel, reasoningEffort: reasoning)
-        await MainActor.run {
-          // Sync back whatever effort the Host actually resolved to (its
-          // own default when we omitted one) so the composer label doesn't
-          // keep showing a stale effort the switch didn't actually request.
-          if let resolved = selected.reasoningEffort { self.reasoningEffort = resolved }
-          self.status = "已切换到 \(self.nativeProviderDisplayName(nextProvider)) / \(nextModel)"
-        }
-      } catch { await MainActor.run { self.appendSystem("模型切换失败：\(error.localizedDescription)") } }
-    }
-  }
-
-  func setPreset(_ next: Preset) {
-    preset = next
-    UserDefaults.standard.set(next.rawValue, forKey: presetKey)
-    appendSystem("新会话将使用\(next.label)。当前运行中的会话不受影响。")
-  }
-
-  private func nativeProviderDisplayName(_ provider: String) -> String {
-    availableModels.first(where: { $0.id == provider })?.nativeDisplayName
-      ?? (provider == "relay" ? "自定义配置" : provider)
-  }
-
-  func toolDetail(_ tool: ToolActivity) { selectedTool = tool; showDetails = true }
 
   var dshHome: URL {
     // DSH_APP_HOME 只影响本 App 的配置根；$HOME 骗不过

@@ -50,7 +50,7 @@ command -v plutil >/dev/null || { echo "plutil is required (macOS only)." >&2; e
 # instead (see CLAUDE.md "质量规范" / AGENTS.md). This gate is what makes that
 # a rule instead of a suggestion — it only ever ratchets down.
 MAIN_SWIFT="$ROOT/macos/DSHApp/main.swift"
-MAIN_SWIFT_LINE_LIMIT=1315
+MAIN_SWIFT_LINE_LIMIT=1263
 [[ -f "$MAIN_SWIFT" ]] || { echo "Expected main.swift at $MAIN_SWIFT — did it move or get removed (e.g. finished the Phase 2 split)? Update MAIN_SWIFT and MAIN_SWIFT_LINE_LIMIT here, and the freeze rule in AGENTS.md/CLAUDE.md, to match." >&2; exit 1; }
 # awk, not `wc -l`: wc -l counts newline bytes, so a final line with no
 # trailing newline would silently undercount by one right at the limit.

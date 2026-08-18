@@ -7,7 +7,7 @@ Status: proposed — Phase 0/1 已完成，Phase 2 仍待做，需等在途功�
 外部质量评审指出两类真实短板，已逐条核实（2026-08-18）：
 
 1. **验证深度不足**：0 单元测试、0 UI 测试；"契约测试"只是编译时 fixture（`NativeContractCheck.swift`，能编译 ≠ 行为正确）；smoke 只覆盖只读 API（`verify-native-host-api.sh`），prompt / settings.update / subagent 等读写路径零覆盖；CI（`.github/workflows/ci.yml`）只跑 typecheck，不构建、不冒烟。
-2. **main.swift 是架构债**：3364 行单文件 = HarnessController（68 个 `@Published`）+ 30 个顶层 view struct 混在一起，零 `// MARK:` 分区、零 `extension`。AGENTS.md 写了 "rather than growing main.swift further"，但同一文件又允许 "inline in main.swift for core flows"，且没有任何强制手段——规范落空的制度性原因。
+2. **main.swift 是架构债**：3364 行单文件 = HarnessController（69 个 `@Published`——外部评审截图原话是"68 个"，Phase 2 批次 7 时顺手核实过是 69，此后统一用核实过的数字）+ 30 个顶层 view struct 混在一起，零 `// MARK:` 分区、零 `extension`。AGENTS.md 写了 "rather than growing main.swift further"，但同一文件又允许 "inline in main.swift for core flows"，且没有任何强制手段——规范落空的制度性原因。
 3. 次要：主 checkout 的 `dist/` 里有构建中断残留的 stage 目录；`.agents/notes/proposed/simplification/` 是空目录（均为未跟踪本地产物，不在 git 里）。
 
 根因：CLAUDE.md 管住了**流程**（先想清楚、写 Note、验证命令、提交纪律），但没有**质量规范**——没有测试要求、没有文件结构约束、没有 CI 深度要求，且唯一一条 main.swift 约束没有 gate。
@@ -54,9 +54,12 @@ Status: proposed — Phase 0/1 已完成，Phase 2 仍待做，需等在途功�
      - 验证：typecheck + `--unit`（12/12）+ build + `--smoke` 全过；额外用隔离的（`isolation: 'worktree'`）对抗式 review workflow 复核过这批 diff——代码本身逐字节比对确认是纯移动、跨代码库 grep 确认没有遗漏的调用点，抓到的唯一一条是这份 Note 自己数错数（写"6 个成员"实际列了 7 个，漏数了 `currentSubagentParentID` 这个 computed property；顺带发现批次 2 也有同样的错，"9 个成员"实际是 10 个，一并改了）——纯文档计数问题，不是代码 bug，已修正。这次 review 全程隔离在独立 worktree 里，没有再重演 Phase 1 review 那次污染实时工作目录的事故。
    - ✅ **批次 6 已完成**：目标/审批/问题 9 个成员（`performGoalAction`/`alwaysAllowKey`（static）/`answerApproval`/`deferPendingQuestion`/`presentDeferredQuestion`/`answerQuestionBatch`/`applyProjectedTitle`/`refreshAttentionBadge`/`appendSystem`，89 行）搬进既有 `DSHGoalActions.swift`（之前只有 goal 相关 wire types）。main.swift：1405 → 1315 行。范围比域名更宽一点——`appendSystem`/`refreshAttentionBadge` 严格说是"系统消息/提醒角标"工具方法，不是 goal 专属，但和 goal/approval/question 这几个方法搭配 `appendSystem` 一起用，拆开放会更零碎，就一起搬了（`appendSystem` 本身是全代码库共用的工具方法，实测 `macos/DSHApp/` 下真实调用点有 38 处、分布在 8 个文件里，这批只占 5 处——不是"深度耦合、大半在这批"，只是搬运时顺手把这几个耦合最紧的方法带过去）。`refreshAttentionBadge` 也被 main.swift 里留下的 `consumeMuxFrame`（Host 事件流批次还没做）调用，一样去掉 `private`。`appendSystem` 本来就是特意标了"Internal, not private"（`NativeWorkspaceChips.swift` 也要用），这批不用再改。
      - 验证：typecheck + `--unit`（12/12）+ build + `--smoke` 全过；隔离 worktree 的对抗式 review 复核过——代码本身干净（纯移动，无遗漏调用点），抓到的是这份 Note 自己写错的 `appendSystem` 调用点统计（原文声称"17 处、大半在这批"，实测 38 处、这批只占 5 处），已按上面改法修正——把这次教训直接吸取进正文措辞，不是简单改个数字了事。这也是把这个 review 脚本从批次 5 那次的一次性写法改成了参数化、可复用的通用脚本（`ds-harness-phase2-batch-review`），后续批次可以直接传目标文件/符号列表/行数变化复用，不用每次重写 prompt。
-   - 还没做：main.swift 目前 1315 行里，HarnessController 类体还有约 31 个方法 + 68 个 `@Published` 属性没动；已经按名字前缀/主题分好域（设置/凭据、Host 生命周期与事件流、发送/队列、模型/preset）——剩下这几个是核心链路，耦合更重。
-3. `main.swift` 只留 App 入口 + HarnessController 类声明与 `@Published` 属性 + 核心生命周期，目标 < 800 行，配 `// MARK:` 分区——还没到，当前 1315 行。
-4. （可选、单独开 Note）68 个 `@Published` 分组为子 ObservableObject——改变刷新语义、风险高，不并入本计划。
+   - ✅ **批次 7 已完成**：模型/preset 4 个成员（`selectCurrentModel`/`setPreset`/`nativeProviderDisplayName`/`toolDetail`，49 行）搬进既有 `DSHModels.swift`（之前只有模型目录 wire types）。main.swift：1315 → 1263 行。踩坑跟批次 2 同类——`providerKey`/`modelKey`/`reasoningEffortKey`/`presetKey` 这 4 个文件作用域 `private let` 常量（`workspaceKey` 批次 2 时已经放开，这 4 个当时留着没动）被 `selectCurrentModel`/`setPreset` 用到，一起去掉 `private`，5 个 UserDefaults key 常量现在全部是模块内可见。
+     - 顺手核实了一件事：`@Published` 真实数量是 **69**，不是六个批次以来一直在报的"68"——那是外部评审截图给的数字，从第一份 Note 起没人重新数过，是和批次 6 那次 appendSystem 调用数写错同一类问题（抄了个没验证的数字）。这次是自己核实出来的，已经把本 Note 里所有提到这个数字的地方都改成 69。
+     - 验证：typecheck + `--unit`（12/12）+ build + `--smoke` 全过；隔离 worktree 的对抗式 review 复核过——纯移动无遗漏调用点，唯一一条发现是 `toolDetail(_:)` 在全代码库里零调用点（`grep` 确认，含 `dist/`/`DSHTests/`）——这是移动前就存在的死代码，不是这次搬运引入的，先如实记录，留给以后专门的死代码清理批次处理，不在这批顺手删（范围外改动）。
+   - 还没做：main.swift 目前 1263 行里，HarnessController 类体还有约 27 个方法 + 69 个 `@Published` 属性没动；已经按名字前缀/主题分好域（设置/凭据、Host 生命周期与事件流、发送/队列）——剩下这两个是核心链路，耦合更重，留到最后做。另：`DSHModels.swift` 里的 `toolDetail(_:)` 是已确认的死代码（批次 7 review 发现），可在 Phase 2 收尾时一并清掉。
+3. `main.swift` 只留 App 入口 + HarnessController 类声明与 `@Published` 属性 + 核心生命周期，目标 < 800 行，配 `// MARK:` 分区——还没到，当前 1263 行。
+4. （可选、单独开 Note）69 个 `@Published` 分组为子 ObservableObject——改变刷新语义、风险高，不并入本计划。
 
 ### Phase 2 rebase 冲突：合并进 main 前重新对齐
 
