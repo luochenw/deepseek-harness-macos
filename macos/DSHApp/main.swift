@@ -222,13 +222,13 @@ final class HarnessController: ObservableObject {
         return Diff(path: path, oldText: diff["oldText"] as? String, newText: newText)
       }
       let lines = (view["lines"] as? [[String: Any]] ?? []).compactMap { line -> FileLine? in
-        guard let number = line["number"] as? Int, let text = line["text"] as? String else { return nil }
+        guard let number = DSHToolPresentationNumber.integerValue(line["number"]), let text = line["text"] as? String else { return nil }
         return FileLine(number: number, text: text)
       }
       let files = (view["files"] as? [[String: Any]] ?? []).compactMap { file -> SearchFile? in
         guard let path = file["path"] as? String else { return nil }
         let matches = (file["matches"] as? [[String: Any]] ?? []).compactMap { match -> SearchMatch? in
-          guard let lineNumber = match["lineNumber"] as? Int, let line = match["line"] as? String else { return nil }
+          guard let lineNumber = DSHToolPresentationNumber.integerValue(match["lineNumber"]), let line = match["line"] as? String else { return nil }
           return SearchMatch(lineNumber: lineNumber, line: line)
         }
         return SearchFile(path: path, matches: matches)
@@ -239,15 +239,15 @@ final class HarnessController: ObservableObject {
       }
       return ToolPresentation(
         card: card, title: view["title"] as? String, path: view["path"] as? String,
-        output: view["output"] as? String, exitCode: view["exitCode"] as? Int,
+        output: view["output"] as? String, exitCode: DSHToolPresentationNumber.integerValue(view["exitCode"]),
         signal: view["signal"] as? String, cwd: view["cwd"] as? String,
         description: view["description"] as? String, diffs: diffs, lines: lines,
-        totalLines: view["totalLines"] as? Int, lang: view["lang"] as? String,
+        totalLines: DSHToolPresentationNumber.integerValue(view["totalLines"]), lang: view["lang"] as? String,
         searchShape: view["shape"] as? String, files: files,
         paths: view["paths"] as? [String] ?? [], truncated: view["truncated"] as? Bool ?? false,
-        total: view["total"] as? Int, webKind: view["kind"] as? String,
+        total: DSHToolPresentationNumber.integerValue(view["total"]), webKind: view["kind"] as? String,
         answer: view["answer"] as? String, url: view["url"] as? String,
-        statusCode: view["statusCode"] as? Int, sources: sources
+        statusCode: DSHToolPresentationNumber.integerValue(view["statusCode"]), sources: sources
       )
     }
   }
@@ -337,6 +337,7 @@ final class HarnessController: ObservableObject {
   /// default page's first message — gates duplicate sends until it resolves.
   var isCreatingFirstSession = false
   let attachmentStore = DSHAttachmentStore()
+  let agentPlatform = DSHAgentPlatformState()
   // Internal, not private: the voice-dispatch extension
   // (DSHVoiceDispatch.swift) posts completion/approval notifications.
   let nativeAlerts = NativeAlerts()
@@ -367,22 +368,25 @@ final class HarnessController: ObservableObject {
     return url
   }
 
-  init() {
-    if let path = UserDefaults.standard.string(forKey: workspaceKey), FileManager.default.fileExists(atPath: path) {
-      workspace = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-    } else if let defaultURL = Self.defaultWorkspaceURL() {
-      workspace = defaultURL
-      UserDefaults.standard.set(defaultURL.path, forKey: workspaceKey)
-    }
-    provider = UserDefaults.standard.string(forKey: providerKey) ?? ""
-    model = UserDefaults.standard.string(forKey: modelKey) ?? ""
-    reasoningEffort = UserDefaults.standard.string(forKey: reasoningEffortKey) ?? "high"
-    preset = Preset(rawValue: UserDefaults.standard.string(forKey: presetKey) ?? Preset.code.rawValue) ?? .code
-    seedConfigurationFromUserDSHIfNeeded()
-    nativeAlerts.attach()
+  init(startRuntime: Bool = true) {
+    agentPlatform.attach(to: self)
     // 启动不再自动建会话：停在默认页（空态 + 可输入的 composer），第一条
     // 消息发出时才懒创建 —— 见 lazy-first-session Agent Note。
-    startPersistentHost()
+    if startRuntime {
+      if let path = UserDefaults.standard.string(forKey: workspaceKey), FileManager.default.fileExists(atPath: path) {
+        workspace = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+      } else if let defaultURL = Self.defaultWorkspaceURL() {
+        workspace = defaultURL
+        UserDefaults.standard.set(defaultURL.path, forKey: workspaceKey)
+      }
+      provider = UserDefaults.standard.string(forKey: providerKey) ?? ""
+      model = UserDefaults.standard.string(forKey: modelKey) ?? ""
+      reasoningEffort = UserDefaults.standard.string(forKey: reasoningEffortKey) ?? "high"
+      preset = Preset(rawValue: UserDefaults.standard.string(forKey: presetKey) ?? Preset.code.rawValue) ?? .code
+      seedConfigurationFromUserDSHIfNeeded()
+      nativeAlerts.attach()
+      startPersistentHost()
+    }
   }
 
   deinit { muxEvents?.stop(); hostEvents?.stop(); hostRuntime?.stop() }
@@ -405,7 +409,7 @@ final class HarnessController: ObservableObject {
   /// A one-shot subagent's transcript is a frozen, read-only overlay — see
   /// the subagent-transcript-redesign Agent Note.
   var isViewingReadOnlySubagent: Bool { subagentTranscript != nil && activeSubagentAddress?.mode != "continuable" }
-  var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && workspace != nil && hasCredential && !isRunning && !isViewingReadOnlySubagent }
+  var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && hasCredential && !displayedIsRunning && !isViewingReadOnlySubagent }
   /// The currently-selected model's catalog entry, when the live catalog
   /// lists it. Carries the adapter-owned reasoning metadata (nil for a model
   /// with no selectable effort).

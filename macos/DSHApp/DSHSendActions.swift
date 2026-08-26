@@ -1,6 +1,14 @@
 import Foundation
 
 extension HarnessController {
+  func clearPendingLocalUserMessage(localSessionID: UUID, messageID: UUID) {
+    guard let sessionIndex = sessions.firstIndex(where: { $0.id == localSessionID }),
+          let messageIndex = sessions[sessionIndex].messages.firstIndex(where: { $0.id == messageID }),
+          sessions[sessionIndex].messages[messageIndex].hostMessageId == DSHTranscriptMessageMarker.pendingLocalUserHostMessageID
+    else { return }
+    sessions[sessionIndex].messages[messageIndex].hostMessageId = nil
+  }
+
   func send() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     let image = draftImage
@@ -10,6 +18,10 @@ extension HarnessController {
     if let image, let bytes = try? Data(contentsOf: image.url) { content.append(.image(data: bytes.base64EncodedString(), mediaType: image.mediaType, name: image.url.lastPathComponent)) }
 
     if let hostClient, let address = activeSubagentAddress, address.mode == "continuable" {
+      guard !Self.isRootOnlySubagentSlashCommand(text) else {
+        status = "子代理不支持 /goal、/plan 等根会话命令"
+        return
+      }
       draft = ""
       draftImage = nil
       Task {
@@ -28,9 +40,12 @@ extension HarnessController {
       if text == "/export" { draft = ""; exportCurrentSessionLog(); return }
       if text == "/model" { draft = ""; showModelPicker = true; return }
     }
-    guard workspace != nil else { status = "请选择工作区"; chooseWorkspace(); return }
+    // No workspace gate: `session.create` accepts a nil cwd (verified
+    // against the live Host — the session runs on the Host's default
+    // directory), so a plain conversation needs no folder. Picking one
+    // stays available through the header/chips for file work.
     guard hasCredential else { status = "需要配置 API Key"; showSettings = true; return }
-    guard !isRunning else { return }
+    guard !displayedIsRunning else { return }
     // 默认页上的第一条消息：先懒创建会话（本地行 + Host 持久会话），
     // 建好后重入 send()，草稿原样还在。isCreatingFirstSession 挡住
     // 创建期间的重复触发（回车连按/按钮连点）。
@@ -38,11 +53,15 @@ extension HarnessController {
       guard !isCreatingFirstSession else { return }
       guard hostClient != nil else { status = "Host 未连接，无法发送；请点击重新连接后再试"; return }
       isCreatingFirstSession = true
-      insertLocalSessionRow()
-      attachHostSessionToCurrentPlaceholder { [weak self] ok in
+      let localSessionID = insertLocalSessionRow()
+      attachHostSessionToPlaceholder(localSessionID: localSessionID) { [weak self] sessionId in
         guard let self else { return }
         self.isCreatingFirstSession = false
-        if ok { self.send() }
+        if let sessionId,
+           self.selectedSessionID == localSessionID,
+           self.hostCurrentSessionID == sessionId {
+          self.send()
+        }
       }
       return
     }
@@ -55,7 +74,11 @@ extension HarnessController {
     // typed result; an unresolvable line falls back to a normal prompt.
     if text.hasPrefix("/"), image == nil {
       draft = ""
-      sessions[sessionIndex].messages.append(Message(role: .user, text: text))
+      var localMessage = Message(role: .user, text: text)
+      localMessage.hostMessageId = DSHTranscriptMessageMarker.pendingLocalUserHostMessageID
+      sessions[sessionIndex].messages.append(localMessage)
+      let pendingMessageID = localMessage.id
+      let localSessionID = sessions[sessionIndex].id
       // Gate re-entry the same way the normal-prompt path below does — a
       // fallback to `prompt(...)` starts a real turn, and without this the
       // `guard !isRunning` above never engages, letting a second send fire
@@ -66,6 +89,7 @@ extension HarnessController {
         do {
           if let execution = try await hostClient.executeCommand(sessionId: hostSessionID, line: text) {
             await MainActor.run {
+              self.clearPendingLocalUserMessage(localSessionID: localSessionID, messageID: pendingMessageID)
               if let output = execution.result.text, !output.isEmpty { self.appendSystem(execution.succeeded ? output : "命令失败：\(output)") }
               else { self.status = execution.succeeded ? "命令已执行" : "命令执行失败" }
               // Command execution isn't a turn — no `turn/end` event will
@@ -78,6 +102,7 @@ extension HarnessController {
           }
         } catch {
           await MainActor.run {
+            self.clearPendingLocalUserMessage(localSessionID: localSessionID, messageID: pendingMessageID)
             self.isRunning = false
             if let current = self.selectedSessionIndex { self.sessions[current].isRunning = false }
             self.appendSystem("命令执行失败：\(error.localizedDescription)")
@@ -105,7 +130,11 @@ extension HarnessController {
         outgoingText += "\n\n[工作区上下文] 除当前目录外，这些本地文件夹也已引入，可用绝对路径读取：\n" + extras.joined(separator: "\n")
       }
     }
-    sessions[sessionIndex].messages.append(Message(role: .user, text: preview))
+    var localMessage = Message(role: .user, text: preview)
+    localMessage.hostMessageId = DSHTranscriptMessageMarker.pendingLocalUserHostMessageID
+    sessions[sessionIndex].messages.append(localMessage)
+    let pendingMessageID = localMessage.id
+    let localSessionID = sessions[sessionIndex].id
     // No placeholder assistant bubble here — `assistant/chunk` (above) opens
     // a fresh bubble itself on the first delta; a synchronous placeholder
     // previously left either a glued-together "处理中…<real text>" bubble or
@@ -122,6 +151,7 @@ extension HarnessController {
         await MainActor.run { self.status = "已交给持久 Host；等待事件流接入" }
       } catch {
         await MainActor.run {
+          self.clearPendingLocalUserMessage(localSessionID: localSessionID, messageID: pendingMessageID)
           self.isRunning = false
           if let current = self.selectedSessionIndex { self.sessions[current].isRunning = false }
           self.appendSystem("Host prompt 失败：\(error.localizedDescription)")
@@ -131,10 +161,27 @@ extension HarnessController {
   }
 
   func stop() {
-    guard let hostClient, let hostSessionID = hostCurrentSessionID else { return }
-    Task {
-      do { try await hostClient.cancel(sessionId: hostSessionID); await MainActor.run { self.status = "已请求取消持久会话" } }
-      catch { await MainActor.run { self.status = "取消失败：\(error.localizedDescription)" } }
+    guard let hostClient else { return }
+    switch displayedExecutionTarget {
+    case .subagent(let address):
+      Task {
+        do {
+          try await hostClient.interruptSubagent(
+            parentSessionId: address.parentSessionId,
+            childSessionId: address.childSessionId)
+          await MainActor.run { self.status = "已请求中断子代理" }
+        } catch {
+          await MainActor.run { self.status = "子代理中断失败：\(error.localizedDescription)" }
+        }
+      }
+      return
+    case .root(let sessionID):
+      Task {
+        do { try await hostClient.cancel(sessionId: sessionID); await MainActor.run { self.status = "已请求取消持久会话" } }
+        catch { await MainActor.run { self.status = "取消失败：\(error.localizedDescription)" } }
+      }
+    case .none:
+      return
     }
   }
   /// The bundled Host is a long-lived child process, not per-message — this

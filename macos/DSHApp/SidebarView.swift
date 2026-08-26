@@ -20,6 +20,10 @@ struct Sidebar: View {
       // the native title bar is hidden.
       .padding(.top, 26)
       Button(action: harness.newSession) { Label("新会话", systemImage: "plus").frame(maxWidth: .infinity) }.buttonStyle(.dshPrimary)
+      Button(action: harness.showAgentManagement) {
+        Label("Agent", systemImage: "person.3.sequence").frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .buttonStyle(.dshSecondary)
 
       // Workspace lives with the conversation now (WorkspaceChips above the
       // composer / in the header), not in the sidebar — single job: sessions.

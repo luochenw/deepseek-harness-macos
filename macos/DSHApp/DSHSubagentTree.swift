@@ -11,6 +11,7 @@ extension HarnessController {
     subagentTree = nil
     let maxDepth = Self.subagentTreeMaxDepth
     let maxNodes = Self.subagentTreeMaxNodes
+    let managedChildIDs = managedAgentChildSessionIDs
     Task {
       var visited = 0
       var truncated = false
@@ -20,6 +21,8 @@ extension HarnessController {
               let catalog = try? await hostClient.subagents(parentSessionId: parentId) else { return [] }
         var nodes: [SubagentTreeNode] = []
         for entry in catalog.entries {
+          if managedChildIDs.contains(entry.id)
+            || entry.label?.hasPrefix("__dsh_agent_platform__:") == true { continue }
           guard visited < maxNodes else { truncated = true; break }
           visited += 1
           var node = SubagentTreeNode(entry: entry, depth: depth, ancestorPath: path)
@@ -43,7 +46,7 @@ extension HarnessController {
   }
 
   func openSubagentFromTree(_ node: SubagentTreeNode) {
-    guard node.entry.kind == "child" else { return }
+    guard node.entry.kind == "child", !isManagedAgentChild(node.entry) else { return }
     subagentPath = node.ancestorPath
     openSubagent(node.entry)
   }

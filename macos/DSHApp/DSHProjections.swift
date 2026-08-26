@@ -60,6 +60,8 @@ extension HarnessController {
       if let pressure = DSHProjectionDecoder.decode(DSHContextPressure.self, from: value) { contextPressure = pressure }
     case "sessionStats":
       if let stats = DSHProjectionDecoder.decode(DSHSessionStats.self, from: value) { sessionStats = stats }
+    case "agent-platform/batches":
+      applyAgentBatchProjection(value)
     default:
       break
     }

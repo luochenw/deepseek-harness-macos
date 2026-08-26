@@ -47,7 +47,7 @@ struct GoalBar: View {
   var body: some View {
     // Renders only when a goal exists — no empty-state chrome above the
     // composer. Goal creation lives in the ＋ menu (fills "/goal ").
-    if let goal = harness.goal?.goal {
+    if let goal = harness.displayedGoal?.goal {
       bar(goal)
     }
   }
@@ -57,20 +57,22 @@ struct GoalBar: View {
       Image(systemName: "scope").font(.caption).foregroundStyle(Self.phaseColor(goal.phase))
       Text(goal.objective).font(.caption).foregroundStyle(DSHTheme.ink).lineLimit(1).truncationMode(.tail).help(goal.objective)
       DSHBadge(text: Self.phaseLabel(goal.phase), tone: Self.phaseTone(goal.phase))
-      if let rounds = harness.goal?.roundsStarted {
+      if let rounds = harness.displayedGoal?.roundsStarted {
         Text("\(rounds)/\(goal.maxGoalRounds) 轮").font(.caption2.monospacedDigit()).foregroundStyle(DSHTheme.inkFaint)
           .help("已开始的目标轮次 / 轮次上限")
       }
       Spacer(minLength: DSHSpace.s2)
-      if goal.phase == "active" {
-        Button("暂停") { harness.performGoalAction("pause") }.buttonStyle(.dshGhost)
-      } else if goal.phase != "complete" {
-        Button("恢复") { harness.performGoalAction("resume") }.buttonStyle(.dshGhost)
+      if harness.canMutateDisplayedGoal {
+        if goal.phase == "active" {
+          Button("暂停") { harness.performGoalAction("pause") }.buttonStyle(.dshGhost)
+        } else if goal.phase != "complete" {
+          Button("恢复") { harness.performGoalAction("resume") }.buttonStyle(.dshGhost)
+        }
+        if goal.phase != "complete" {
+          Button("完成") { harness.performGoalAction("complete") }.buttonStyle(.dshGhost)
+        }
+        Button("清除") { harness.performGoalAction("clear") }.buttonStyle(.dshGhost)
       }
-      if goal.phase != "complete" {
-        Button("完成") { harness.performGoalAction("complete") }.buttonStyle(.dshGhost)
-      }
-      Button("清除") { harness.performGoalAction("clear") }.buttonStyle(.dshGhost)
     }
     .font(.caption)
     .padding(.horizontal, DSHSpace.s3).padding(.vertical, DSHSpace.s2)

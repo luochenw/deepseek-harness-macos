@@ -25,10 +25,112 @@ struct DSHRawEvent: Decodable {
 }
 
 struct DSHHistoryEntry: Decodable { let event: DSHRawEvent; let view: DSHJSONValue? }
-struct DSHHistoryPage: Decodable { let events: [DSHHistoryEntry]; let hasMore: Bool }
+struct DSHHistoryPage: Decodable {
+  let events: [DSHHistoryEntry]
+  let hasMore: Bool
+  let projections: DSHSessionProjections?
+}
 struct DSHHistoryPayload: Encodable { let sessionId: String; let beforeSeq: Int?; let maxMessages: Int }
 
+struct DSHFoldedHistory {
+  let messages: [HarnessController.Message]
+  let tools: [HarnessController.ToolActivity]
+  let toolSequences: [String: Int]
+}
+
+private struct DSHRootHistoryRequest: Equatable {
+  let sessionID: String
+  let localSessionID: UUID
+}
+
+@MainActor
+private final class DSHRootHistoryLoadState {
+  weak var controller: HarnessController?
+  var generation = 0
+  var request: DSHRootHistoryRequest?
+
+  init(controller: HarnessController) {
+    self.controller = controller
+  }
+}
+
+@MainActor
+private final class DSHRootHistoryLoadRegistry {
+  static let shared = DSHRootHistoryLoadRegistry()
+  private var states: [ObjectIdentifier: DSHRootHistoryLoadState] = [:]
+
+  func state(for controller: HarnessController) -> DSHRootHistoryLoadState {
+    states = states.filter { $0.value.controller != nil }
+    let key = ObjectIdentifier(controller)
+    if let state = states[key], let owner = state.controller, owner === controller {
+      return state
+    }
+    let state = DSHRootHistoryLoadState(controller: controller)
+    states[key] = state
+    return state
+  }
+}
+
+enum DSHTranscriptMessageMarker {
+  static let streamingAssistantHostMessageID = "\u{0}dsh-streaming-assistant"
+  static let pendingLocalUserHostMessageID = "\u{0}dsh-pending-local-user"
+
+  static func matchesPendingLocalUserEcho(
+    localText: String,
+    incomingText: String,
+    attachment: DSHAttachmentRef?
+  ) -> Bool {
+    if incomingText == localText { return true }
+    return DSHAttachmentRail.matchesLocalUserEcho(
+      localText: localText,
+      incomingText: incomingText,
+      attachment: attachment)
+  }
+}
+
 extension HarnessController {
+  private var rootHistoryLoadState: DSHRootHistoryLoadState {
+    DSHRootHistoryLoadRegistry.shared.state(for: self)
+  }
+
+  @discardableResult
+  func beginRootHistoryRequest(sessionID: String, localSessionID: UUID) -> Int {
+    let state = rootHistoryLoadState
+    state.generation += 1
+    state.request = DSHRootHistoryRequest(
+      sessionID: sessionID,
+      localSessionID: localSessionID)
+    return state.generation
+  }
+
+  @discardableResult
+  func beginRootHistoryRequest(localSessionID: UUID) -> Int {
+    beginRootHistoryRequest(
+      sessionID: hostCurrentSessionID ?? "",
+      localSessionID: localSessionID)
+  }
+
+  func acceptsRootHistoryRequest(
+    sessionID: String,
+    localSessionID: UUID,
+    generation: Int
+  ) -> Bool {
+    let state = rootHistoryLoadState
+    return state.generation == generation
+      && state.request == DSHRootHistoryRequest(
+        sessionID: sessionID,
+        localSessionID: localSessionID)
+      && hostCurrentSessionID == sessionID
+      && selectedSessionID == localSessionID
+      && subagentTranscript == nil
+  }
+
+  func invalidateRootHistoryRequests() {
+    let state = rootHistoryLoadState
+    state.generation += 1
+    state.request = nil
+  }
+
   func loadSkills(sessionId: String) {
     guard let hostClient else { return }
     Task {
@@ -52,7 +154,7 @@ extension HarnessController {
   /// command registered) mid-session shows up without re-attaching — the
   /// native stand-in for the web client's `commands/change` invalidation.
   func refreshSlashCatalog() {
-    guard let sessionId = hostCurrentSessionID else { return }
+    guard canUseRootSlashCatalog, let sessionId = hostCurrentSessionID else { return }
     loadSkills(sessionId: sessionId)
     loadCommands(sessionId: sessionId)
   }
@@ -92,53 +194,120 @@ extension HarnessController {
 
   func loadSubagents(parentSessionId: String) {
     guard let hostClient else { return }
+    let generation = beginSubagentCatalogLoad(parentSessionID: parentSessionId)
     Task {
       do {
         let catalog = try await hostClient.subagents(parentSessionId: parentSessionId)
-        await MainActor.run { self.subagents = catalog.entries }
-      } catch { await MainActor.run { self.subagents = [] } }
+        await MainActor.run {
+          guard self.acceptsSubagentCatalogLoad(parentSessionID: parentSessionId, generation: generation) else { return }
+          self.subagents = catalog.entries
+        }
+      } catch {
+        await MainActor.run {
+          guard self.acceptsSubagentCatalogLoad(parentSessionID: parentSessionId, generation: generation) else { return }
+          self.subagents = []
+        }
+      }
     }
   }
 
   func loadHistory(sessionId: String, localSessionID: UUID) {
     guard let hostClient else { return }
+    let generation = beginRootHistoryRequest(
+      sessionID: sessionId,
+      localSessionID: localSessionID)
     Task {
       do {
         let page = try await hostClient.history(sessionId: sessionId)
-        let messages = foldHistory(page.events)
+        let folded = foldHistoryContent(page.events)
         await MainActor.run {
-          guard let index = self.sessions.firstIndex(where: { $0.id == localSessionID }) else { return }
-          self.sessions[index].messages = messages.isEmpty ? [Message(role: .system, text: "这个会话还没有可显示的消息。")] : messages
+          guard self.acceptsRootHistoryRequest(
+            sessionID: sessionId,
+            localSessionID: localSessionID,
+            generation: generation),
+            let index = self.sessions.firstIndex(where: { $0.id == localSessionID })
+          else { return }
+          self.sessions[index].messages = folded.messages.isEmpty ? [Message(role: .system, text: "这个会话还没有可显示的消息。")] : folded.messages
+          self.activeTools = folded.tools
+          if let selected = self.selectedTool,
+             let refreshed = folded.tools.last(where: { $0.callId == selected.callId }) {
+            self.selectedTool = refreshed
+          } else {
+            self.selectedTool = folded.tools.first
+          }
           self.historyHasMore = page.hasMore
           self.historyOldestSeq = page.events.map { $0.event.seq }.min()
           self.sessions[index].updatedAt = Date()
-          self.status = "已载入 \(messages.count) 条原生会话消息"
+          self.status = "已载入 \(folded.messages.count) 条原生会话消息"
         }
       } catch {
-        await MainActor.run { self.appendSystem("载入会话历史失败：\(error.localizedDescription)") }
+        await MainActor.run {
+          guard self.acceptsRootHistoryRequest(
+            sessionID: sessionId,
+            localSessionID: localSessionID,
+            generation: generation)
+          else { return }
+          self.appendSystem("载入会话历史失败：\(error.localizedDescription)", to: localSessionID)
+        }
       }
     }
   }
 
   func loadOlderHistory() {
-    guard let hostClient, let sessionId = hostCurrentSessionID, let before = historyOldestSeq, historyHasMore, let index = selectedSessionIndex else { return }
+    guard let hostClient, let sessionId = hostCurrentSessionID,
+          let before = historyOldestSeq, historyHasMore,
+          let localSessionID = selectedSessionID
+    else { return }
+    let generation = beginRootHistoryRequest(
+      sessionID: sessionId,
+      localSessionID: localSessionID)
     Task {
       do {
         let page = try await hostClient.history(sessionId: sessionId, beforeSeq: before, maxMessages: 100)
-        let older = foldHistory(page.events)
+        let older = foldHistoryContent(page.events)
         await MainActor.run {
-          self.sessions[index].messages = older + self.sessions[index].messages
+          guard self.acceptsRootHistoryRequest(
+            sessionID: sessionId,
+            localSessionID: localSessionID,
+            generation: generation),
+            let index = self.sessions.firstIndex(where: { $0.id == localSessionID })
+          else { return }
+          self.sessions[index].messages = older.messages + self.sessions[index].messages
+          for tool in older.tools
+          where !self.activeTools.contains(where: { $0.callId == tool.callId }) {
+            self.activeTools.append(tool)
+          }
           self.historyHasMore = page.hasMore
           self.historyOldestSeq = page.events.map { $0.event.seq }.min() ?? self.historyOldestSeq
         }
       } catch {
-        await MainActor.run { self.status = "载入更早消息失败" }
+        await MainActor.run {
+          guard self.acceptsRootHistoryRequest(
+            sessionID: sessionId,
+            localSessionID: localSessionID,
+            generation: generation)
+          else { return }
+          self.status = "载入更早消息失败"
+        }
       }
     }
   }
+
+  /// Synchronous callers that already own the displayed root context (tests
+  /// and local reconstruction helpers) retain this convenience wrapper.
+  /// Network history paths use `foldHistoryContent` and apply the result only
+  /// after their request generation has been validated.
   func foldHistory(_ entries: [DSHHistoryEntry]) -> [Message] {
+    let folded = foldHistoryContent(entries)
+    activeTools = folded.tools
+    if selectedTool == nil { selectedTool = activeTools.first }
+    return folded.messages
+  }
+
+  func foldHistoryContent(_ entries: [DSHHistoryEntry]) -> DSHFoldedHistory {
     var result: [Message] = []
     var tools: [String: ToolActivity] = [:]
+    var toolSequences: [String: Int] = [:]
     for entry in entries {
       let event = entry.event
       guard let data = event.data.object else { continue }
@@ -151,16 +320,17 @@ extension HarnessController {
         // which are real conversation content, not model plumbing.
         let relay = historyIsRelayMessage(message)
         guard messageSourceKind(message) == nil || messageSourceKind(message) == "user" || relay else { continue }
-        if let text = textFromMessage(message) { result.append(Message(role: .user, text: userDisplayText(text), timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(message), isRelayMessage: relay)) }
+        if let text = textFromMessage(message) { result.append(Message(role: .user, text: userDisplayText(text), timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: DSHAttachmentRef.fromHistoryMessage(message), isRelayMessage: relay)) }
       case "assistant/message":
         let payload = historyMessage(data)
         if let text = textFromMessage(payload) {
-          var message = Message(role: .assistant, text: text, timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: attachmentFromMessage(payload), reasoning: reasoningFromMessage(payload))
+          var message = Message(role: .assistant, text: text, timestamp: Date(timeIntervalSince1970: event.time / 1000), attachment: DSHAttachmentRef.fromHistoryMessage(payload), reasoning: reasoningFromMessage(payload))
           message.hostMessageId = payload.object?["id"]?.string
-          // Adapters that stream chunks first may also log the settled
-          // message — the settled one is authoritative, so it replaces the
-          // chunk accumulation instead of doubling the bubble.
-          if result.last?.role == .assistant {
+          // Stream-only history chunks carry no durable message id. Replace
+          // only that placeholder; consecutive settled assistant messages
+          // are distinct transcript rows and may each own an attachment.
+          if result.last?.role == .assistant,
+             result.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
             message.reasoning = message.reasoning ?? result[result.count - 1].reasoning
             result[result.count - 1] = message
           } else {
@@ -174,15 +344,23 @@ extension HarnessController {
         // trailing assistant bubble, otherwise open a fresh one.
         guard let chunk = data["chunk"]?.object else { continue }
         if chunk["type"]?.string == "text-delta", let delta = chunk["textDelta"]?.string {
-          if result.last?.role == .assistant { result[result.count - 1].text += delta }
-          else { result.append(Message(role: .assistant, text: delta, timestamp: Date(timeIntervalSince1970: event.time / 1000))) }
+          if result.last?.role == .assistant,
+             result.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
+            result[result.count - 1].text += delta
+          } else {
+            var message = Message(role: .assistant, text: delta, timestamp: Date(timeIntervalSince1970: event.time / 1000))
+            message.hostMessageId = DSHTranscriptMessageMarker.streamingAssistantHostMessageID
+            result.append(message)
+          }
         }
         if chunk["type"]?.string == "reasoning-delta", let delta = chunk["text"]?.string {
-          if result.last?.role == .assistant {
+          if result.last?.role == .assistant,
+             result.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
             result[result.count - 1].reasoning = (result[result.count - 1].reasoning ?? "") + delta
           } else {
             var message = Message(role: .assistant, text: "", timestamp: Date(timeIntervalSince1970: event.time / 1000))
             message.reasoning = delta
+            message.hostMessageId = DSHTranscriptMessageMarker.streamingAssistantHostMessageID
             result.append(message)
           }
         }
@@ -190,15 +368,26 @@ extension HarnessController {
         let name = data["name"]?.string ?? "tool"
         let id = data["callId"]?.string ?? "\(event.seq)"
         tools[id] = ToolActivity(callId: id, name: name, summary: "工具调用", state: .running, output: "", presentation: historyPresentation(entry.view))
+        toolSequences[id] = event.seq
         result.append(Message(role: .tool, text: name, timestamp: Date(timeIntervalSince1970: event.time / 1000), toolCallId: id))
       case "tool/result":
-        let id = data["callId"]?.string ?? "\(event.seq)"
-        if var tool = tools[id] {
-          tool.state = .succeeded
-          tool.presentation = historyPresentation(entry.view) ?? tool.presentation
-          tool.output = tool.presentation?.output ?? textFromValue(data["result"]) ?? "工具已完成"
-          tools[id] = tool
+        guard let result = DSHToolResultDecoder.history(from: data),
+              var tool = tools[result.callId] else { continue }
+        tool.state = result.isError ? .failed : .succeeded
+        let resultPresentation = historyPresentation(entry.view)
+        tool.presentation = ToolPresentation.merging(
+          call: tool.presentation,
+          result: resultPresentation,
+          rawOutput: result.output)
+        tool.output = tool.presentation?.output?.nonEmpty
+          ?? result.output.nonEmpty
+          ?? result.errorSummary
+          ?? "工具已完成"
+        if let errorSummary = result.errorSummary, !errorSummary.isEmpty {
+          tool.summary = errorSummary
         }
+        tools[result.callId] = tool
+        toolSequences[result.callId] = event.seq
       case "todo/write":
         if let todos = data["todos"]?.array { result.append(Message(role: .system, text: "任务清单更新：\(todos.count) 项")) }
       case "turn/end":
@@ -207,9 +396,10 @@ extension HarnessController {
         continue
       }
     }
-    activeTools = Array(tools.values)
-    if selectedTool == nil { selectedTool = activeTools.first }
-    return result
+    return DSHFoldedHistory(
+      messages: result,
+      tools: Array(tools.values),
+      toolSequences: toolSequences)
   }
 
   private func reasoningFromMessage(_ value: DSHJSONValue?) -> String? {
@@ -219,23 +409,7 @@ extension HarnessController {
   }
 
   private func historyPresentation(_ view: DSHJSONValue?) -> ToolPresentation? {
-    guard let object = view?.object, let embedded = object["view"]?.object else { return nil }
-    let raw = Dictionary(uniqueKeysWithValues: embedded.map { ($0.key, anyValue($0.value)) })
-    return ToolPresentation.from(raw)
-  }
-
-  private func attachmentFromMessage(_ value: DSHJSONValue?) -> DSHAttachmentRef? {
-    guard let object = value?.object, let content = object["content"]?.array else { return nil }
-    for block in content {
-      guard let data = block.object, data["type"]?.string == "image", let attachment = data["attachment"]?.object else { continue }
-      guard let id = attachment["attachmentId"]?.string, let media = attachment["mediaType"]?.string, let bytes = attachment["bytes"] else { continue }
-      let size: Int
-      if case let .number(value) = bytes { size = Int(value) } else { continue }
-      let width: Int = { if case let .number(v) = attachment["width"] { return Int(v) }; return 0 }()
-      let height: Int = { if case let .number(v) = attachment["height"] { return Int(v) }; return 0 }()
-      return DSHAttachmentRef(attachmentId: id, mediaType: media, bytes: size, width: width, height: height, name: attachment["name"]?.string)
-    }
-    return nil
+    ToolPresentation.fromEventView(view)
   }
 
   private func textFromMessage(_ value: DSHJSONValue?) -> String? {

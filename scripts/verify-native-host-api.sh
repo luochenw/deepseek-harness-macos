@@ -38,6 +38,11 @@ assert_rpc() {
   RESPONSE="$response" "$NODE" -e "$check"
 }
 
+assert_gateway() {
+  local method="$1" args="$2" check="$3"
+  assert_rpc "$method" "{\"args\":$args}" "$check"
+}
+
 assert_rpc host.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.type!=="server-response"||d.result?.ok!==true||typeof d.result.value?.version!=="string"||typeof d.result.value?.cwd!=="string") process.exit(1)'
 assert_rpc session.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.items)) process.exit(1)'
 assert_rpc workspace.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.items)||!Array.isArray(d.result.value?.archivedSessionIds)) process.exit(1)'
@@ -45,10 +50,35 @@ assert_rpc settings.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); if(
 assert_rpc llm.models '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.groups)) process.exit(1)'
 assert_rpc agentPreset.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.presets)) process.exit(1)'
 
-# Write-path check: every other assertion above is read-only. ui-theme is a
+# Write-path check: the assertions above are read-only. ui-theme is a
 # fresh $DSH_HOME's known seed value ({"preference":"system"}, revision 0),
 # so this exercises the real settings.update -> persist -> settings.describe
 # round trip a Settings UI edit takes, not just that the RPC call is accepted.
 assert_rpc settings.update '{"ns":"ui-theme","patch":{"preference":"dark"},"expectedRevision":0}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||d.result.value?.value?.preference!=="dark"||d.result.value?.revision!==1) process.exit(1)'
 assert_rpc settings.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); const ns=(d.result?.value?.namespaces||[]).find(n=>n.ns==="ui-theme"); if(d.result?.ok!==true||ns?.value?.preference!=="dark"||ns?.revision!==1) process.exit(1)'
+assert_gateway agentProfiles/list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.items)) process.exit(1)'
+assert_gateway agentProfiles/runtimeStatus '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.items)||!d.result.value.items.some((x)=>x.runtime==="dsh"&&x.available===true)) process.exit(1)'
+PROFILE_RESPONSE="$(call agentProfiles/save '{"args":{"profile":{"name":"Smoke Agent","mention":"smoke-agent","defaultMode":"analysis","allowModelDispatch":false,"integrationPolicy":"manual","adapters":[{"id":"dsh","runtime":"dsh","enabled":true}]}}}')"
+PROFILE_ID="$(RESPONSE="$PROFILE_RESPONSE" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const id=d.result?.value?.id; if(d.result?.ok!==true||typeof id!=="string") process.exit(1); process.stdout.write(id)')"
+assert_gateway agentProfiles/list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!d.result.value?.items?.some((x)=>x.mention==="smoke-agent")) process.exit(1)'
+assert_gateway agentProfiles/remove "{\"profileId\":\"$PROFILE_ID\"}" 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||d.result.value?.removed!==true) process.exit(1)'
+
+# Scheduler/failure-isolation check without invoking an LLM: an unknown
+# external Runtime must fail only its member, settle the Batch, and leave the
+# Host responsive. The root Agent exists solely to own the durable Batch.
+SESSION_RESPONSE="$(call session.create "{\"cwd\":\"$HOME_DIR\"}")"
+ROOT_SESSION_ID="$(RESPONSE="$SESSION_RESPONSE" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const id=d.result?.value?.sessionId; if(d.result?.ok!==true||typeof id!=="string") process.exit(1); process.stdout.write(id)')"
+FAIL_PROFILE_RESPONSE="$(call agentProfiles/save '{"args":{"profile":{"name":"Unavailable Runtime","mention":"unavailable-runtime","defaultMode":"analysis","allowModelDispatch":false,"integrationPolicy":"manual","adapters":[{"id":"missing","runtime":"missing-runtime","enabled":true}]}}}')"
+FAIL_PROFILE_ID="$(RESPONSE="$FAIL_PROFILE_RESPONSE" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const id=d.result?.value?.id; if(d.result?.ok!==true||typeof id!=="string") process.exit(1); process.stdout.write(id)')"
+BATCH_RESPONSE="$(call agentBatches/start "{\"args\":{\"profileId\":\"$FAIL_PROFILE_ID\",\"rootSessionId\":\"$ROOT_SESSION_ID\",\"initiatorSessionId\":\"$ROOT_SESSION_ID\",\"task\":\"smoke failure isolation\",\"mode\":\"analysis\",\"integrationPolicy\":\"manual\",\"source\":\"manual\"}}")"
+BATCH_ID="$(RESPONSE="$BATCH_RESPONSE" EXPECTED_CWD="$HOME_DIR" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const b=d.result?.value; const id=b?.id; if(d.result?.ok!==true||typeof id!=="string"||b.capabilitySnapshotVersion!==1||b.sourceCwd!==process.env.EXPECTED_CWD||typeof b.sandboxMode!=="string"||!Array.isArray(b.sourceToolAllowlist)) process.exit(1); process.stdout.write(id)')"
+for _ in $(seq 1 50); do
+  BATCH_DETAIL="$(call agentBatches/detail "{\"args\":{\"batchId\":\"$BATCH_ID\"}}")"
+  if RESPONSE="$BATCH_DETAIL" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const b=d.result?.value; if(d.result?.ok!==true||b?.status!=="failed"||b.runs?.length!==1||b.runs[0]?.status!=="failed"||!String(b.runs[0]?.error).includes("runtime-unavailable")) process.exit(1)'; then
+    break
+  fi
+  sleep 0.1
+done
+RESPONSE="$BATCH_DETAIL" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const b=d.result?.value; if(d.result?.ok!==true||b?.status!=="failed"||b.runs?.length!==1||b.runs[0]?.status!=="failed"||!String(b.runs[0]?.error).includes("runtime-unavailable")||typeof b.summary!=="string") process.exit(1)'
+assert_gateway agentProfiles/remove "{\"profileId\":\"$FAIL_PROFILE_ID\"}" 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||d.result.value?.removed!==true) process.exit(1)'
 echo "native-host-api-smoke: OK ($URL)"

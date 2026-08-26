@@ -26,6 +26,12 @@ struct ContentView: View {
     .sheet(isPresented: $harness.showSubagentTree) { SubagentTreeView() }
     .sheet(isPresented: $harness.showRenameSession) { RenameSessionSheet() }
     .sheet(isPresented: $harness.showArchivedSessions) { ArchivedSessionsView() }
+    .sheet(isPresented: $harness.showAgentProfileEditor) {
+      AgentProfileEditorSheet(profile: harness.editingAgentProfile)
+    }
+    .sheet(item: $harness.manualAgentProfile) { profile in
+      AgentManualRunSheet(profile: profile)
+    }
     .sheet(item: $harness.pendingApproval) { approval in ApprovalSheet(approval: approval) }
     .sheet(item: $harness.pendingQuestion) { question in QuestionBatchSheet(question: question) }
   }

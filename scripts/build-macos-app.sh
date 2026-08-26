@@ -85,6 +85,12 @@ for extra in "$ROOT"/macos/Runtime-extras/*/; do
 done
 shopt -u nullglob
 
+# The platform needs narrow embedded-Runtime extensions that upstream rc.6
+# and rc.7 do not expose yet: continuable child cwd override, exact managed
+# child disposal, and managed-followup protection. The same version-gated
+# patch mounts the Host plugin and registers its replayable projection event.
+"$NODE_SOURCE" "$ROOT/scripts/patch-agent-platform-runtime.mjs" "$RUNTIME_DSH"
+
 cd "$STAGE/Contents/Resources"
 find Runtime -type f -not -path "*/node_modules/*" -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 > Runtime.manifest.sha256
 find Runtime/dsh/node_modules -type l -print0 | LC_ALL=C sort -z | xargs -0 -I{} shasum -a 256 "{}" 2>/dev/null >> Runtime.manifest.sha256 || true

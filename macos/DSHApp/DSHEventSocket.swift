@@ -104,6 +104,7 @@ extension HarnessController {
         self.refreshModelConfiguration()
         self.refreshSettings()
         self.refreshPresets()
+        self.refreshAgentPlatform()
         // No session auto-creation on connect: the app sits on the default
         // page until the first send lazily creates one (⌘N also just
         // returns to the default page — see the lazy-first-session note).
@@ -137,54 +138,63 @@ extension HarnessController {
           }
         }
       }
-      if let address = activeSubagentAddress, sessionID == address.childSessionId {
-        applyLiveSubagentEvent(event)
+      if isLoadingSubagentPresentation(sessionID: sessionID) {
+        bufferSubagentEvent(sessionID: sessionID, event: event, view: frame["view"] as? [String: Any])
+      } else if sessionID == activeSubagentAddress?.childSessionId || hasSubagentPresentation(sessionID: sessionID) {
+        applyLiveSubagentEvent(sessionID: sessionID, event: event, view: frame["view"] as? [String: Any])
       } else if sessionID == hostCurrentSessionID {
         applyLiveEvent(event, view: frame["view"] as? [String: Any])
       } else if voiceTaskSessions[sessionID] != nil {
         handleVoiceTaskEvent(sessionID: sessionID, event: event)
       }
     case "session/projection":
-      guard let sessionId = frame["sessionId"] as? String, sessionId == hostCurrentSessionID,
-            let key = frame["key"] as? String, let value = frame["value"] else { return }
-      applyProjection(key: key, value: value)
+      guard let sessionId = frame["sessionId"] as? String,
+            let key = frame["key"] as? String,
+            let value = frame["value"],
+            let seq = frame["seq"] as? Int else { return }
+      if sessionId == hostCurrentSessionID {
+        applyProjection(key: key, value: value)
+      } else if hasSubagentPresentation(sessionID: sessionId) {
+        applySubagentProjection(sessionID: sessionId, key: key, value: value, seq: seq)
+      }
     case "session/queue":
-      // Scope to the displayed session — with concurrent sessions, another
-      // session's queue push must not overwrite this composer's dock.
-      if let sid = frame["sessionId"] as? String, sid != hostCurrentSessionID { return }
-      if let items = frame["items"] as? [[String: Any]] {
-        queueItems = items.compactMap { item in
-          guard let id = item["id"] as? String else { return nil }
-          let message = item["message"] as? [String: Any]
-          let content = message?["content"] as? [[String: Any]]
-          let text = content?.compactMap { $0["text"] as? String }.joined() ?? ""
-          return DSHQueueItem(id: id, placement: item["placement"] as? String ?? "queued", text: text)
-        }
+      guard let sessionID = frame["sessionId"] as? String,
+            let values = frame["items"] as? [[String: Any]] else { return }
+      let items = DSHQueueItem.fromMux(values)
+      if sessionID == hostCurrentSessionID {
+        queueItems = items
+      } else if hasSubagentPresentation(sessionID: sessionID) {
+        replaceSubagentQueue(sessionID: sessionID, items: items)
       }
     case "session/jobs":
-      // 同 session/queue：mux 是全会话聚合流，后台会话（语音派发、fork、
-      // 子代理）的 job 不能混进当前转录的工具行。activeTools 只被主转录
-      // 消费——子代理转录只显示文本，不收 job，故不看 activeSubagentAddress。
-      if let sid = frame["sessionId"] as? String, sid != hostCurrentSessionID { return }
+      guard let sessionID = frame["sessionId"] as? String,
+            let jobs = frame["jobs"] as? [[String: Any]] else { return }
+      if sessionID != hostCurrentSessionID {
+        if isLoadingSubagentPresentation(sessionID: sessionID) {
+          bufferSubagentJobs(sessionID: sessionID, jobs: jobs)
+          return
+        }
+        guard hasSubagentPresentation(sessionID: sessionID) else { return }
+        mergeSubagentJobs(sessionID: sessionID, jobs: jobs)
+        return
+      }
       // 合并更新，绝不整表覆盖：覆盖会把转录里已完成的工具行全部换成
       // job 条目，且旧映射除 failed 外一律算 .running（包括 completed）
       // —— 这正是"run_code 都执行结束了还在动"的来源。
-      if let jobs = frame["jobs"] as? [[String: Any]] {
-        for job in jobs {
-          guard let id = job["id"] as? String else { continue }
-          let status = (job["status"] as? String ?? "running").lowercased()
-          let state: ToolActivity.State =
-            status == "failed" ? .failed :
-            ["running", "pending", "in-progress", "in_progress"].contains(status) ? .running : .succeeded
-          if let index = activeTools.lastIndex(where: { $0.callId == id }) {
-            activeTools[index].state = state
-            if let detail = job["detail"] as? String { activeTools[index].summary = detail }
-          } else {
-            activeTools.append(ToolActivity(
-              callId: id, name: job["label"] as? String ?? "后台任务",
-              summary: job["detail"] as? String ?? status, state: state,
-              output: "", presentation: nil))
-          }
+      for job in jobs {
+        guard let id = job["id"] as? String else { continue }
+        let status = (job["status"] as? String ?? "running").lowercased()
+        let state: ToolActivity.State =
+          status == "failed" ? .failed :
+          ["running", "pending", "in-progress", "in_progress"].contains(status) ? .running : .succeeded
+        if let index = activeTools.lastIndex(where: { $0.callId == id }) {
+          activeTools[index].state = state
+          if let detail = job["detail"] as? String { activeTools[index].summary = detail }
+        } else {
+          activeTools.append(ToolActivity(
+            callId: id, name: job["label"] as? String ?? "后台任务",
+            summary: job["detail"] as? String ?? status, state: state,
+            output: "", presentation: nil))
         }
       }
     case "approval/requested":
@@ -240,31 +250,42 @@ extension HarnessController {
       // still be the most recent assistant-role entry and silently absorb
       // the new turn's first delta.
       if let chunk = data["chunk"] as? [String: Any], chunk["type"] as? String == "text-delta", let delta = chunk["textDelta"] as? String {
-        if sessions[index].messages.last?.role == .assistant { sessions[index].messages[sessions[index].messages.count - 1].text += delta }
-        else { sessions[index].messages.append(Message(role: .assistant, text: delta)) }
+        if sessions[index].messages.last?.role == .assistant,
+           sessions[index].messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
+          sessions[index].messages[sessions[index].messages.count - 1].text += delta
+        } else {
+          var message = Message(role: .assistant, text: delta)
+          message.hostMessageId = DSHTranscriptMessageMarker.streamingAssistantHostMessageID
+          sessions[index].messages.append(message)
+        }
       }
       // Thinking streams as reasoning-delta chunks (field name is `text`, not
       // `textDelta` — pi-ai adapter shape). Folding them into the message's
       // reasoning field live means thinking lands in the collapsed ✻ block
       // as it happens instead of being dropped until the final message.
       if let chunk = data["chunk"] as? [String: Any], chunk["type"] as? String == "reasoning-delta", let delta = chunk["text"] as? String {
-        if sessions[index].messages.last?.role == .assistant {
+        if sessions[index].messages.last?.role == .assistant,
+           sessions[index].messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
           let last = sessions[index].messages.count - 1
           sessions[index].messages[last].reasoning = (sessions[index].messages[last].reasoning ?? "") + delta
         } else {
           var message = Message(role: .assistant, text: "")
           message.reasoning = delta
+          message.hostMessageId = DSHTranscriptMessageMarker.streamingAssistantHostMessageID
           sessions[index].messages.append(message)
         }
       }
     case "assistant/message":
       let payload = liveMessagePayload(data)
       if let text = liveMessageText(payload) {
-        var message = Message(role: .assistant, text: text)
+        var message = Message(role: .assistant, text: text, attachment: DSHAttachmentRef.fromLiveMessage(payload))
         message.hostMessageId = payload["id"] as? String
-        // The chunk stream above may already have built this bubble — the
-        // settled message replaces the accumulation instead of doubling it.
-        if sessions[index].messages.last?.role == .assistant {
+        // A trailing assistant message without a durable Host id is the
+        // stream-only placeholder created by assistant/chunk. Settle that
+        // placeholder in place; never overwrite an already-settled adjacent
+        // assistant message, which may carry a different image attachment.
+        if sessions[index].messages.last?.role == .assistant,
+           sessions[index].messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
           message.reasoning = sessions[index].messages[sessions[index].messages.count - 1].reasoning
           sessions[index].messages[sessions[index].messages.count - 1] = message
         } else {
@@ -282,9 +303,22 @@ extension HarnessController {
       // other clients still land here.
       let relay = liveIsRelayMessage(payload)
       if liveSourceKind(payload) == nil || liveSourceKind(payload) == "user" || relay, let text = liveMessageText(payload).map(userDisplayText) {
-        let lastUser = sessions[index].messages.last(where: { $0.role == .user })?.text
-        if let lastUser, text == lastUser || text.hasPrefix(lastUser) {} else {
-          sessions[index].messages.append(Message(role: .user, text: text, isRelayMessage: relay))
+        let attachment = DSHAttachmentRef.fromLiveMessage(payload)
+        if !relay, let lastUserIndex = sessions[index].messages.lastIndex(where: {
+          $0.role == .user && $0.hostMessageId == DSHTranscriptMessageMarker.pendingLocalUserHostMessageID
+        }) {
+          let lastUser = sessions[index].messages[lastUserIndex].text
+          if DSHTranscriptMessageMarker.matchesPendingLocalUserEcho(
+            localText: lastUser,
+            incomingText: text,
+            attachment: attachment) {
+            sessions[index].messages[lastUserIndex].hostMessageId = payload["id"] as? String
+            if let attachment { sessions[index].messages[lastUserIndex].attachment = attachment }
+          } else {
+            sessions[index].messages.append(Message(role: .user, text: text, attachment: attachment, isRelayMessage: relay))
+          }
+        } else {
+          sessions[index].messages.append(Message(role: .user, text: text, attachment: attachment, isRelayMessage: relay))
         }
       }
     case "tool/call":
@@ -296,13 +330,25 @@ extension HarnessController {
       // below only needs to update the activity, not this message.
       sessions[index].messages.append(Message(role: .tool, text: tool.name, toolCallId: tool.callId))
     case "tool/result":
-      let callId = data["callId"] as? String
-      if let toolIndex = activeTools.lastIndex(where: { callId == nil || $0.callId == callId }) {
-        activeTools[toolIndex].state = .succeeded
-        activeTools[toolIndex].presentation = ToolPresentation.from(view?["view"] as? [String: Any]) ?? activeTools[toolIndex].presentation
-        activeTools[toolIndex].output = activeTools[toolIndex].presentation?.output ?? "工具已完成"
-        selectedTool = activeTools[toolIndex]
+      guard let result = DSHToolResultDecoder.live(from: data),
+            let toolIndex = activeTools.lastIndex(where: { $0.callId == result.callId })
+      else { return }
+      var tool = activeTools[toolIndex]
+      tool.state = result.isError ? .failed : .succeeded
+      let resultPresentation = ToolPresentation.fromEventView(view)
+      tool.presentation = ToolPresentation.merging(
+        call: tool.presentation,
+        result: resultPresentation,
+        rawOutput: result.output)
+      tool.output = tool.presentation?.output?.nonEmpty
+        ?? result.output.nonEmpty
+        ?? result.errorSummary
+        ?? "工具已完成"
+      if let errorSummary = result.errorSummary, !errorSummary.isEmpty {
+        tool.summary = errorSummary
       }
+      activeTools[toolIndex] = tool
+      selectedTool = tool
     case "tool-workflow/run-start":
       if let runId = data["runId"] as? String, let name = data["name"] as? String, let parentSessionId = hostCurrentSessionID { workflows.append(WorkflowRun(id: runId, parentSessionId: parentSessionId, name: name)) }
     case "tool-workflow/agent-start":
@@ -377,36 +423,97 @@ extension HarnessController {
     }
   }
 
-  /// Mirrors the message-streaming subset of `applyLiveEvent` for the
-  /// currently open subagent transcript. Tool/todo/goal/workflow dashboard
-  /// events intentionally stay scoped to the top-level session — see the
-  /// subagent-transcript-redesign Agent Note.
-  private func applyLiveSubagentEvent(_ event: [String: Any]) {
+  /// Applies child events into the child-keyed presentation context. Message
+  /// rows update only the currently displayed child transcript, while tools
+  /// and projections remain isolated by child session ID even after navigation.
+  func applyLiveSubagentEvent(
+    sessionID: String,
+    event: [String: Any],
+    view: [String: Any]?
+  ) {
     guard let kind = event["type"] as? String, let data = event["data"] as? [String: Any] else { return }
+    let isDisplayed = activeSubagentAddress?.childSessionId == sessionID
     switch kind {
     case "assistant/chunk":
+      guard isDisplayed else { return }
       if let chunk = data["chunk"] as? [String: Any], chunk["type"] as? String == "text-delta", let delta = chunk["textDelta"] as? String {
-        if subagentTranscript?.messages.last?.role == .assistant, let count = subagentTranscript?.messages.count { subagentTranscript?.messages[count - 1].text += delta }
-        else { subagentTranscript?.messages.append(Message(role: .assistant, text: delta)) }
+        if subagentTranscript?.messages.last?.role == .assistant,
+           subagentTranscript?.messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID,
+           let count = subagentTranscript?.messages.count {
+          subagentTranscript?.messages[count - 1].text += delta
+        } else {
+          var message = Message(role: .assistant, text: delta)
+          message.hostMessageId = DSHTranscriptMessageMarker.streamingAssistantHostMessageID
+          subagentTranscript?.messages.append(message)
+        }
       }
     case "assistant/message":
+      guard isDisplayed else { return }
       let payload = liveMessagePayload(data)
       if let text = liveMessageText(payload) {
-        if subagentTranscript?.messages.last?.role == .assistant, let count = subagentTranscript?.messages.count {
+        if subagentTranscript?.messages.last?.role == .assistant,
+           subagentTranscript?.messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID,
+           let count = subagentTranscript?.messages.count {
           subagentTranscript?.messages[count - 1].text = text
+          subagentTranscript?.messages[count - 1].attachment = DSHAttachmentRef.fromLiveMessage(payload)
+          subagentTranscript?.messages[count - 1].hostMessageId = payload["id"] as? String
         } else {
-          subagentTranscript?.messages.append(Message(role: .assistant, text: text))
+          var message = Message(role: .assistant, text: text, attachment: DSHAttachmentRef.fromLiveMessage(payload))
+          message.hostMessageId = payload["id"] as? String
+          subagentTranscript?.messages.append(message)
         }
       }
     case "user/message":
+      guard isDisplayed else { return }
       let payload = liveMessagePayload(data)
       if liveSourceKind(payload) == nil || liveSourceKind(payload) == "user", let text = liveMessageText(payload) {
-        subagentTranscript?.messages.append(Message(role: .user, text: text))
+        subagentTranscript?.messages.append(Message(role: .user, text: text, attachment: DSHAttachmentRef.fromLiveMessage(payload)))
+      }
+    case "tool/call":
+      let tool = ToolActivity(
+        callId: data["callId"] as? String ?? UUID().uuidString,
+        name: data["name"] as? String ?? "工具",
+        summary: "正在运行",
+        state: .running,
+        output: "",
+        presentation: ToolPresentation.from(view?["view"] as? [String: Any]))
+      appendSubagentTool(
+        sessionID: sessionID,
+        tool: tool,
+        seq: event["seq"] as? Int ?? -1)
+      if isDisplayed {
+        subagentTranscript?.messages.append(Message(role: .tool, text: tool.name, toolCallId: tool.callId))
+      }
+    case "tool/result":
+      guard let result = DSHToolResultDecoder.live(from: data) else { return }
+      _ = updateSubagentTool(
+        sessionID: sessionID,
+        callID: result.callId,
+        seq: event["seq"] as? Int ?? -1) { tool in
+        tool.state = result.isError ? .failed : .succeeded
+        let resultPresentation = ToolPresentation.fromEventView(view)
+        tool.presentation = ToolPresentation.merging(
+          call: tool.presentation,
+          result: resultPresentation,
+          rawOutput: result.output)
+        tool.output = tool.presentation?.output?.nonEmpty
+          ?? result.output.nonEmpty
+          ?? result.errorSummary
+          ?? "工具已完成"
+        if let errorSummary = result.errorSummary, !errorSummary.isEmpty {
+          tool.summary = errorSummary
+        }
+      }
+    case "todo/write":
+      if let rawTodos = data["todos"] as? [[String: Any]],
+         let seq = event["seq"] as? Int {
+        replaceSubagentTodos(sessionID: sessionID, value: rawTodos, seq: seq)
       }
     case "turn/start":
-      subagentTranscript?.isRunning = true
+      if isDisplayed { subagentTranscript?.isRunning = true }
     case "turn/end":
-      subagentTranscript?.isRunning = false
+      settleSubagentTools(sessionID: sessionID, seq: event["seq"] as? Int ?? -1)
+      if isDisplayed { subagentTranscript?.isRunning = false }
     default:
       break
     }
@@ -450,6 +557,7 @@ extension HarnessController {
       if let event = frame["event"] as? String {
         if event == "settings/document-updated" { refreshSettings(); refreshModelConfiguration() }
         if event == "llm/adapters-updated" { refreshModelConfiguration(); refreshSessionModels() }
+        if event == "agent-platform/profiles-updated" { refreshAgentPlatform() }
       }
     default:
       break

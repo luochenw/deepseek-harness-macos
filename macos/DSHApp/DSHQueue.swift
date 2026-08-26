@@ -3,6 +3,16 @@ struct DSHQueueItem: Identifiable {
   let id: String
   let placement: String
   let text: String
+
+  static func fromMux(_ values: [[String: Any]]) -> [Self] {
+    values.compactMap { item in
+      guard let id = item["id"] as? String else { return nil }
+      let message = item["message"] as? [String: Any]
+      let content = message?["content"] as? [[String: Any]]
+      let text = content?.compactMap { $0["text"] as? String }.joined() ?? ""
+      return Self(id: id, placement: item["placement"] as? String ?? "queued", text: text)
+    }
+  }
 }
 struct DSHQueueActionPayload: Encodable {
   let sessionId: String
@@ -30,7 +40,8 @@ struct DSHQueueMutationResult: Decodable { let accepted: Bool }
 
 extension HarnessController {
   func mutateQueue(_ item: DSHQueueItem, action: DSHQueueAction) {
-    guard let hostClient, let sessionId = hostCurrentSessionID else { return }
+    guard canMutateDisplayedQueue,
+          let hostClient, let sessionId = hostCurrentSessionID else { return }
     Task {
       do {
         try await hostClient.updateQueue(sessionId: sessionId, itemId: item.id, action: action)
@@ -50,6 +61,10 @@ extension HarnessController {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     let image = draftImage
     guard !text.isEmpty || image != nil else { return }
+    if isViewingContinuableSubagent {
+      send()
+      return
+    }
     guard let hostClient, let hostSessionID = hostCurrentSessionID else { return }
     draft = ""
     draftImage = nil

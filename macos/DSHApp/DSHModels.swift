@@ -110,6 +110,4 @@ extension HarnessController {
     availableModels.first(where: { $0.id == provider })?.nativeDisplayName
       ?? (provider == "relay" ? "自定义配置" : provider)
   }
-
-  func toolDetail(_ tool: ToolActivity) { selectedTool = tool; showDetails = true }
 }

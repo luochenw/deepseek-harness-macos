@@ -7,8 +7,8 @@ struct NativeDashboard: View {
       if harness.hostClient == nil || harness.hostStatus.contains("断开") { Button("重新连接 Host", action: harness.reconnectHostStreams).buttonStyle(.dshPrimary).frame(maxWidth: .infinity) }
       if let retry = harness.retryNotice { RetryNoticeCard(text: retry) }
       if let notice = harness.runNotice { RunNoticeCard(text: notice) }
-      if !harness.todos.isEmpty { TodoCard(items: harness.todos) }
-      if !harness.activeTools.isEmpty { JobCard(items: harness.activeTools) }
+      if !harness.displayedTodos.isEmpty { TodoCard(items: harness.displayedTodos) }
+      if !harness.displayedTools.isEmpty { JobCard(items: harness.displayedTools) }
       if !harness.subagents.isEmpty || !harness.subagentPath.isEmpty { SubagentCard(items: harness.subagents) }
       if !harness.workflows.isEmpty { WorkflowCard(items: harness.workflows) }
       if !harness.skills.isEmpty { SkillsCard(items: harness.skills) }
@@ -75,7 +75,7 @@ private struct SubagentCard: View {
         if !harness.subagentPath.isEmpty { Button("返回上级", action: harness.navigateUpSubagent).buttonStyle(.dshSecondary) }
       }
       if !harness.subagentPath.isEmpty { Text(harness.subagentPath.map(\.title).joined(separator: " › ")).font(.caption2).foregroundStyle(DSHTheme.inkFaint).lineLimit(1) }
-      ForEach(items) { item in
+      ForEach(items.filter { !harness.isManagedAgentChild($0) }) { item in
         Button(action: { harness.openSubagent(item) }) { HStack(spacing: DSHSpace.s2) {
           Image(systemName: Self.icon(item)).foregroundStyle(Self.color(item))
           VStack(alignment: .leading) {
@@ -188,26 +188,7 @@ private struct RetryNoticeCard: View {
 }
 
 struct DetailsPanel: View {
-  @EnvironmentObject var harness: HarnessController
   var body: some View {
-    VStack(alignment: .leading, spacing: DSHSpace.s4) {
-      HStack { Text("详情").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink); Spacer(); Button(action: { harness.showDetails = false }) { Image(systemName: "xmark") }.buttonStyle(.dshGhost) }
-      NativeDashboard()
-      if let tool = harness.selectedTool {
-        VStack(alignment: .leading, spacing: DSHSpace.s2) {
-          Label(tool.name, systemImage: icon(for: tool.state)).foregroundStyle(DSHTheme.ink)
-          Text(tool.summary).font(.caption).foregroundStyle(DSHTheme.inkFaint)
-          ScrollView { NativeToolPresentationView(tool: tool).frame(maxWidth: .infinity, alignment: .leading) }
-        }
-      } else {
-        Spacer()
-        VStack(spacing: DSHSpace.s2) {
-          Image(systemName: "sidebar.right").font(.title2).foregroundStyle(DSHTheme.inkFaint)
-          Text("点击消息流中的工具行查看详情").multilineTextAlignment(.center).foregroundStyle(DSHTheme.inkFaint)
-        }
-        Spacer()
-      }
-    }.padding(DSHSpace.s4)
+    AgentPlatformDetailsPanel()
   }
-  private func icon(for state: HarnessController.ToolActivity.State) -> String { switch state { case .running: "hourglass"; case .succeeded: "checkmark.circle"; case .failed: "exclamationmark.triangle" } }
 }

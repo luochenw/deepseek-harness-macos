@@ -177,6 +177,10 @@ extension HarnessController {
   /// `/model` run their native equivalents — the registry's export handler is
   /// a web-plugin stub and `/model` never was a host command.
   func pickSlashEntry(_ entry: DSHSlashEntry) {
+    guard canUseRootSlashCatalog else {
+      status = "子代理不使用根会话的斜杠命令"
+      return
+    }
     switch entry.kind {
     case .command(let hint):
       if entry.name == "export" { draft = ""; exportCurrentSessionLog() }

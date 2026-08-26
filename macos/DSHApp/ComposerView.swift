@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct Composer: View {
   @EnvironmentObject var harness: HarnessController
@@ -11,12 +12,14 @@ struct Composer: View {
   // holds until the next edit. The roster itself derives from the draft.
   @State private var paletteSelection = 0
   @State private var paletteDismissed = false
+  @State private var mentionSelection = 0
+  @State private var mentionDismissed = false
 
   /// The palette roster for the current draft — commands, native locals, and
   /// skills, matched by NativeCommandPalette's mirror of the web `/` menu.
   /// Empty while the draft is not a bare `/token` or after Esc.
   private var paletteEntries: [DSHSlashEntry] {
-    guard !paletteDismissed, !harness.isViewingReadOnlySubagent,
+    guard !paletteDismissed, harness.canUseRootSlashCatalog,
           let query = DSHSlashMatcher.bareToken(of: harness.draft) else { return [] }
     return DSHSlashMatcher.entries(commands: harness.hostCommands, skills: harness.skills, query: query)
   }
@@ -25,26 +28,59 @@ struct Composer: View {
     guard !entries.isEmpty else { return nil }
     return entries[min(paletteSelection, entries.count - 1)]
   }
+  private var mentionQuery: DSHAgentMentionQuery? {
+    guard !mentionDismissed, harness.composerAgentProfileID == nil,
+          !harness.isViewingReadOnlySubagent else { return nil }
+    return DSHAgentMentionMatcher.query(in: harness.draft)
+  }
+  private var mentionProfiles: [DSHAgentProfile] {
+    guard let mentionQuery else { return [] }
+    return Array(DSHAgentMentionMatcher.profiles(harness.agentProfiles, matching: mentionQuery.query).prefix(7))
+  }
+  private var selectedMentionProfile: DSHAgentProfile? {
+    guard !mentionProfiles.isEmpty else { return nil }
+    return mentionProfiles[min(mentionSelection, mentionProfiles.count - 1)]
+  }
   var body: some View {
     if harness.isViewingReadOnlySubagent {
-      HStack { Image(systemName: "lock.fill"); Text("只读：此子代理已结束，历史不可续写。返回上一级可继续操作。"); Spacer() }
-        .font(.caption).foregroundStyle(DSHTheme.inkFaint).padding(DSHSpace.s5)
+      VStack(spacing: DSHSpace.s2) {
+        GoalBar()
+        HStack { Image(systemName: "lock.fill"); Text("只读：此子代理已结束，历史不可续写。返回上一级可继续操作。"); Spacer() }
+          .font(.caption).foregroundStyle(DSHTheme.inkFaint).padding(DSHSpace.s5)
+      }
     } else {
     VStack(spacing: DSHSpace.s2) {
       // No status readout here — the transcript itself (waiting wave, tool
       // rows, system notes) already narrates what's happening; a second
       // ticker in the corner was noise. Plan/queue chips stay.
-      if harness.hostPlanActive || !harness.queueItems.isEmpty {
+      if harness.displayedPlanActive || !harness.displayedQueueItems.isEmpty {
         HStack {
-          if harness.hostPlanActive { Button("计划模式 ×", action: harness.exitPlanMode).buttonStyle(.dshSecondary) }
-          if !harness.queueItems.isEmpty { DSHBadge(text: "已排队 \(harness.queueItems.count)", tone: .warm) }
+          if harness.displayedPlanActive {
+            if harness.canMutateDisplayedPlan {
+              Button("计划模式 ×", action: harness.exitPlanMode).buttonStyle(.dshSecondary)
+            } else {
+              DSHBadge(text: "子代理计划模式", tone: .neutral)
+            }
+          }
+          if !harness.displayedQueueItems.isEmpty {
+            DSHBadge(text: "已排队 \(harness.displayedQueueItems.count)", tone: .warm)
+          }
           Spacer()
         }
       }
       GoalBar()
       QueueDockView()
+      if !mentionProfiles.isEmpty {
+        AgentProfilePalette(
+          profiles: mentionProfiles,
+          selection: min(mentionSelection, mentionProfiles.count - 1),
+          onPick: pickMentionProfile)
+      }
       if !paletteEntries.isEmpty {
         CommandPaletteView(entries: paletteEntries, selection: min(paletteSelection, paletteEntries.count - 1), onPick: { harness.pickSlashEntry($0) })
+      }
+      if let profile = harness.selectedComposerAgentProfile {
+        AgentComposerSelectionBar(profile: profile)
       }
       // Above the box: workspace chips (blank conversation) on the left,
       // session figures (context / tokens / turns) on the right.
@@ -82,11 +118,16 @@ struct Composer: View {
             // 面板打开时回车改为执行选中项（cc/codex 的菜单语义）。
             .onKeyPress(.return, phases: .down) { press in
               if press.modifiers.contains(.shift) { return .ignored }
+              // 输入法组合（拼音等）进行中：回车用于确认候选，不能发送。
+              // onKeyPress 在文本输入管道前触发，组合中的 marked text 不进入
+              // draft，只能查焦点文本框的组合态。
+              if editorHasMarkedText { return .ignored }
+              if let profile = selectedMentionProfile { pickMentionProfile(profile); return .handled }
               if let entry = selectedPaletteEntry { harness.pickSlashEntry(entry); return .handled }
               // 回车发送可关（设置→通用）：关掉后回车换行，⌘回车发送。
               if !AppPrefs.enterToSend, !press.modifiers.contains(.command) { return .ignored }
-              guard harness.canSend else { return .ignored }
-              harness.send()
+              guard harness.composerCanSubmit else { return .ignored }
+              harness.submitComposer()
               return .handled
             }
             // Palette keys claim ↑/↓/Tab/Esc only while the palette shows;
@@ -94,25 +135,43 @@ struct Composer: View {
             // ↑/↓ include the `.repeat` phase so holding the key keeps
             // walking the list at the system key-repeat rate.
             .onKeyPress(.upArrow, phases: [.down, .repeat]) { _ in
+              if !mentionProfiles.isEmpty {
+                mentionSelection = (min(mentionSelection, mentionProfiles.count - 1) - 1 + mentionProfiles.count) % mentionProfiles.count
+                return .handled
+              }
               let count = paletteEntries.count
               guard count > 0 else { return .ignored }
               paletteSelection = (min(paletteSelection, count - 1) - 1 + count) % count
               return .handled
             }
             .onKeyPress(.downArrow, phases: [.down, .repeat]) { _ in
+              if !mentionProfiles.isEmpty {
+                mentionSelection = (min(mentionSelection, mentionProfiles.count - 1) + 1) % mentionProfiles.count
+                return .handled
+              }
               let count = paletteEntries.count
               guard count > 0 else { return .ignored }
               paletteSelection = (min(paletteSelection, count - 1) + 1) % count
               return .handled
             }
             .onKeyPress(.tab, phases: .down) { _ in
+              if let profile = selectedMentionProfile { pickMentionProfile(profile); return .handled }
               guard let entry = selectedPaletteEntry else { return .ignored }
               harness.draft = "/\(entry.name) "
               return .handled
             }
             .onKeyPress(.escape, phases: .down) { _ in
-              guard !paletteEntries.isEmpty else { return .ignored }
-              paletteDismissed = true
+              if !mentionProfiles.isEmpty {
+                mentionDismissed = true
+                return .handled
+              }
+              if !paletteEntries.isEmpty {
+                paletteDismissed = true
+                return .handled
+              }
+              // 对话运行中：Esc 直接停止本轮（面板优先，其次停止）。
+              guard harness.displayedIsRunning else { return .ignored }
+              harness.stop()
               return .handled
             }
             .frame(height: min(max(editorContentHeight + 2, 24), 140))
@@ -125,7 +184,7 @@ struct Composer: View {
           // underline text. Focus is the only reliable signal we have.
           // Vertically centered — the box is a single line when empty.
           if harness.draft.isEmpty && !editorFocused {
-            Text(harness.hostPlanActive ? "描述任务以生成计划" : "描述你想要构建的内容")
+            Text(harness.displayedPlanActive ? "描述任务以生成计划" : "描述你想要构建的内容")
               .font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
               .padding(.leading, 5).allowsHitTesting(false)
           }
@@ -138,7 +197,21 @@ struct Composer: View {
           }
         }
         HStack(spacing: DSHSpace.s3) {
-          Menu { Button("进入计划模式", action: harness.enterPlanMode); Button("设定目标") { harness.draft = "/goal " }; Divider(); Button("重命名当前会话", action: harness.beginRenameCurrentSession); Button("创建会话分支", action: harness.forkCurrentSession); Button("归档当前会话", action: harness.archiveCurrentSession); Button("导出会话日志", action: harness.exportCurrentSessionLog); Button("查看归档会话") { harness.showArchivedSessions = true }; Divider(); Button("新会话", action: harness.newSession); Button("打开工作区", action: harness.openWorkspace) } label: { Image(systemName: "ellipsis.circle") }
+          Menu {
+            if harness.canUseRootSlashCatalog {
+              Button("进入计划模式", action: harness.enterPlanMode)
+              Button("设定目标") { harness.draft = "/goal " }
+              Divider()
+              Button("重命名当前会话", action: harness.beginRenameCurrentSession)
+              Button("创建会话分支", action: harness.forkCurrentSession)
+              Button("归档当前会话", action: harness.archiveCurrentSession)
+              Button("导出会话日志", action: harness.exportCurrentSessionLog)
+              Button("查看归档会话") { harness.showArchivedSessions = true }
+              Divider()
+            }
+            Button("新会话", action: harness.newSession)
+            Button("打开工作区", action: harness.openWorkspace)
+          } label: { Image(systemName: "ellipsis.circle") }
             .menuStyle(.borderlessButton).fixedSize().foregroundStyle(DSHTheme.inkSoft).help("更多操作")
           Button(action: harness.pickImage) { Image(systemName: "paperclip") }.buttonStyle(.borderless).foregroundStyle(DSHTheme.inkSoft).help("添加图片")
           // Dictation streams live into the input box (partials replace from
@@ -175,8 +248,14 @@ struct Composer: View {
               harness.draft = base + (base.isEmpty ? "" : " ") + text
             })
           Spacer()
-          ComposerModelMenu()
-          if harness.isRunning {
+          if harness.canUseRootSlashCatalog {
+            ComposerModelMenu()
+          }
+          if harness.selectedComposerAgentProfile != nil {
+            Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
+              .buttonStyle(.dshPrimary).disabled(!harness.composerCanSubmit)
+              .help("派发 Agent Batch")
+          } else if harness.displayedIsRunning {
             Button(action: harness.stop) { Image(systemName: "stop.fill").font(.system(size: 13)) }
               .buttonStyle(.dshSecondary).help("停止")
             Button(action: harness.queueDraft) { Image(systemName: "tray.and.arrow.down") }
@@ -184,8 +263,8 @@ struct Composer: View {
               .disabled(harness.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
               .help("排队：本轮结束后自动发送")
           } else {
-            Button(action: harness.send) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
-              .buttonStyle(.dshPrimary).disabled(!harness.canSend)
+            Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
+              .buttonStyle(.dshPrimary).disabled(!harness.composerCanSubmit)
               .help(AppPrefs.enterToSend ? "发送（回车）" : "发送（⌘回车）")
           }
         }
@@ -200,9 +279,26 @@ struct Composer: View {
     .onChange(of: harness.draft) { _, newValue in
       paletteSelection = 0
       paletteDismissed = false
+      mentionSelection = 0
+      mentionDismissed = false
       if newValue == "/" { harness.refreshSlashCatalog() }
+      if newValue.hasSuffix("@") { harness.refreshAgentProfiles() }
     }
     }
+  }
+
+  /// True while an input method (Chinese pinyin, etc.) holds an active
+  /// composition in the focused text view. Enter during composition must
+  /// confirm the candidate, not send the draft — onKeyPress(.return)
+  /// otherwise fires before the IME consumes the key.
+  private var editorHasMarkedText: Bool {
+    (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true
+  }
+
+  private func pickMentionProfile(_ profile: DSHAgentProfile) {
+    harness.selectComposerAgentProfile(profile, replacing: mentionQuery?.range)
+    mentionSelection = 0
+    mentionDismissed = true
   }
 }
 

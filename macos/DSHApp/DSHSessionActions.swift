@@ -108,116 +108,9 @@ extension HarnessController {
     }
   }
 
-  /// "新会话" / ⌘N：只回到默认页，不创建任何东西——会话（本地行 +
-  /// Host 持久会话）一律等第一条消息发出时由 send() 懒创建。用户反馈
-  /// 点按钮就冒出一个空会话仍然是"直接新增"，与启动自动建会话是
-  /// 同一个问题。
-  func newSession() {
-    clearToDefaultPage()
-    status = "输入内容即可开始新会话"
-  }
-
-  /// The local sidebar row + selection reset for the lazy first-send path
-  /// (which needs the row without the fire-and-forget attach so it can
-  /// sequence the send after the Host session exists).
-  func insertLocalSessionRow() {
-    let session = Session(title: "新会话", workspaceName: workspaceName, updatedAt: Date(), messages: [
-      Message(role: .system, text: "正在创建持久 DSH 会话…")
-    ])
-    sessions.insert(session, at: 0)
-    selectedSessionID = session.id
-    selectedTool = nil
-    activeSubagentAddress = nil
-    subagentPath = []
-    subagentTranscript = nil
-    selectedWorkflowRunID = nil
-  }
-
-  /// Back to the launch default page: nothing selected, empty-state hero in
-  /// the conversation pane, and the next send lazily creates a fresh session.
-  /// Every session-scoped global resets too — a blank new conversation used
-  /// to keep the previous session's running flag (stop button, blocked
-  /// send) and usage figures.
-  private func clearToDefaultPage() {
-    hostCurrentSessionID = nil
-    selectedSessionID = nil
-    selectedTool = nil
-    activeSubagentAddress = nil
-    subagentPath = []
-    subagentTranscript = nil
-    selectedWorkflowRunID = nil
-    isRunning = false
-    todos = []
-    hostPlanActive = false
-    goal = nil
-    tokenUsage = nil
-    contextPressure = nil
-    sessionStats = nil
-    queueItems = []
-    runNotice = nil
-    retryNotice = nil
-  }
-
-  /// Create the persistent Host session backing the currently-selected local
-  /// row. Sole caller: `send()`'s lazy first-message path, which passes
-  /// `onComplete` to sequence the actual send after the Host session is bound.
-  func attachHostSessionToCurrentPlaceholder(onComplete: ((Bool) -> Void)? = nil) {
-    guard let hostClient else { onComplete?(false); return }
-    let cwd = workspace?.path
-    let presetId = pendingHostPresetID ?? (preset == .creator ? "cordis" : preset.rawValue)
-    // Capture the composer's advertised selection before hopping off the main
-    // actor — `session.create` takes no model, so without an explicit
-    // `session.selectModel` right after, the Host silently runs its own
-    // config default (`agent-default-model` in the app-scoped DSH home) while
-    // the composer label keeps showing this local state. That mismatch is
-    // exactly the "picked GPT-5.6 Terra, Host errored about
-    // ark/deepseek-v4-flash" bug — see the composer-consolidation Agent Note.
-    let (chosenProvider, chosenModel) = (provider, model)
-    // Clamped, not raw `reasoningEffort`: pushing a level the model never
-    // advertised (the stored "high" against an effort-less relay model) would
-    // fail the whole selectModel call and leave the session on the config
-    // default — the very bug this push exists to fix.
-    let chosenEffort = advertisedEffort(provider: provider, model: model, requested: reasoningEffort)
-    Task {
-      do {
-        let created = try await hostClient.createSession(cwd: cwd, agentPreset: presetId)
-        await MainActor.run {
-          self.hostCurrentSessionID = created.sessionId
-          if let index = self.selectedSessionIndex {
-            self.sessions[index].hostSessionId = created.sessionId
-            self.sessions[index].messages = [Message(role: .system, text: "已连接到持久 DSH 会话。")]}
-          self.refreshHostSnapshots()
-        }
-        if !chosenProvider.isEmpty, !chosenModel.isEmpty {
-          do {
-            try await hostClient.selectModel(sessionId: created.sessionId, provider: chosenProvider, model: chosenModel, reasoningEffort: chosenEffort)
-          } catch {
-            await MainActor.run { self.appendSystem("新会话未能应用所选模型（\(chosenProvider) / \(chosenModel)）：\(error.localizedDescription)") }
-          }
-        }
-        // Sync back from the Host either way so the composer label reflects
-        // the session's real model, not an unconfirmed local wish.
-        await MainActor.run { self.refreshSessionModels(); onComplete?(true) }
-      } catch {
-        await MainActor.run {
-          self.appendSystem("持久会话创建失败：\(error.localizedDescription)")
-          onComplete?(false)
-        }
-      }
-    }
-  }
-
-  func selectSession(_ id: UUID) {
-    selectedSessionID = id
-    if let index = sessions.firstIndex(where: { $0.id == id }) {
-      sessions[index].hasUnread = false
-      // The global flag follows the selected row — a placeholder row
-      // switched to while another session runs must not inherit its state.
-      isRunning = sessions[index].isRunning
-    }
-  }
-
   func openHostSession(_ summary: DSHSessionSummary) {
+    invalidateRootHistoryRequests()
+    invalidateSubagentPresentationLoad()
     hostCurrentSessionID = summary.sessionId
     activeSubagentAddress = nil
     subagentPath = []
@@ -273,5 +166,6 @@ extension HarnessController {
     loadSkills(sessionId: summary.sessionId)
     loadCommands(sessionId: summary.sessionId)
     loadMessageFeedback(sessionId: summary.sessionId)
+    refreshAgentBatches(rootSessionId: summary.sessionId)
   }
 }

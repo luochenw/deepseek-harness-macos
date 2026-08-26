@@ -98,6 +98,7 @@ extension HarnessController {
     refreshHostSnapshots()
     refreshModelConfiguration()
     refreshSettings()
+    refreshAgentPlatform()
   }
 
   func refreshHostSnapshots() {

@@ -30,7 +30,8 @@ extension HarnessController {
   /// the `goal` projection frame, so nothing is written locally here.
   func createGoal(text: String) {
     let objective = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !objective.isEmpty, let hostClient, let sessionId = hostCurrentSessionID else { return }
+    guard !objective.isEmpty, canMutateDisplayedGoal,
+          let hostClient, let sessionId = hostCurrentSessionID else { return }
     Task {
       do {
         _ = try await hostClient.createGoal(sessionId: sessionId, objective: objective)
@@ -43,6 +44,7 @@ extension HarnessController {
   /// its phase, CAS-guarded by the projected revision.
   func editGoal(objective: String? = nil, maxGoalRounds: Int? = nil) {
     guard objective != nil || maxGoalRounds != nil,
+          canMutateDisplayedGoal,
           let hostClient, let sessionId = hostCurrentSessionID,
           let current = goal?.goal else { return }
     Task {
@@ -64,13 +66,13 @@ extension HarnessController {
   /// flip comes back as the `plan` projection (`hostPlanActive`); while the
   /// agent is running the Host holds the selection pending until the next
   /// accepted pre-step, so the flag may flip with a delay.
-  func enterPlanMode() { sendPlanCommand("/plan", label: "进入计划模式") }
+  func enterPlanMode() { guard canMutateDisplayedPlan else { return }; sendPlanCommand("/plan", label: "进入计划模式") }
 
   /// Exits host-side plan mode directly: dsh-plan-mode reserves the exact
   /// argument `off`, selecting inactive without sending model input（also
   /// cancelling a still-pending entry）. The reviewed `exit_plan_mode` tool
   /// path is the model-driven alternative and needs nothing from the client.
-  func exitPlanMode() { sendPlanCommand("/plan off", label: "退出计划模式") }
+  func exitPlanMode() { guard canMutateDisplayedPlan else { return }; sendPlanCommand("/plan off", label: "退出计划模式") }
 
   private func sendPlanCommand(_ command: String, label: String) {
     guard let hostClient, let sessionId = hostCurrentSessionID else {
@@ -88,7 +90,9 @@ extension HarnessController {
 
 extension HarnessController {
   func performGoalAction(_ action: String) {
-    guard let hostClient, let sessionId = hostCurrentSessionID, let state = goal, let goal = state.goal else { return }
+    guard canMutateDisplayedGoal,
+          let hostClient, let sessionId = hostCurrentSessionID,
+          let state = goal, let goal = state.goal else { return }
     Task {
       do {
         try await hostClient.goalAction(action, sessionId: sessionId, goalId: goal.id, revision: goal.revision)

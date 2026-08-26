@@ -36,4 +36,41 @@ struct NativeDSHContractCheck {
       )
     )
   }
+
+  static func agentProfileDraft() -> DSHAgentProfileDraft {
+    DSHAgentProfileDraft(
+      id: nil,
+      name: "实现助手",
+      mention: "implementer",
+      description: "并行实现与审查",
+      persona: "保持改动聚焦并给出测试证据。",
+      defaultTask: "检查当前改动并运行测试。",
+      defaultMode: .execution,
+      allowModelDispatch: false,
+      integrationPolicy: .manual,
+      adapters: [
+        DSHAgentAdapterBinding(
+          id: "dsh",
+          runtime: "dsh",
+          enabled: true,
+          displayName: "DSH",
+          model: nil,
+          toolAllowlist: ["read", "grep"],
+          toolDenylist: ["bash", "write"],
+          analysisSupported: true,
+          executionSupported: true,
+          config: nil),
+      ])
+  }
+
+  static func agentBatchStart() -> DSHAgentBatchStartArgs {
+    DSHAgentBatchStartArgs(
+      profileId: "profile-fixture",
+      rootSessionId: "root-fixture",
+      initiatorSessionId: "child-fixture",
+      task: "检查实现并给出结果",
+      mode: .analysis,
+      integrationPolicy: .manual,
+      source: .composer)
+  }
 }

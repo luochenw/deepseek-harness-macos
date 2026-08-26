@@ -1,0 +1,33 @@
+{
+  "name": "@dsh-app/dsh-agent-platform",
+  "description": "Unified Agent Profile, Runtime, Run, and Batch coordinator for the native macOS app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./core": "./lib/core.js",
+    "./scheduler": "./lib/scheduler.js",
+    "./workspace": "./lib/workspace.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node --check lib/index.js && node --check lib/core.js && node --check lib/delivery.js && node --check lib/lifecycle.js && node --check lib/logs.js && node --check lib/recovery.js && node --check lib/runtime.js && node --check lib/scheduler.js && node --check lib/workspace.js && node --check lib/worker.js"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-presets": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-host-apiproxy": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-sandbox": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-sandbox-policy": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-subagent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-typert-protocol": "^0.1.0-rc.6",
+    "zod": "^4.4.3"
+  }
+}

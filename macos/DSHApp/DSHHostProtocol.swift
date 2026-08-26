@@ -55,6 +55,32 @@ struct DSHSessionSummary: Decodable, Identifiable {
 struct DSHSessionProjections: Decodable {
   let asOfSeq: Int
   let values: DSHSessionProjectionValues
+  /// Projection values are intentionally wide on the wire. The raw form
+  /// distinguishes a missing capability from a present JSON null so child
+  /// contexts can apply Host-cleared Todo/Goal values at the right sequence.
+  let rawValues: [String: DSHJSONValue]
+
+  init(
+    asOfSeq: Int,
+    values: DSHSessionProjectionValues,
+    rawValues: [String: DSHJSONValue] = [:]
+  ) {
+    self.asOfSeq = asOfSeq
+    self.values = values
+    self.rawValues = rawValues
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case asOfSeq
+    case values
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    asOfSeq = try container.decode(Int.self, forKey: .asOfSeq)
+    values = try container.decode(DSHSessionProjectionValues.self, forKey: .values)
+    rawValues = try container.decode([String: DSHJSONValue].self, forKey: .values)
+  }
 }
 
 struct DSHSessionProjectionValues: Decodable {

@@ -5,17 +5,19 @@ struct QueueDockView: View {
   @State private var editing: DSHQueueItem?
   @State private var text = ""
   var body: some View {
-    if !harness.queueItems.isEmpty {
+    if !harness.displayedQueueItems.isEmpty {
       VStack(alignment: .leading, spacing: DSHSpace.s2) {
         Label("排队消息", systemImage: "list.number").font(.caption.weight(.bold)).foregroundStyle(DSHTheme.ink)
-        ForEach(harness.queueItems) { item in
+        ForEach(harness.displayedQueueItems) { item in
           HStack(spacing: DSHSpace.s2) {
             DSHBadge(text: item.placement == "steering" ? "Steer" : "Queue", tone: item.placement == "steering" ? .warm : .neutral)
             Text(item.text).font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(2)
             Spacer()
-            Button(action: { text = item.text; editing = item }) { Image(systemName: "pencil") }.buttonStyle(.dshGhost)
-            Button(action: { harness.mutateQueue(item, action: .steer) }) { Image(systemName: "arrow.turn.down.right") }.buttonStyle(.dshGhost)
-            Button(action: { harness.mutateQueue(item, action: .remove) }) { Image(systemName: "trash") }.buttonStyle(.dshGhost)
+            if harness.canMutateDisplayedQueue {
+              Button(action: { text = item.text; editing = item }) { Image(systemName: "pencil") }.buttonStyle(.dshGhost)
+              Button(action: { harness.mutateQueue(item, action: .steer) }) { Image(systemName: "arrow.turn.down.right") }.buttonStyle(.dshGhost)
+              Button(action: { harness.mutateQueue(item, action: .remove) }) { Image(systemName: "trash") }.buttonStyle(.dshGhost)
+            }
           }
         }
       }

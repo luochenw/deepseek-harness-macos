@@ -35,34 +35,39 @@ struct ConversationHeader: View {
   private var lockedPresetLabel: String { currentSessionSummary?.agentPreset ?? harness.preset.label }
 
   var body: some View {
-    HStack(spacing: DSHSpace.s2) {
-      VStack(alignment: .leading, spacing: 2) {
-        if !harness.subagentPath.isEmpty {
-          HStack(spacing: 6) {
-            Button(action: harness.navigateUpSubagent) { Image(systemName: "chevron.left") }.buttonStyle(.dshGhost).help("返回上一级")
-            Text(harness.subagentPath.map(\.title).joined(separator: " › ")).font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
+    VStack(alignment: .leading, spacing: DSHSpace.s2) {
+      HStack(spacing: DSHSpace.s2) {
+        VStack(alignment: .leading, spacing: 2) {
+          if !harness.subagentPath.isEmpty {
+            HStack(spacing: 6) {
+              Button(action: harness.navigateUpSubagent) { Image(systemName: "chevron.left") }.buttonStyle(.dshGhost).help("返回上一级")
+              Text(harness.subagentPath.map(\.title).joined(separator: " › ")).font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
+            }
+          }
+          Text(harness.displayedSession?.title ?? "新会话").font(.system(size: 15, weight: .semibold)).foregroundStyle(DSHTheme.ink)
+          Text(harness.workspace?.path ?? "选择工作区后开始").font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
+        }
+        Spacer()
+        if presetLocked {
+          HStack(spacing: 6) { Image(systemName: "lock.fill").font(.system(size: 11)); Text(lockedPresetLabel).font(.system(size: 11.5)) }
+            .padding(.horizontal, DSHSpace.s3).padding(.vertical, 6)
+            .background(DSHTheme.warmSoft, in: Capsule())
+            .foregroundStyle(DSHTheme.warm)
+            .help("会话已开始运行，Agent Preset 无法再切换（Host 会拒绝：agent-preset-locked）")
+        } else {
+          HeaderChip(icon: "cpu", label: harness.activePresetLabel) {
+            if harness.hostPresets.isEmpty { ForEach(HarnessController.Preset.allCases) { p in Button(p.label) { harness.setPreset(p) } } }
+            else { ForEach(harness.hostPresets.filter { $0.broken == nil }) { p in Button(p.name ?? p.id) { harness.selectCurrentPreset(p.id) } } }
           }
         }
-        Text(harness.displayedSession?.title ?? "新会话").font(.system(size: 15, weight: .semibold)).foregroundStyle(DSHTheme.ink)
-        Text(harness.workspace?.path ?? "选择工作区后开始").font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
+        // With content in the transcript the workspace context docks up here,
+        // compact (blank conversations show it above the composer instead).
+        if !harness.isNewConversation { WorkspaceChips(compact: true) }
+        Button(action: harness.toggleExecutionDetails) { Image(systemName: "sidebar.right") }.buttonStyle(.dshGhost)
       }
-      Spacer()
-      if presetLocked {
-        HStack(spacing: 6) { Image(systemName: "lock.fill").font(.system(size: 11)); Text(lockedPresetLabel).font(.system(size: 11.5)) }
-          .padding(.horizontal, DSHSpace.s3).padding(.vertical, 6)
-          .background(DSHTheme.warmSoft, in: Capsule())
-          .foregroundStyle(DSHTheme.warm)
-          .help("会话已开始运行，Agent Preset 无法再切换（Host 会拒绝：agent-preset-locked）")
-      } else {
-        HeaderChip(icon: "cpu", label: harness.activePresetLabel) {
-          if harness.hostPresets.isEmpty { ForEach(HarnessController.Preset.allCases) { p in Button(p.label) { harness.setPreset(p) } } }
-          else { ForEach(harness.hostPresets.filter { $0.broken == nil }) { p in Button(p.name ?? p.id) { harness.selectCurrentPreset(p.id) } } }
-        }
+      if !harness.displayedAttachmentRailItems.isEmpty {
+        AttachmentRail(items: harness.displayedAttachmentRailItems)
       }
-      // With content in the transcript the workspace context docks up here,
-      // compact (blank conversations show it above the composer instead).
-      if !harness.isNewConversation { WorkspaceChips(compact: true) }
-      Button(action: { harness.showDetails.toggle() }) { Image(systemName: "sidebar.right") }.buttonStyle(.dshGhost)
     }.padding(.horizontal, DSHSpace.s5).padding(.vertical, DSHSpace.s3)
   }
 }
@@ -102,7 +107,7 @@ struct ConversationView: View {
                   if let reasoning = message.reasoning {
                     // "live" = this thought is still streaming: last row of a
                     // running turn with no answer text yet.
-                    ReasoningBlock(text: reasoning, live: harness.isRunning && message.id == messages.last?.id && message.text.isEmpty)
+                    ReasoningBlock(text: reasoning, live: harness.displayedIsRunning && message.id == messages.last?.id && message.text.isEmpty)
                   }
                   MessageBubble(message: message)
                 }.id(message.id)
@@ -118,7 +123,7 @@ struct ConversationView: View {
             // the cached static row on branch swap, so the TimelineView
             // never mounts and the icon sits frozen through the whole run
             // (reproduced in isolation; see the transcript-tail Agent Note).
-            TranscriptTailIcon(running: harness.isRunning).id("transcript-tail")
+            TranscriptTailIcon(running: harness.displayedIsRunning).id("transcript-tail")
           }
         }.frame(maxWidth: .infinity).padding(DSHSpace.s6)
           // Thin overlay scroller (appears while scrolling, no gutter) —
@@ -161,7 +166,7 @@ struct ConversationView: View {
       }
       // The run settling (or starting without a new message, e.g. a queued
       // drain) swaps the tail row in place — keep it in view while pinned.
-      .onChange(of: harness.isRunning) { _, _ in
+      .onChange(of: harness.displayedIsRunning) { _, _ in
         if pinnedToBottom, harness.displayedSession?.messages.isEmpty == false {
           proxy.scrollTo("transcript-tail", anchor: .bottom)
         }
@@ -252,7 +257,7 @@ private struct ToolGroupRow: View {
   private var activities: [HarnessController.ToolActivity] {
     messages.compactMap { message in
       guard let id = message.toolCallId else { return nil }
-      return harness.activeTools.last { $0.callId == id }
+      return harness.displayedTools.last { $0.callId == id }
     }
   }
   private var anyRunning: Bool { activities.contains { $0.state == .running } }
@@ -458,7 +463,7 @@ private struct MessageBubble: View {
           VStack(alignment: .leading, spacing: 7) {
             Text(message.text)
               .textSelection(.enabled).font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.ink)
-            if let attachment = message.attachment { AttachmentPreview(ref: attachment) }
+            if let attachment = message.attachment { AttachmentPreview(ref: attachment, sessionID: harness.displayedAttachmentSessionID) }
           }
           .padding(.horizontal, DSHSpace.s4).padding(.vertical, DSHSpace.s3)
           .dshCard(tint: DSHTheme.surfaceTint2, radius: DSHRadius.lg)
@@ -474,16 +479,17 @@ private struct MessageBubble: View {
         if message.text.isEmpty {
           // Empty text + reasoning = the ✻ thinking row above already says
           // what's happening; a second "正在思考…" line doubles the signal.
-          if message.reasoning == nil {
+          if message.reasoning == nil, message.attachment == nil {
             Text("正在思考…").font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
           }
         } else {
           MarkdownText(text: message.text).frame(maxWidth: 760, alignment: .leading)
         }
-        if let attachment = message.attachment { AttachmentPreview(ref: attachment) }
+        if let attachment = message.attachment { AttachmentPreview(ref: attachment, sessionID: harness.displayedAttachmentSessionID) }
         // Hover-revealed, Claude Code-style: an always-on 👍👎 under every
         // intermediate narration line reads as clutter across a long turn.
-        if let messageId = message.hostMessageId {
+        if let messageId = message.hostMessageId,
+           messageId != DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
           // A rating already given stays visible; unrated bars appear on hover.
           FeedbackBar(messageId: messageId).opacity(hovering || harness.messageFeedback[messageId]?.rating != nil ? 1 : 0)
         }
@@ -507,80 +513,61 @@ private struct MessageBubble: View {
 /// monospace, a dim `⎿ result` summary, and click-to-expand inline detail —
 /// terminal output as a folded code block, file edits as real ± diff lines
 /// (diff cards start expanded, CC-style: the change IS the content there).
-private struct ToolCallRow: View {
+struct ToolCallRow: View {
   @EnvironmentObject var harness: HarnessController
   let message: HarnessController.Message
+  let initiallyExpanded: Bool?
   /// nil until the user toggles; the default is open only for diff cards.
   @State private var userToggled: Bool?
   private var activity: HarnessController.ToolActivity? {
     guard let id = message.toolCallId else { return nil }
-    return harness.activeTools.last { $0.callId == id }
+    return harness.displayedTools.last { $0.callId == id }
   }
   private var isDiffCard: Bool { activity?.presentation?.card == "diff" }
-  private var expanded: Bool { userToggled ?? isDiffCard }
+  private var expanded: Bool { userToggled ?? initiallyExpanded ?? isDiffCard }
+
+  init(message: HarnessController.Message, initiallyExpanded: Bool? = nil) {
+    self.message = message
+    self.initiallyExpanded = initiallyExpanded
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
-      Button(action: { userToggled = !expanded }) {
-        VStack(alignment: .leading, spacing: 3) {
+      HStack(alignment: .top, spacing: DSHSpace.s2) {
+        Button(action: { userToggled = !expanded }) {
           HStack(spacing: 7) {
             ToolStateDot(color: dotColor, pulsing: activity?.state == .running)
             Text(headline).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(DSHTheme.ink).lineLimit(1)
             Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
               .foregroundStyle(DSHTheme.inkFaint).rotationEffect(.degrees(expanded ? 90 : 0))
           }
-          if !expanded, let detail {
-            HStack(alignment: .top, spacing: 6) {
-              Text("⎿").font(.system(size: 11, design: .monospaced))
-              Text(detail).font(.system(size: 11.5, design: .monospaced)).lineLimit(2).multilineTextAlignment(.leading)
-            }
-            .foregroundStyle(DSHTheme.inkFaint)
-            .padding(.leading, 13)
-          }
+          .contentShape(Rectangle())
         }
-        .contentShape(Rectangle())
+        .buttonStyle(.plain)
+        Spacer(minLength: DSHSpace.s1)
+        if let activity {
+          Button(action: { harness.toolDetail(activity) }) {
+            Image(systemName: "sidebar.right")
+          }
+          .buttonStyle(.dshGhost)
+          .help("在右栏查看工具详情")
+        }
       }
-      .buttonStyle(.plain)
+      if !expanded, let detail {
+        HStack(alignment: .top, spacing: 6) {
+          Text("⎿").font(.system(size: 11, design: .monospaced))
+          Text(detail).font(.system(size: 11.5, design: .monospaced)).lineLimit(2).multilineTextAlignment(.leading)
+        }
+        .foregroundStyle(DSHTheme.inkFaint)
+        .padding(.leading, 13)
+      }
       if expanded, let activity {
-        expandedBody(activity)
+        ToolPresentationContent(tool: activity, compact: true)
           .padding(.leading, 13)
           .frame(maxWidth: 760, alignment: .leading)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  @ViewBuilder private func expandedBody(_ activity: HarnessController.ToolActivity) -> some View {
-    if let presentation = activity.presentation {
-      switch presentation.card {
-      case "diff":
-        VStack(alignment: .leading, spacing: 6) {
-          ForEach(presentation.diffs) { item in
-            VStack(alignment: .leading, spacing: 3) {
-              Text(item.path).font(.system(size: 11, design: .monospaced)).foregroundStyle(DSHTheme.inkSoft)
-              DiffLines(old: item.oldText, new: item.newText).equatable()
-            }
-          }
-        }
-      case "read":
-        CollapsibleCodeBlock(content: presentation.lines.map { "\($0.number)  \($0.text)" }.joined(separator: "\n"))
-      case "search":
-        CollapsibleCodeBlock(content: presentation.files.flatMap { file in
-          file.matches.map { "\(file.path):\($0.lineNumber)  \($0.line)" }
-        }.joined(separator: "\n"))
-      default:
-        if !activity.output.isEmpty, activity.output != "工具已完成" {
-          CollapsibleCodeBlock(content: activity.output)
-        } else if activity.state == .running {
-          Text("运行中…").font(.system(size: 11.5, design: .monospaced)).foregroundStyle(DSHTheme.inkFaint)
-        }
-      }
-      if let exitCode = presentation.exitCode, exitCode != 0 {
-        Text("退出码 \(exitCode)\(presentation.signal.map { " · \($0)" } ?? "")")
-          .font(.system(size: 11, design: .monospaced)).foregroundStyle(DSHTheme.coral)
-      }
-    } else if !activity.output.isEmpty {
-      CollapsibleCodeBlock(content: activity.output)
-    }
   }
 
   /// `Name(argument)` — the argument is the presentation's own title when the
