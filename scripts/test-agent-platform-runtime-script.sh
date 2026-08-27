@@ -52,6 +52,7 @@ isolated_runtime_output="$(
   CLAUDE_CODE_PATH="$isolated_home/missing-claude" \
   CODEX_PATH="$isolated_home/missing-codex" \
   ZCODE_PATH="$isolated_home/missing-zcode.cjs" \
+  DSH_SOURCE="$isolated_home/missing-dsh" \
   "$RUNTIME_TEST" 2>&1
 )"
 isolated_runtime_status=$?
@@ -71,8 +72,17 @@ grep -Fq 'libnode*.dylib' "$BUILD" || {
   exit 1
 }
 
-grep -Fq 'npm install -g @deepseek-ai/dsh@0.1.0-rc.7' "$CI" || {
+grep -Fq 'npm install -g @deepseek-ai/dsh@0.1.1-rc.2' "$CI" || {
   echo "agent-platform-runtime-script: CI must pin DSH to the runtime-patch support boundary" >&2
+  exit 1
+}
+
+grep -Fq 'arguments.append("--no-open")' "$ROOT/macos/DSHApp/DSHHostProtocol.swift" || {
+  echo "agent-platform-runtime-script: native Host launch must suppress the bundled Web UI" >&2
+  exit 1
+}
+grep -Fq -- '--no-open' "$ROOT/scripts/verify-native-host-api.sh" || {
+  echo "agent-platform-runtime-script: smoke Host launch must suppress the bundled Web UI" >&2
   exit 1
 }
 

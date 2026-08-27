@@ -36,5 +36,13 @@ for module in "${modules[@]}"; do
   "$NODE" --check "$module"
 done
 "$NODE" --test "${tests[@]}"
-"$NODE" "$ROOT/scripts/test-agent-platform-runtime-patch.mjs"
+DSH_SOURCE="${DSH_SOURCE:-}"
+if [[ -z "$DSH_SOURCE" ]] && command -v npm >/dev/null; then
+  DSH_SOURCE="$(npm root -g 2>/dev/null || true)/@deepseek-ai/dsh"
+fi
+if [[ -n "$DSH_SOURCE" && -f "$DSH_SOURCE/package.json" ]]; then
+  DSH_SOURCE="$DSH_SOURCE" "$NODE" "$ROOT/scripts/test-agent-platform-runtime-patch.mjs"
+else
+  "$NODE" "$ROOT/scripts/test-agent-platform-runtime-patch.mjs"
+fi
 echo "agent-platform-runtime: OK"

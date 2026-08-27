@@ -21,6 +21,25 @@ export async function closeManagedContext({
   await closeState(context.id, outcome);
 }
 
+export async function disposeManagedChild({
+  subagents,
+  agents,
+  childSessionId,
+  parentSessionId,
+}) {
+  if (typeof subagents.drainContinuableChildren === "function") {
+    if (agents.get(childSessionId) === undefined) return;
+    const parent = agents.get(parentSessionId);
+    if (parent === undefined) throw new Error(`DSH parent "${parentSessionId}" is not live`);
+    await subagents.drainContinuableChildren(parent, [childSessionId]);
+    return;
+  }
+  await subagents.disposeContinuable(childSessionId, {
+    kind: "user",
+    parentSessionId,
+  });
+}
+
 export function shouldCloseContextOnAdoption(run) {
   return run.adapter === "dsh"
     && run.mode === "execution"
