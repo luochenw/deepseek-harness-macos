@@ -11,7 +11,7 @@ extension HarnessController {
   @discardableResult
   func insertLocalSessionRow() -> UUID {
     // Not `workspaceName`: its no-workspace fallback is the header CTA
-    // label "选择工作区", which would read as this row's folder name.
+    // label "无工作区", which would read as this row's folder name.
     let session = Session(title: "新会话", workspaceName: workspace?.lastPathComponent ?? "未指定工作区", updatedAt: Date(), messages: [
       Message(role: .system, text: "正在创建持久 DSH 会话…")
     ])

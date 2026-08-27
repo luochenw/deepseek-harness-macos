@@ -15,7 +15,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-DSH_HOME="$HOME_DIR" "$NODE" "$DSH" web --host 127.0.0.1 --port 0 >"$LOG" 2>&1 &
+DSH_VERSION="$("$NODE" -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(p.version)' "$APP/Contents/Resources/Runtime/dsh/package.json")"
+HOST_ARGS=(web --host 127.0.0.1 --port 0)
+[[ "$DSH_VERSION" == "0.1.1-rc.2" ]] && HOST_ARGS+=(--no-open)
+DSH_HOME="$HOME_DIR" "$NODE" "$DSH" "${HOST_ARGS[@]}" >"$LOG" 2>&1 &
 PID=$!
 
 for _ in $(seq 1 50); do
@@ -24,6 +27,11 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 [[ -n "${URL:-}" ]] || { cat "$LOG" >&2; exit 1; }
+if grep -Fq "opening the default browser" "$LOG"; then
+  echo "Packaged Host unexpectedly attempted to open the Web UI." >&2
+  cat "$LOG" >&2
+  exit 1
+fi
 PORT="${URL##*:}"
 
 call() {
@@ -35,7 +43,7 @@ call() {
 assert_rpc() {
   local method="$1" payload="$2" check="$3" response
   response="$(call "$method" "$payload")"
-  RESPONSE="$response" "$NODE" -e "$check"
+  RESPONSE="$response" DSH_VERSION="$DSH_VERSION" "$NODE" -e "$check"
 }
 
 assert_gateway() {
@@ -43,12 +51,16 @@ assert_gateway() {
   assert_rpc "$method" "{\"args\":$args}" "$check"
 }
 
-assert_rpc host.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.type!=="server-response"||d.result?.ok!==true||typeof d.result.value?.version!=="string"||typeof d.result.value?.cwd!=="string") process.exit(1)'
+assert_rpc host.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); const v=d.result?.value; if(d.type!=="server-response"||d.result?.ok!==true||typeof v?.version!=="string"||typeof v?.cwd!=="string"||(process.env.DSH_VERSION==="0.1.1-rc.2"&&typeof v.home!=="string")) process.exit(1)'
 assert_rpc session.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.items)) process.exit(1)'
 assert_rpc workspace.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.items)||!Array.isArray(d.result.value?.archivedSessionIds)) process.exit(1)'
 assert_rpc settings.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||typeof d.result.value?.writable!=="boolean"||!Array.isArray(d.result.value?.namespaces)) process.exit(1)'
 assert_rpc llm.models '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.groups)) process.exit(1)'
 assert_rpc agentPreset.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.presets)) process.exit(1)'
+# The native "无工作区" path omits cwd entirely. Keep that protocol surface
+# covered independently from the Agent Platform smoke below, whose root
+# session intentionally requires an explicit cwd.
+assert_rpc session.create '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||typeof d.result.value?.sessionId!=="string") process.exit(1)'
 
 # Write-path check: the assertions above are read-only. ui-theme is a
 # fresh $DSH_HOME's known seed value ({"preference":"system"}, revision 0),

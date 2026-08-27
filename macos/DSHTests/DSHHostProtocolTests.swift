@@ -57,10 +57,44 @@ private func testRPCServerResponse_decodesOkResult() throws {
   try expect(response.result.value?.cwd == "/tmp")
 }
 
+private func testHostDescription_decodesLatestAndLegacyShapes() throws {
+  let latest = try JSONDecoder().decode(DSHHostDescription.self, from: Data("""
+  {"version":"0.1.1-rc.2","cwd":"/tmp/project","attachedSessions":2,"home":"/Users/test","canOpenPath":true}
+  """.utf8))
+  try expectEqual(latest.version, "0.1.1-rc.2")
+  try expect(latest.provider == nil)
+  try expect(latest.model == nil)
+  try expectEqual(latest.home, "/Users/test")
+
+  let legacy = try JSONDecoder().decode(DSHHostDescription.self, from: Data("""
+  {"version":"0.1.0-rc.7","cwd":"/tmp/project","provider":"deepseek","model":"deepseek-chat","attachedSessions":1,"canOpenPath":true}
+  """.utf8))
+  try expectEqual(legacy.provider, "deepseek")
+  try expectEqual(legacy.model, "deepseek-chat")
+  try expect(legacy.home == nil)
+}
+
+private func testCreateSessionPayload_omitsNilWorkspace() throws {
+  let data = try JSONEncoder().encode(DSHCreateSessionPayload(cwd: nil, agentPreset: nil))
+  let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+  try expect(payload?.isEmpty == true)
+}
+
+private func testHostLaunchArguments_gateNoOpenByRuntimeVersion() throws {
+  let latest = DSHHostRuntime.launchArguments(dshPath: "/tmp/dsh/lib/bin.js", runtimeVersion: "0.1.1-rc.2")
+  try expect(latest.contains("--no-open"))
+
+  let legacy = DSHHostRuntime.launchArguments(dshPath: "/tmp/dsh/lib/bin.js", runtimeVersion: "0.1.0-rc.7")
+  try expect(!legacy.contains("--no-open"))
+}
+
 let dshHostProtocolTests: [NamedTest] = [
   ("DSHJSONPatchValue.init fails for unsupported type", testJSONPatchValue_initFailsForUnsupportedType),
   ("DSHJSONPatchValue.init wraps primitives and null", testJSONPatchValue_initWrapsPrimitivesAndNull),
   ("DSHJSONPatch encodes nested structure as real JSON", testJSONPatch_encodesNestedStructureAsRealJSON),
   ("DSHRPCEnvelope encodes expected shape", testRPCEnvelope_encodesExpectedShape),
   ("DSHRPCServerResponse decodes ok result", testRPCServerResponse_decodesOkResult),
+  ("DSHHostDescription decodes latest and legacy shapes", testHostDescription_decodesLatestAndLegacyShapes),
+  ("DSHCreateSessionPayload omits nil workspace", testCreateSessionPayload_omitsNilWorkspace),
+  ("DSHHostRuntime gates --no-open by runtime version", testHostLaunchArguments_gateNoOpenByRuntimeVersion),
 ]

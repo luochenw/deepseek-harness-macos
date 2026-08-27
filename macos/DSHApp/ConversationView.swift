@@ -45,7 +45,7 @@ struct ConversationHeader: View {
             }
           }
           Text(harness.displayedSession?.title ?? "新会话").font(.system(size: 15, weight: .semibold)).foregroundStyle(DSHTheme.ink)
-          Text(harness.workspace?.path ?? "选择工作区后开始").font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
+          Text(harness.workspace?.path ?? "无工作区 · Host 默认目录").font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
         }
         Spacer()
         if presetLocked {

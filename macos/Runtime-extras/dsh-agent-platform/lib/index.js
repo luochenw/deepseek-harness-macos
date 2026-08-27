@@ -10,6 +10,7 @@ import { AgentPlatformState, contextIdentity, NONTERMINAL, renderIntegrationProm
 import { deliverDurableAgentMessage, KeyedSingleFlight } from "./delivery.js";
 import {
   closeManagedContext,
+  disposeManagedChild,
   recoverPendingContextCloses,
   runDurableIntegrationCompletion,
   shouldCleanupAdoptedRun,
@@ -192,13 +193,16 @@ class AgentPlatformCoordinator {
   }
 
   installProjection() {
+    const schema = z.object({ items: z.array(z.unknown()) });
     this.ctx.sessionProjections.register({
       key: "agent-platform/batches",
-      schema: z.object({ items: z.array(z.unknown()) }),
+      schema,
+      stateSchema: schema,
       stateVersion: 1,
       init: () => ({ items: [] }),
       apply: (state, event) => event.type === "agent-platform/batches" ? event.data : state,
       view: (state) => state,
+      wire: { viewSchema: schema, view: (state) => state },
     });
   }
 
@@ -776,12 +780,12 @@ class AgentPlatformCoordinator {
     await closeManagedContext({
       context,
       outcome,
-      disposeChild: async (childSessionId, parentSessionId) => {
-        await this.ctx.subagents.disposeContinuable(childSessionId, {
-          kind: "user",
-          parentSessionId,
-        });
-      },
+      disposeChild: (childSessionId, parentSessionId) => disposeManagedChild({
+        subagents: this.ctx.subagents,
+        agents: this.ctx.agents,
+        childSessionId,
+        parentSessionId,
+      }),
       cleanupWorkspace: (workspace) => this.workspaces.cleanup(workspace),
       closeState: (id, result) => this.state.closeContext(id, result),
       assertClosable: (id) => this.state.assertContextClosable(id),

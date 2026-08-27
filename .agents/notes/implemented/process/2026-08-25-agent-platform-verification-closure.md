@@ -31,9 +31,10 @@ Node portion of the Agent Platform contract. It:
 - execute `scripts/test-agent-platform-runtime-patch.mjs`.
 
 GitHub Actions now has a separately named `Agent Platform runtime contracts`
-step after Swift unit tests and before the DSH installation/build steps. The
-workflow pins the DSH installation to `0.1.0-rc.7`, the latest version the
-patch supports. `scripts/test-agent-platform-runtime-script.sh` runs first in
+step after Swift unit tests. The workflow installs the pinned DSH Runtime
+before that step, so the patch suite checks both its synthetic legacy fixture
+and the real installed package before build. The current pin is
+`0.1.1-rc.2`. `scripts/test-agent-platform-runtime-script.sh` runs first in
 that stage and proves a non-Node executable and an empty plugin directory fail
 clearly. Build plus packaged Host smoke remain the integration proof that the
 plugin and patch load inside the actual app Runtime.
@@ -59,9 +60,10 @@ plugin and patch load inside the actual app Runtime.
 - The test script can duplicate the package's `scripts.check` file list if new
   modules are added. Using the `lib/*.js` glob prevents that list from
   drifting.
-- The patch fixture validates a synthetic rc.6 source shape, not an rc.7
-  source shape. The pinned rc.7 app build and packaged Host smoke remain
-  required to detect incompatibility with the installed DSH package.
+- The patch fixture keeps a synthetic rc.6 source shape for the legacy branch
+  and also copies, patches twice, and inspects the installed DSH package. The
+  pinned app build and packaged Host smoke remain required to prove complete
+  runtime assembly.
 - Verification completed on August 25, 2026:
   `test-agent-platform-runtime-script.sh` passed; the runtime suite passed
   91 Node tests plus the patch fixture; native contracts passed; Swift units

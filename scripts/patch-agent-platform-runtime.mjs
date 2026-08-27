@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,11 +16,30 @@ async function patchFile(file, transform) {
   if (next !== original) await writeFile(file, next);
 }
 
+async function assertPackageVersion(runtimeRoot, name, expectedVersion) {
+  const manifestPath = path.join(runtimeRoot, "node_modules/@deepseek-ai", name, "package.json");
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  } catch (error) {
+    throw new Error(`agent-platform runtime patch cannot read @deepseek-ai/${name} metadata`, { cause: error });
+  }
+  if (manifest.version !== expectedVersion) {
+    throw new Error(
+      `agent-platform runtime patch requires @deepseek-ai/${name} ${expectedVersion} with `
+      + `@deepseek-ai/dsh ${expectedVersion}, found ${String(manifest.version)}`);
+  }
+}
+
 export async function patchRuntime(runtimeRoot) {
   const manifestPath = path.join(runtimeRoot, "package.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-  if (!["0.1.0-rc.6", "0.1.0-rc.7"].includes(manifest.version)) {
+  const legacyRuntime = ["0.1.0-rc.6", "0.1.0-rc.7"].includes(manifest.version);
+  if (!legacyRuntime && manifest.version !== "0.1.1-rc.2") {
     throw new Error(`agent-platform runtime patch does not support @deepseek-ai/dsh ${manifest.version}`);
+  }
+  for (const name of ["dsh-subagent", "dsh-session", "dsh-web-app"]) {
+    await assertPackageVersion(runtimeRoot, name, manifest.version);
   }
 
   const subagentRoot = path.join(runtimeRoot, "node_modules/@deepseek-ai/dsh-subagent");
@@ -59,7 +79,7 @@ export async function patchRuntime(runtimeRoot) {
         "\t\t\t\t\t\tmeta: childSessionMeta(parent, childDepth, lineageSeedLength, spec.cwd, spec.agentPreset),",
         "continuable cwd forwarding");
     }
-    if (!next.includes("const childId = spec.childId ?? SessionId(randomUUID());")) {
+    if (legacyRuntime && !next.includes("const childId = spec.childId ?? SessionId(randomUUID());")) {
       next = replaceOnce(
         next,
         "\t\tconst childId = SessionId(randomUUID());",
@@ -195,7 +215,7 @@ function createContinuableMessage(content, source, messageId) {
         "return this.submit(activation, content, source, parent, messageId);",
         "admitted continuable message id forwarding");
     }
-    if (!next.includes("async disposeContinuable(targetSessionId, authority)")) {
+    if (legacyRuntime && !next.includes("async disposeContinuable(targetSessionId, authority)")) {
       next = replaceOnce(
         next,
         "\t/**\n\t* Deliver explicitly selected content from one resident continuable child to",
@@ -293,7 +313,7 @@ function createContinuableMessage(content, source, messageId) {
         "export interface SubagentFollowupOptions {\n    /** Optional platform-managed options restored during cold resume. */\n    readonly agentOptions?: AgentOptions;\n",
         "SubagentFollowupOptions agent options type");
     }
-    if (!next.includes("disposeContinuable(targetSessionId: SessionId")) {
+    if (legacyRuntime && !next.includes("disposeContinuable(targetSessionId: SessionId")) {
       next = replaceOnce(
         next,
         "    interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): void;\n",
@@ -303,14 +323,16 @@ function createContinuableMessage(content, source, messageId) {
     return next;
   });
 
-  await patchFile(path.join(subagentRoot, "lib/types/index.d.ts"), (source) => {
-    if (source.includes("disposeContinuable(targetSessionId: SessionId")) return source;
-    return replaceOnce(
-      source,
-      "    interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): void;\n",
-      "    interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): void;\n    /** Dispose one exact resident continuable child under interrupt-equivalent authority. */\n    disposeContinuable(targetSessionId: SessionId, authority: SubagentInterruptAuthority): Promise<void>;\n",
-      "SubagentRuntime disposal type");
-  });
+  if (legacyRuntime) {
+    await patchFile(path.join(subagentRoot, "lib/types/index.d.ts"), (source) => {
+      if (source.includes("disposeContinuable(targetSessionId: SessionId")) return source;
+      return replaceOnce(
+        source,
+        "    interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): void;\n",
+        "    interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): void;\n    /** Dispose one exact resident continuable child under interrupt-equivalent authority. */\n    disposeContinuable(targetSessionId: SessionId, authority: SubagentInterruptAuthority): Promise<void>;\n",
+        "SubagentRuntime disposal type");
+    });
+  }
 
   await patchFile(path.join(subagentRoot, "lib/types/child-agent.d.ts"), (source) => {
     let next = source;
@@ -356,7 +378,8 @@ function createContinuableMessage(content, source, messageId) {
   });
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] !== undefined
+    && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   const runtimeRoot = process.argv[2];
   if (!runtimeRoot) throw new Error("usage: patch-agent-platform-runtime.mjs <Runtime/dsh>");
   await patchRuntime(runtimeRoot);

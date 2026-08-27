@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { cp, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { patchRuntime } from "./patch-agent-platform-runtime.mjs";
@@ -9,6 +10,11 @@ await mkdir(path.join(root, "node_modules/@deepseek-ai/dsh-subagent/lib/types"),
 await mkdir(path.join(root, "node_modules/@deepseek-ai/dsh-session/lib/types"), { recursive: true });
 await mkdir(path.join(root, "node_modules/@deepseek-ai/dsh-web-app"), { recursive: true });
 await writeFile(path.join(root, "package.json"), JSON.stringify({ version: "0.1.0-rc.6" }));
+for (const name of ["dsh-subagent", "dsh-session", "dsh-web-app"]) {
+  await writeFile(
+    path.join(root, "node_modules/@deepseek-ai", name, "package.json"),
+    JSON.stringify({ name: `@deepseek-ai/${name}`, version: "0.1.0-rc.6" }));
+}
 await writeFile(path.join(root, "node_modules/@deepseek-ai/dsh-subagent/lib/index.js"), `
 import { HarnessError, MessageId, boundContextSummary, createUserMessage, errorChain, freezeMessage } from "@deepseek-ai/dsh-llm";
 function childSessionMeta(parent, childDepth, lineageSeedLength) {
@@ -188,4 +194,42 @@ const session = await readFile(path.join(root, "node_modules/@deepseek-ai/dsh-se
 assert.match(session, /agent-platform\/batches/);
 const web = await readFile(path.join(root, "node_modules/@deepseek-ai/dsh-web-app/cordis.patch.yml"), "utf8");
 assert.equal(web.match(/@dsh-app\/dsh-agent-platform/g)?.length, 1);
+
+const mismatchedRoot = await mkdtemp(path.join(os.tmpdir(), "dsh-agent-patch-mismatch-"));
+await cp(root, mismatchedRoot, { recursive: true });
+await writeFile(
+  path.join(mismatchedRoot, "node_modules/@deepseek-ai/dsh-subagent/package.json"),
+  JSON.stringify({ name: "@deepseek-ai/dsh-subagent", version: "0.1.1-rc.2" }));
+await assert.rejects(
+  () => patchRuntime(mismatchedRoot),
+  /requires @deepseek-ai\/dsh-subagent 0\.1\.0-rc\.6/);
+
+const installedRoot = process.env.DSH_SOURCE;
+if (installedRoot !== undefined
+    && installedRoot !== ""
+    && existsSync(path.join(installedRoot, "package.json"))) {
+  const installedManifest = JSON.parse(await readFile(path.join(installedRoot, "package.json"), "utf8"));
+  const installedFixture = await mkdtemp(path.join(os.tmpdir(), "dsh-agent-patch-installed-"));
+  await mkdir(path.join(installedFixture, "node_modules/@deepseek-ai"), { recursive: true });
+  await writeFile(path.join(installedFixture, "package.json"), JSON.stringify({ version: installedManifest.version }));
+  for (const name of ["dsh-subagent", "dsh-session", "dsh-web-app"]) {
+    await cp(
+      path.join(installedRoot, "node_modules/@deepseek-ai", name),
+      path.join(installedFixture, "node_modules/@deepseek-ai", name),
+      { recursive: true, dereference: true });
+  }
+  await patchRuntime(installedFixture);
+  await patchRuntime(installedFixture);
+  const installedSubagent = await readFile(
+    path.join(installedFixture, "node_modules/@deepseek-ai/dsh-subagent/lib/index.js"),
+    "utf8");
+  assert.match(installedSubagent, /function createContinuableMessage\(content, source, messageId\)/);
+  assert.match(installedSubagent, /childCwd = cwd \?\? parentHeader\.cwd/);
+  assert.match(installedSubagent, /assertAgentPlatformFollowup\(descriptor, options\.source, childId\)/);
+  if (installedManifest.version === "0.1.1-rc.2") {
+    assert.doesNotMatch(installedSubagent, /async disposeContinuable\(targetSessionId, authority\)/);
+    assert.match(installedSubagent, /async drainContinuableChildren\(parent, childIds\)/);
+  }
+}
+
 console.log("agent-platform-runtime-patch: OK");
