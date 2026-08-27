@@ -294,15 +294,20 @@ struct WaveBand: Shape {
   let baseY: CGFloat
   let amplitude: CGFloat
   let phase: CGFloat
+  /// 每层浪的空间周期数。三层**共用同一个值**：浪峰才会平行推进、间距均匀。
+  /// 曾给三层配不同频率、再各叠一个二次谐波，想避免"三层长一样"——结果浪面
+  /// 变成一串疙瘩（用户反馈"不够规则，不好看"）。层次靠基线高度、幅度和流速
+  /// 拉开就够了，波形本身要保持干净的余弦。
+  var freq: CGFloat = 1.5
   func path(in rect: CGRect) -> Path {
     var path = Path()
-    let steps = 24
+    let steps = 48
     path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
     for i in 0...steps {
       let fraction = CGFloat(i) / CGFloat(steps)
       let x = rect.minX + fraction * rect.width
-      let y = rect.minY + baseY * rect.height + amplitude * rect.height * cos(phase + fraction * .pi * 2.5)
-      path.addLine(to: CGPoint(x: x, y: y))
+      let y = baseY * rect.height + amplitude * rect.height * cos(phase + fraction * .pi * 2 * freq)
+      path.addLine(to: CGPoint(x: x, y: rect.minY + y))
     }
     path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
     path.closeSubpath()
@@ -310,49 +315,29 @@ struct WaveBand: Shape {
   }
 }
 
-/// One frame of the miniature app icon (deep-sea gradient, moon, layered
-/// waves) at time `t` — the shared artwork behind the animated running
-/// indicator and the static end-of-turn marker. Colors are the icon
-/// generator's constants — keep the two in sync when the icon changes.
-/// Drawn at its native 26 pt then scaled to `size`, so the wave/moon
-/// constants never need retuning when the display size changes.
+/// One frame of the miniature app icon (daylight lagoon, breaching whale) at
+/// time `t` — the shared artwork behind the animated running indicator and the
+/// static end-of-turn marker. Shapes and colors come from `SeaArt` /
+/// `SeaWhaleScene`, the single source shared with the floating bubble and the
+/// icon generator; don't inline new constants here.
+/// Drawn at its native 26 pt then scaled to `size`, so nothing needs retuning
+/// when the display size changes.
 private struct WaveIconArt: View {
   let t: Double
   var size: CGFloat = 18
+  /// Settled turns render the whale half-submerged and desaturated, so a
+  /// single frame says "not running" without having to watch it move.
+  var idle = false
   var body: some View {
-    artwork
+    SeaWhaleScene(wavePhase: t, breachTime: t, idle: idle, side: 26)
+      .clipShape(RoundedRectangle(cornerRadius: 6.5, style: .continuous))
       .scaleEffect(size / 26)
       .frame(width: size, height: size)
-  }
-  private var artwork: some View {
-    ZStack {
-      RoundedRectangle(cornerRadius: 6.5, style: .continuous)
-        .fill(LinearGradient(
-          colors: [Color(red: 0.031, green: 0.106, blue: 0.125), Color(red: 0.043, green: 0.216, blue: 0.235), Color(red: 0.039, green: 0.424, blue: 0.404)],
-          startPoint: .top, endPoint: .bottom))
-      // 月亮的升落弧线：一个周期内前 82% 走完左下→顶点→右下的半弧，
-      // 其余时间停在海平面之下，读起来就是"月落片刻，再从左边升起"。
-      // 波浪是半透明的遮不住它，所以用海平面遮罩硬裁：月亮只在浪线
-      // 以上可见，升落时被地平线渐渐"吃掉"。
-      let cycle = (t / 5.0).truncatingRemainder(dividingBy: 1)
-      let arc = min(cycle / 0.82, 1.0)
-      let theta = (Double.pi + 0.65) - arc * (Double.pi + 1.3)
-      Circle().fill(Color(red: 0.867, green: 0.980, blue: 0.960))
-        .frame(width: 4.5, height: 4.5)
-        .offset(x: 9.0 * cos(theta), y: -7.5 * sin(theta) + 1.5)
-        .frame(width: 26, height: 26)
-        .mask(alignment: .top) { Rectangle().frame(height: 16) }
-      WaveBand(baseY: 0.56, amplitude: 0.07, phase: t * 1.7).fill(Color(red: 0.290, green: 0.871, blue: 0.824).opacity(0.30))
-      WaveBand(baseY: 0.66, amplitude: 0.065, phase: t * 2.3 + 2.1).fill(Color(red: 0.376, green: 0.925, blue: 0.871).opacity(0.55))
-      WaveBand(baseY: 0.75, amplitude: 0.055, phase: t * 2.9 + 4.4).fill(Color(red: 0.173, green: 0.773, blue: 0.722).opacity(0.95))
-    }
-    .frame(width: 26, height: 26)
-    .clipShape(RoundedRectangle(cornerRadius: 6.5, style: .continuous))
   }
 }
 
 /// Running style for the whole turn — from send to settlement: the waves
-/// actually roll and the moon transits. It doubles as the "waiting" filler
+/// actually roll and the whale breaches. It doubles as the "waiting" filler
 /// between send and the first streamed token (the send path seeds no
 /// placeholder bubble; see the composer-consolidation note).
 private struct WaitingWaveIndicator: View {
@@ -375,12 +360,11 @@ private struct TranscriptTailIcon: View {
   }
 }
 
-/// End-of-turn marker: the same icon frozen with the moon at its apex —
-/// the settled counterpart of the running animation, marking where the
-/// transcript ends. t = 2.05 puts the arc at θ ≈ π/2 (moon on top).
+/// End-of-turn marker: the same icon settled — whale resting at the surface,
+/// waves frozen — marking where the transcript ends.
 private struct TranscriptEndMarker: View {
   var body: some View {
-    WaveIconArt(t: 2.05)
+    WaveIconArt(t: 2.05, idle: true)
       .opacity(0.75)
       .frame(maxWidth: .infinity, alignment: .leading)
   }

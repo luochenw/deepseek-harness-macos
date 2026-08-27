@@ -82,7 +82,9 @@ final class FloatingBubbleManager: ObservableObject {
       p.level = .floating
       p.isOpaque = false
       p.backgroundColor = .clear
-      p.hasShadow = true
+      // 阴影必须由 SwiftUI 画：NSWindow 对透明内容的阴影只按首帧算且不再
+      // 更新，逐帧动画下会留下一圈发灰的死边（改版前实拍可见）。
+      p.hasShadow = false
       p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
       p.isMovableByWindowBackground = true
       p.hidesOnDeactivate = false
@@ -108,65 +110,155 @@ struct FloatingBubbleView: View {
   @ObservedObject var harness: HarnessController
   @ObservedObject var manager: FloatingBubbleManager
   @ObservedObject private var voice = VoiceWakeSignal.shared
+  @State private var hovering = false
+  /// 听写开始的时刻。涟漪按「相对开始时间」推进，第一圈才会从圆边推出去
+  /// ——用绝对时间取模的话，按下说话那一瞬第一圈是从随机半径冒出来的。
+  @State private var listenStart: Date?
 
   /// 任一会话在跑都算"动态"，不只当前选中的那一个。
   private var running: Bool { harness.isRunning || harness.sessions.contains { $0.isRunning } }
 
   var body: some View {
     ZStack {
-      // 唤醒动画：听写进行中，三圈声呐涟漪从圆边向外扩散消散 ——
-      // 海面"听到了你的声音"。结束时不瞬间消失：外层 .animation 让
-      // 移除走 0.9s 的透明度过渡，期间涟漪仍在继续扩散，读作"散尽"。
-      if voice.listening {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-          let t = context.date.timeIntervalSinceReferenceDate
-          ZStack {
-            ForEach(0..<3, id: \.self) { ring in
-              let p = ((t / 1.6) + Double(ring) / 3).truncatingRemainder(dividingBy: 1)
-              Circle()
-                .strokeBorder(Color(red: 0.376, green: 0.925, blue: 0.871).opacity((1 - p) * 0.55), lineWidth: 1.5)
-                .frame(width: 44, height: 44)
-                .scaleEffect(1 + p * 0.85)
-            }
-          }
-        }
-        .transition(.opacity)
+      if voice.listening, let listenStart {
+        ListeningRipples(start: listenStart)
+          .transition(.opacity)
       }
       ZStack(alignment: .topTrailing) {
-        SeaBubbleScene(animated: running || voice.listening, waveSpeed: voice.listening ? 2.1 : 1.0)
+        SeaBubbleScene(animated: running || voice.listening,
+                       waveSpeed: voice.listening ? 2.1 : 1.0)
           .frame(width: 44, height: 44)
           .clipShape(Circle())
-          .overlay(Circle().strokeBorder(Color.white.opacity(voice.listening ? 0.6 : 0.35), lineWidth: 1))
+          // 边缘要自带对比度：内圈自上而下由亮转暗的高光描边把它读成一颗
+          // 被上方光源照亮的珠子，外圈一条极淡暗线保证浅色圆压在浅色背景
+          // 上也分得开。改版前那条 0.35 白单边，在白窗上等于不存在。
+          .overlay(Circle().strokeBorder(
+            LinearGradient(colors: [.white.opacity(voice.listening ? 1.0 : 0.95),
+                                    .white.opacity(0.25)],
+                           startPoint: .top, endPoint: .bottom), lineWidth: 1))
+          .overlay(Circle().strokeBorder(
+            SeaArt.rimShade.opacity(hovering ? 0.26 : 0.18), lineWidth: 0.5))
+          .shadow(color: SeaArt.rimShade.opacity(hovering ? 0.28 : 0.20),
+                  radius: hovering ? 7 : 5, y: 2)
         if manager.unseenCompletion && !running {
-          Circle().fill(Color(red: 0.914, green: 0.290, blue: 0.235))
-            .frame(width: 11, height: 11)
-            .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
+          CompletionDot()
         }
       }
+      .scaleEffect(hovering ? 1.06 : 1.0)
       .contentShape(Circle())
       .onTapGesture { manager.bubbleClicked() }
+      // 这里**不加**按下态手势。DragGesture / onLongPressGesture 都会消费
+      // mouseDown，而面板靠 isMovableByWindowBackground 拖动——那是 NSWindow
+      // 在 sendEvent 里截 mouseDown 实现的，被 SwiftUI 手势吃掉就拖不动了。
+      // 悬浮圈能拖是核心交互，不值得为一个按下反馈换掉。悬停反馈用
+      // onHover，不消费事件，安全。
+      .onHover { inside in
+        hovering = inside
+        // .set() 而不是 push/pop：无边框面板上进出事件不保证配对，
+        // push/pop 会把光标栈搞失衡。
+        if inside { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+      }
     }
     .frame(width: 84, height: 84)
     .animation(.easeOut(duration: 0.9), value: voice.listening)
+    .animation(.spring(response: 0.28, dampingFraction: 0.7), value: hovering)
+    .onChange(of: voice.listening) { _, listening in
+      listenStart = listening ? Date() : nil
+    }
     .help(voice.listening ? "正在聆听…" : running ? "会话运行中 — 点击回到 DeepSeek Harness" : "点击回到 DeepSeek Harness")
   }
 }
 
-/// 悬浮圈里的海景：与转录 WaitingWaveIndicator 同一套视觉常量按 44pt
-/// 重排。运行中逐帧动画；静止态渲染一张固定帧（月亮停在弧线顶点）,
-/// 不再空转 TimelineView。
+/// 唤醒动画：听写进行中，水纹从圆边一圈圈荡开 —— 海面"听到了你的声音"。
 ///
-/// 结束不突兀（用户反馈"结束的时候走完完整一遍"）：`animated` 关闭后
-/// 先把当前月亮周期走完——月亮落入海面、进入休止段——到周期边界才
-/// 用 0.6s 透明度过渡淡入静态帧；期间若重新开始运行则直接续播。
+/// 要的是**淡淡的水纹带一点阴影扩散**，不是雷达 ping。每一圈由三层叠成，
+/// 从外到内：
+///   1. 暗色伴影（宽、重模糊、极低透明度）—— 阴影感的来源，在浅色背景上
+///      给水纹垫出厚度；深色桌面上它几乎不可见，由第二层接手。
+///   2. 柔光带（水青、更宽、重模糊）—— 扩散感的来源，任何背景都在。
+///   3. 细亮线（水青，线宽随扩散从 1.0 收到 0.4）—— 水纹的锋面。
+/// 峰值透明度全部压在 0.2 以下（早先那版是 0.60 的实心 1.5pt 环，读作声呐）。
+/// 衰减用 1.6 次方而不是线性——真实水纹的能量耗散比线性快。
+///
+/// 五圈用**延迟入场**而不是相位偏移：开始听写的第一瞬只有第一圈、且正好贴
+/// 在圆边上。用绝对时间取模的话，第一圈会从随机半径冒出来。
+private struct ListeningRipples: View {
+  let start: Date
+  private static let period = 3.0
+  private static let ringCount = 5
+  /// 最大缩放 0.88 → 44 × 1.88 = 82.7pt，刚好收在 84pt 画布内，不会被裁。
+  private static let maxScale = 0.88
+
+  var body: some View {
+    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+      let elapsed = context.date.timeIntervalSince(start)
+      ZStack {
+        ForEach(0..<Self.ringCount, id: \.self) { ring in
+          let lead = Double(ring) * Self.period / Double(Self.ringCount)
+          if elapsed >= lead {
+            let p = ((elapsed - lead) / Self.period).truncatingRemainder(dividingBy: 1)
+            // 两端都渐变：起手 12% 用于淡入，避免贴着圆边"啪"一下出现。
+            let decay = min(p / 0.12, 1) * pow(1 - p, 1.6)
+            let scale = 1 + (1 - pow(1 - p, 2.2)) * Self.maxScale
+            ZStack {
+              Circle().strokeBorder(SeaArt.rimShade.opacity(0.09 * decay), lineWidth: 3.5)
+                .blur(radius: 2.6)
+              Circle().strokeBorder(SeaArt.waterNear.opacity(0.11 * decay), lineWidth: 5.0)
+                .blur(radius: 3.4)
+              Circle().strokeBorder(SeaArt.waterNear.opacity(0.20 * decay),
+                                    lineWidth: 1.0 + (0.4 - 1.0) * CGFloat(p))
+                .blur(radius: 0.6)
+            }
+            .frame(width: 44, height: 44)
+            .scaleEffect(scale)
+          }
+        }
+      }
+    }
+  }
+}
+
+/// 完成未读的红点。弹簧弹出 + 一圈柔光，让它出现的那一下能被余光抓到——
+/// 一个直接冒出来的静态圆点很容易被完全错过。
+private struct CompletionDot: View {
+  @State private var shown = false
+  private static let red = Color(red: 0.914, green: 0.290, blue: 0.235)
+
+  var body: some View {
+    ZStack {
+      Circle().fill(Self.red.opacity(0.28))
+        .frame(width: 19, height: 19)
+        .blur(radius: 3)
+        .scaleEffect(shown ? 1 : 0.4)
+        .opacity(shown ? 1 : 0)
+      Circle().fill(Self.red)
+        .frame(width: 11, height: 11)
+        .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
+    }
+    .scaleEffect(shown ? 1 : 0.2)
+    .opacity(shown ? 1 : 0)
+    .onAppear {
+      withAnimation(.spring(response: 0.42, dampingFraction: 0.55)) { shown = true }
+    }
+  }
+}
+
+/// 悬浮圈里的海景：与转录尾部指示器、App 图标同一套形状与配色（都来自
+/// SeaArt / SeaWhaleScene），按 44pt 排布。运行中逐帧动画；静止态渲染一张
+/// 固定帧，不再空转 TimelineView。
+///
+/// 结束不突兀（用户反馈"结束的时候走完完整一遍"）：`animated` 关闭后先把
+/// 当前跃身周期走完——鲸落回水面——到周期边界才用 0.6s 透明度过渡淡入静
+/// 态帧；期间若重新开始运行则直接续播。周期边界正好是 lift = 0，和静止
+/// 态的半沉姿势对得上，所以切换发生在几乎同一个姿势上。
 private struct SeaBubbleScene: View {
   let animated: Bool
   /// 听写中海浪加速涌动（唤醒动画的一部分）；常态 1.0。
   var waveSpeed: Double = 1.0
 
-  /// 波形相位累加器：速度变化瞬间保持相位连续（`t × speed` 的绝对
-  /// 相位在切速时会跳变，浪面看起来像"瞬移"）。用类引用装载，逐帧
-  /// 更新不触发视图失效。
+  /// 波形相位累加器：速度变化瞬间保持相位连续（`t × speed` 的绝对相位在
+  /// 切速时会跳变，浪面看起来像"瞬移"）。用类引用装载，逐帧更新不触发视图
+  /// 失效。
   private final class PhaseBox { var phase: Double = 0; var last: Date? }
   @State private var box = PhaseBox()
   /// true = 显示静态帧。animated 关闭后延迟到周期边界才置 true。
@@ -177,14 +269,14 @@ private struct SeaBubbleScene: View {
   var body: some View {
     ZStack {
       if frozen {
-        scene(wavePhase: box.phase, moonArc: 0.5).transition(.opacity)
+        SeaWhaleScene(wavePhase: box.phase, breachTime: 0, idle: true)
+          .transition(.opacity)
       } else {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
           let t = context.date.timeIntervalSinceReferenceDate
           let dt = box.last.map { min(max(context.date.timeIntervalSince($0), 0), 0.2) } ?? 0
           let _ = { box.phase += dt * waveSpeed; box.last = context.date }()
-          let cycle = (t / 5.0).truncatingRemainder(dividingBy: 1)
-          scene(wavePhase: box.phase, moonArc: min(cycle / 0.82, 1.0))
+          SeaWhaleScene(wavePhase: box.phase, breachTime: t)
         }
         .transition(.opacity)
       }
@@ -198,33 +290,15 @@ private struct SeaBubbleScene: View {
         withAnimation(.easeInOut(duration: 0.3)) { frozen = false }
         return
       }
-      // 走完当前周期：等到下一个 5s 周期边界（此时月亮已落海并休止）
-      // 再定格；淡入静态帧时月亮在水下→顶点的切换发生在不可见处。
+      // 走完当前跃身周期再定格：周期边界处鲸已落回水面，和静止态姿势一致。
       let now = Date().timeIntervalSinceReferenceDate
-      let remain = 5.0 - now.truncatingRemainder(dividingBy: 5.0) + 0.05
+      let period = SeaArt.breachPeriod
+      let remain = period - now.truncatingRemainder(dividingBy: period) + 0.05
       DispatchQueue.main.asyncAfter(deadline: .now() + remain) {
         guard finishGeneration == generation else { return }
         box.last = nil
         withAnimation(.easeInOut(duration: 0.6)) { frozen = true }
       }
     }
-  }
-
-  private func scene(wavePhase t: Double, moonArc: Double) -> some View {
-    ZStack {
-      LinearGradient(
-        colors: [Color(red: 0.031, green: 0.106, blue: 0.125), Color(red: 0.043, green: 0.216, blue: 0.235), Color(red: 0.039, green: 0.424, blue: 0.404)],
-        startPoint: .top, endPoint: .bottom)
-      let theta = (Double.pi + 0.65) - moonArc * (Double.pi + 1.3)
-      Circle().fill(Color(red: 0.867, green: 0.980, blue: 0.960))
-        .frame(width: 7.5, height: 7.5)
-        .offset(x: 15.0 * cos(theta), y: -12.5 * sin(theta) + 2.5)
-        .frame(width: 44, height: 44)
-        .mask(alignment: .top) { Rectangle().frame(height: 27) }
-      WaveBand(baseY: 0.56, amplitude: 0.07, phase: t * 1.7).fill(Color(red: 0.290, green: 0.871, blue: 0.824).opacity(0.30))
-      WaveBand(baseY: 0.66, amplitude: 0.065, phase: t * 2.3 + 2.1).fill(Color(red: 0.376, green: 0.925, blue: 0.871).opacity(0.55))
-      WaveBand(baseY: 0.75, amplitude: 0.055, phase: t * 2.9 + 4.4).fill(Color(red: 0.173, green: 0.773, blue: 0.722).opacity(0.95))
-    }
-    .frame(width: 44, height: 44)
   }
 }
