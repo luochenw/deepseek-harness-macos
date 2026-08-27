@@ -49,6 +49,10 @@ assert_rpc workspace.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.r
 assert_rpc settings.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||typeof d.result.value?.writable!=="boolean"||!Array.isArray(d.result.value?.namespaces)) process.exit(1)'
 assert_rpc llm.models '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.groups)) process.exit(1)'
 assert_rpc agentPreset.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.presets)) process.exit(1)'
+# The native "无工作区" path omits cwd entirely. Keep that protocol surface
+# covered independently from the Agent Platform smoke below, whose root
+# session intentionally requires an explicit cwd.
+assert_rpc session.create '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||typeof d.result.value?.sessionId!=="string") process.exit(1)'
 
 # Write-path check: the assertions above are read-only. ui-theme is a
 # fresh $DSH_HOME's known seed value ({"preference":"system"}, revision 0),

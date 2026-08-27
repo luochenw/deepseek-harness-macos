@@ -57,10 +57,17 @@ private func testRPCServerResponse_decodesOkResult() throws {
   try expect(response.result.value?.cwd == "/tmp")
 }
 
+private func testCreateSessionPayload_omitsNilWorkspace() throws {
+  let data = try JSONEncoder().encode(DSHCreateSessionPayload(cwd: nil, agentPreset: nil))
+  let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+  try expect(payload?.isEmpty == true)
+}
+
 let dshHostProtocolTests: [NamedTest] = [
   ("DSHJSONPatchValue.init fails for unsupported type", testJSONPatchValue_initFailsForUnsupportedType),
   ("DSHJSONPatchValue.init wraps primitives and null", testJSONPatchValue_initWrapsPrimitivesAndNull),
   ("DSHJSONPatch encodes nested structure as real JSON", testJSONPatch_encodesNestedStructureAsRealJSON),
   ("DSHRPCEnvelope encodes expected shape", testRPCEnvelope_encodesExpectedShape),
   ("DSHRPCServerResponse decodes ok result", testRPCServerResponse_decodesOkResult),
+  ("DSHCreateSessionPayload omits nil workspace", testCreateSessionPayload_omitsNilWorkspace),
 ]

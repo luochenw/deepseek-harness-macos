@@ -1,5 +1,45 @@
 import Foundation
 import AppKit
+
+enum DSHWorkspacePreference {
+  static let workspaceKey = "dsh.workspace"
+  static let noWorkspaceKey = "dsh.noWorkspace"
+
+  static func restoredWorkspace(
+    defaults: UserDefaults = .standard,
+    fileManager: FileManager = .default,
+    defaultURL: @autoclosure () -> URL?
+  ) -> URL? {
+    guard !defaults.bool(forKey: noWorkspaceKey) else { return nil }
+    if let path = defaults.string(forKey: workspaceKey), fileManager.fileExists(atPath: path) {
+      return URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+    }
+    guard let url = defaultURL() else { return nil }
+    try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+    defaults.set(url.standardizedFileURL.path, forKey: workspaceKey)
+    return url.standardizedFileURL
+  }
+
+  static func persist(_ workspace: URL?, defaults: UserDefaults = .standard) {
+    guard let workspace else {
+      defaults.removeObject(forKey: workspaceKey)
+      defaults.set(true, forKey: noWorkspaceKey)
+      return
+    }
+    defaults.set(workspace.standardizedFileURL.path, forKey: workspaceKey)
+    defaults.removeObject(forKey: noWorkspaceKey)
+  }
+}
+
+enum DSHWorkspaceContext {
+  static func additionalFolders(activeWorkspace: URL?, registered: [DSHWorkspaceView]) -> [DSHWorkspaceView] {
+    guard let current = activeWorkspace?.standardizedFileURL.path else { return [] }
+    return registered.filter {
+      URL(fileURLWithPath: $0.path).standardizedFileURL.path != current
+    }
+  }
+}
+
 struct DSHWorkspaceCreatePayload: Encodable { let path: String }
 struct DSHWorkspaceCreateResult: Decodable { let workspace: DSHWorkspaceView; let created: Bool }
 struct DSHWorkspaceRenamePayload: Encodable { let workspaceId: String; let title: String }
@@ -7,6 +47,18 @@ struct DSHWorkspaceDeletePayload: Encodable { let workspaceId: String }
 struct DSHWorkspaceDeleteResult: Decodable { let deleted: Bool }
 
 extension HarnessController {
+  func restoreWorkspaceSelection() {
+    let defaultURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+      .appendingPathComponent("DeepSeek Harness", isDirectory: true)
+    workspace = DSHWorkspacePreference.restoredWorkspace(defaultURL: defaultURL)
+  }
+
+  func selectNoWorkspace() {
+    workspace = nil
+    DSHWorkspacePreference.persist(nil)
+    status = "已选择无工作区；新会话将使用 Host 默认目录"
+  }
+
   func renameWorkspace(_ workspace: DSHWorkspaceView, title: String) {
     guard let hostClient, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     Task { do { _ = try await hostClient.renameWorkspace(id: workspace.workspaceId, title: title); await MainActor.run { self.refreshHostSnapshots() } } catch { await MainActor.run { self.status = "工作区重命名失败：\(error.localizedDescription)" } } }
@@ -57,7 +109,7 @@ extension HarnessController {
         let result = try await hostClient.createWorkspace(path: url.path)
         await MainActor.run {
           self.workspace = url.standardizedFileURL
-          UserDefaults.standard.set(url.path, forKey: workspaceKey)
+          DSHWorkspacePreference.persist(url)
           self.status = result.created ? "工作区已添加" : "工作区已选择"
           self.refreshHostSnapshots()
         }

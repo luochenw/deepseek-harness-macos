@@ -3,7 +3,6 @@ import AppKit
 import Darwin
 
 private let appName = "DeepSeek Harness"
-let workspaceKey = "dsh.workspace"
 let modelKey = "dsh.model"
 let providerKey = "dsh.provider"
 let reasoningEffortKey = "dsh.reasoningEffort"
@@ -355,30 +354,12 @@ final class HarnessController: ObservableObject {
   var hostEvents: DSHEventSocket?
   var muxEvents: DSHEventSocket?
 
-  /// `~/Documents/DeepSeek Harness`, created on first use. Used only when no
-  /// workspace has ever been chosen — keeps `workspace` non-nil (and
-  /// `canSend` usable) without forcing a file-picker dialog before the very
-  /// first message. The Host registers it as a real workspace the first time
-  /// `newSession()` creates a session with this cwd, same as it already does
-  /// for a workspace restored from UserDefaults.
-  private static func defaultWorkspaceURL() -> URL? {
-    guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
-    let url = documents.appendingPathComponent("DeepSeek Harness", isDirectory: true)
-    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return url
-  }
-
   init(startRuntime: Bool = true) {
     agentPlatform.attach(to: self)
     // 启动不再自动建会话：停在默认页（空态 + 可输入的 composer），第一条
     // 消息发出时才懒创建 —— 见 lazy-first-session Agent Note。
     if startRuntime {
-      if let path = UserDefaults.standard.string(forKey: workspaceKey), FileManager.default.fileExists(atPath: path) {
-        workspace = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-      } else if let defaultURL = Self.defaultWorkspaceURL() {
-        workspace = defaultURL
-        UserDefaults.standard.set(defaultURL.path, forKey: workspaceKey)
-      }
+      restoreWorkspaceSelection()
       provider = UserDefaults.standard.string(forKey: providerKey) ?? ""
       model = UserDefaults.standard.string(forKey: modelKey) ?? ""
       reasoningEffort = UserDefaults.standard.string(forKey: reasoningEffortKey) ?? "high"
@@ -391,7 +372,7 @@ final class HarnessController: ObservableObject {
 
   deinit { muxEvents?.stop(); hostEvents?.stop(); hostRuntime?.stop() }
 
-  var workspaceName: String { workspace?.lastPathComponent ?? "选择工作区" }
+  var workspaceName: String { workspace?.lastPathComponent ?? "无工作区" }
   var selectedSessionIndex: Int? { sessions.firstIndex { $0.id == selectedSessionID } }
   var selectedSession: Session? { selectedSessionIndex.map { sessions[$0] } }
   /// What the conversation pane actually shows: an open subagent transcript

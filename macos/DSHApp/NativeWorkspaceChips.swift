@@ -15,23 +15,35 @@ struct WorkspaceChips: View {
   /// Codex-style, so an imported folder is visibly there without opening
   /// any menu.
   private var otherWorkspaces: [DSHWorkspaceView] {
-    let current = harness.workspace?.standardizedFileURL.path
-    return harness.hostWorkspaces.filter { URL(fileURLWithPath: $0.path).standardizedFileURL.path != current }
+    DSHWorkspaceContext.additionalFolders(
+      activeWorkspace: harness.workspace,
+      registered: harness.hostWorkspaces)
   }
 
   var body: some View {
     HStack(spacing: 6) {
       // Active directory chip — menu also lists everything for completeness.
       Menu {
-        ForEach(harness.hostWorkspaces) { workspace in
-          Button(workspace.title) {
-            harness.registerWorkspace(URL(fileURLWithPath: workspace.path, isDirectory: true))
-          }
+        Button(action: harness.selectNoWorkspace) {
+          if harness.workspace == nil { Label("无工作区", systemImage: "checkmark") }
+          else { Text("无工作区") }
         }
         if !harness.hostWorkspaces.isEmpty { Divider() }
+        ForEach(harness.hostWorkspaces) { workspace in
+          Button(action: {
+            harness.registerWorkspace(URL(fileURLWithPath: workspace.path, isDirectory: true))
+          }) {
+            if harness.workspace?.standardizedFileURL.path == URL(fileURLWithPath: workspace.path).standardizedFileURL.path {
+              Label(workspace.title, systemImage: "checkmark")
+            } else {
+              Text(workspace.title)
+            }
+          }
+        }
+        Divider()
         Button("打开工作区…", action: harness.chooseWorkspace)
       } label: {
-        chipLabel(icon: "folder", text: harness.workspaceName, emphasized: true)
+        chipLabel(icon: harness.workspace == nil ? "folder.badge.minus" : "folder", text: harness.workspaceName, emphasized: true)
       }
       .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
 

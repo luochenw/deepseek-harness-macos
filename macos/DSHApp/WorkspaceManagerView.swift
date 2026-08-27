@@ -12,10 +12,15 @@ struct WorkspaceSwitcherButton: View {
 
   var body: some View {
     Menu {
+      Button(action: harness.selectNoWorkspace) {
+        if harness.workspace == nil { Label("无工作区", systemImage: "checkmark") }
+        else { Text("无工作区") }
+      }
       if !harness.hostWorkspaces.isEmpty {
+        Divider()
         ForEach(harness.hostWorkspaces) { ws in
           Button(action: { harness.switchWorkspace(ws) }) {
-            if harness.workspace?.path == ws.path { Label(ws.title, systemImage: "checkmark") }
+            if harness.workspace?.standardizedFileURL.path == URL(fileURLWithPath: ws.path).standardizedFileURL.path { Label(ws.title, systemImage: "checkmark") }
             else { Text(ws.title) }
           }
         }
@@ -28,14 +33,14 @@ struct WorkspaceSwitcherButton: View {
         Button("管理工作区…") { showManager = true }
       }
     } label: {
-      Label(harness.workspaceName, systemImage: "folder").lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+      Label(harness.workspaceName, systemImage: harness.workspace == nil ? "folder.badge.minus" : "folder").lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
     }
     .menuStyle(.borderlessButton)
     .font(.system(size: 12.5, weight: .medium))
     .foregroundStyle(DSHTheme.ink)
     .padding(.horizontal, DSHSpace.s3).padding(.vertical, 8)
     .background(DSHTheme.surfaceTint2, in: RoundedRectangle(cornerRadius: DSHRadius.md, style: .continuous))
-    .help(harness.workspace?.path ?? "选择工作区")
+    .help(harness.workspace?.path ?? "无工作区；新会话将使用 Host 默认目录")
     .sheet(isPresented: $showCreate) { NewWorkspaceSheet() }
     .sheet(isPresented: $showManager) {
       VStack(alignment: .leading, spacing: DSHSpace.s4) {

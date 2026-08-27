@@ -122,9 +122,7 @@ extension HarnessController {
     // shown to the user as typed.
     var outgoingText = text
     if !sessions[sessionIndex].messages.contains(where: { $0.role == .user }) {
-      let current = workspace?.standardizedFileURL.path
-      let extras = hostWorkspaces
-        .filter { URL(fileURLWithPath: $0.path).standardizedFileURL.path != current }
+      let extras = DSHWorkspaceContext.additionalFolders(activeWorkspace: workspace, registered: hostWorkspaces)
         .map { "\($0.title)：\($0.path)" }
       if !extras.isEmpty {
         outgoingText += "\n\n[工作区上下文] 除当前目录外，这些本地文件夹也已引入，可用绝对路径读取：\n" + extras.joined(separator: "\n")
