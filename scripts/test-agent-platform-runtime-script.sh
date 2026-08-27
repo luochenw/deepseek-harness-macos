@@ -4,9 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_TEST="$ROOT/scripts/test-agent-platform-runtime.sh"
 CI="$ROOT/.github/workflows/ci.yml"
+BUILD="$ROOT/scripts/build-macos-app.sh"
 
 [[ -x "$RUNTIME_TEST" ]] || {
   echo "agent-platform-runtime-script: missing executable runtime test at $RUNTIME_TEST" >&2
+  exit 1
+}
+[[ -x "$BUILD" ]] || {
+  echo "agent-platform-runtime-script: missing executable build script at $BUILD" >&2
   exit 1
 }
 
@@ -25,7 +30,8 @@ if [[ "$non_node_output" != *"not a Node.js executable"* ]]; then
 fi
 
 empty_plugin="$(mktemp -d)"
-trap 'rmdir "$empty_plugin"' EXIT
+isolated_home="$(mktemp -d)"
+trap 'rmdir "$empty_plugin" "$isolated_home" 2>/dev/null || true' EXIT
 set +e
 empty_plugin_output="$(AGENT_PLATFORM_PLUGIN_PATH="$empty_plugin" "$RUNTIME_TEST" 2>&1)"
 empty_plugin_status=$?
@@ -39,6 +45,32 @@ if [[ "$empty_plugin_output" != *"no plugin modules found"* ]]; then
   printf '%s\n' "$empty_plugin_output" >&2
   exit 1
 fi
+
+set +e
+isolated_runtime_output="$(
+  HOME="$isolated_home" \
+  CLAUDE_CODE_PATH="$isolated_home/missing-claude" \
+  CODEX_PATH="$isolated_home/missing-codex" \
+  ZCODE_PATH="$isolated_home/missing-zcode.cjs" \
+  "$RUNTIME_TEST" 2>&1
+)"
+isolated_runtime_status=$?
+set -e
+if (( isolated_runtime_status != 0 )); then
+  echo "agent-platform-runtime-script: runtime contract tests depend on locally installed external CLIs" >&2
+  printf '%s\n' "$isolated_runtime_output" >&2
+  exit 1
+fi
+
+grep -Fq 'NODE_LIB_DIR' "$BUILD" || {
+  echo "agent-platform-runtime-script: build must stage Node dynamic libraries when present" >&2
+  exit 1
+}
+grep -Fq 'libnode*.dylib' "$BUILD" || {
+  echo "agent-platform-runtime-script: build must detect libnode dynamic libraries" >&2
+  exit 1
+}
+
 grep -Fq 'npm install -g @deepseek-ai/dsh@0.1.0-rc.7' "$CI" || {
   echo "agent-platform-runtime-script: CI must pin DSH to the runtime-patch support boundary" >&2
   exit 1

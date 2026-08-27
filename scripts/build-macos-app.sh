@@ -50,6 +50,22 @@ cp "$ROOT/macos/DSHApp/Info.plist" "$STAGE/Contents/Info.plist"
 cp "$ROOT/macos/DSHApp/AppIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns"
 cp "$NODE_SOURCE" "$STAGE/Contents/MacOS/node"
 chmod 755 "$STAGE/Contents/MacOS/node"
+# GitHub's hosted Node can be dynamically linked against a sibling
+# `lib/libnode.*.dylib`; the app bundle cannot rely on that host path. Static
+# Node distributions have no matches, so this stays a no-op for local builds.
+NODE_EXECUTABLE="$("$NODE_SOURCE" -p 'process.execPath')"
+NODE_LIB_DIR="$(cd "$(dirname "$NODE_EXECUTABLE")/../lib" 2>/dev/null && pwd || true)"
+if [[ -n "$NODE_LIB_DIR" ]]; then
+  shopt -s nullglob
+  node_libraries=("$NODE_LIB_DIR"/libnode*.dylib)
+  shopt -u nullglob
+  if (( ${#node_libraries[@]} > 0 )); then
+    mkdir -p "$STAGE/Contents/lib"
+    for library in "${node_libraries[@]}"; do
+      cp "$library" "$STAGE/Contents/lib/"
+    done
+  fi
+fi
 ditto "$DSH_SOURCE" "$STAGE/Contents/Resources/Runtime/dsh"
 
 # In-house cordis plugins (macos/Runtime-extras/<pkg>/) ride along inside the

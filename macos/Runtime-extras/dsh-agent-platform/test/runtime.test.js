@@ -20,6 +20,13 @@ import {
   startOrResumeReservedContinuable,
 } from "../lib/runtime.js";
 
+// These tests inspect generated command lines; they never execute an external
+// Runtime. Point every resolver at Node itself so the contract is portable to
+// CI runners without Claude Code, Codex, or ZCode installed.
+for (const variable of ["CLAUDE_CODE_PATH", "CODEX_PATH", "ZCODE_PATH"]) {
+  process.env[variable] = process.execPath;
+}
+
 test("analysis mode is hard-filtered or explicitly unsupported", () => {
   assert.deepEqual(runtimeCapabilities("codex").analysisSupported, false);
   const claude = adapterCommand("claude-code", {
