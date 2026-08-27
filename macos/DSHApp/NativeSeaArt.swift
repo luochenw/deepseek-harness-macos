@@ -44,6 +44,16 @@ enum SeaArt {
   // MARK: 动画时序
   /// 一次跃身的周期。
   static let breachPeriod: Double = 5.5
+  /// 起浪：开始运行时海水涨上来。
+  static let tideRise: Double = 0.7
+  /// 退浪：运行结束时海水退去。退得比涨得慢一点，收尾才不显得仓促。
+  static let tideFall: Double = 0.9
+
+  /// 三次缓入缓出，给潮位过渡用。
+  static func easeInOut(_ p: Double) -> CGFloat {
+    let c = min(max(p, 0), 1)
+    return CGFloat(c < 0.5 ? 2 * c * c : 1 - pow(-2 * c + 2, 2) / 2)
+  }
 
   /// 跃身的三个量都写成周期的连续函数，首尾自然衔接——早期原型用
   /// `-3 + 6c` 这种线性漂移，每圈末尾会闪一下。
@@ -210,38 +220,49 @@ struct WhaleMark: View {
 }
 
 /// 圈里的一帧海景：天空 → 远浪 → 鲸 → 中浪 → 近浪。
-/// 鲸夹在远浪和中浪之间，所以最低点会被前两层水盖住背，读作"半沉"。
+/// 鲸夹在远浪和中浪之间，所以跃身最低点会被前两层水盖住背，读作"半沉"。
+///
+/// `level` 是**潮位**，也是这颗圈的状态本身：
+///   0 —— 空闲。没有海浪，只有一只鲸静静浮在白底上。
+///   1 —— 运行中。满潮，鲸在跃身。
+/// 中间值就是起浪/退浪的过渡帧。把"在不在跑"编码成有没有水，比之前靠
+/// 降饱和 + 动不动去区分要直接得多——一眼就够，不用盯着看。
 struct SeaWhaleScene: View {
   /// 波形相位（秒）。静止时传一个固定值即可。
   var wavePhase: Double
   /// 跃身进度用的时间（秒）。
   var breachTime: Double
-  /// 空闲：鲸半沉停住 + 降饱和，让运行/空闲**单帧可辨**。
-  var idle = false
+  /// 潮位 0…1，见上。
+  var level: CGFloat = 1
   var side: CGFloat = 44
 
   var body: some View {
     let k = side / 44
     let t = wavePhase
-    let motion = SeaArt.breach(at: breachTime)
-    let lift = idle ? 0.05 : motion.lift
-    let tilt = idle ? 3.0 : motion.tilt
-    let dx = idle ? -1.0 : motion.dx
+    let m = SeaArt.breach(at: breachTime)
+    // 退潮时基线整体下沉出圈并淡出；fade 乘 1.6 让水在潮位很低时就先隐去，
+    // 免得留下一条贴着圆底的细边。
+    let sink = (1 - level) * 0.55
+    let fade = Double(min(level * 1.6, 1))
+    // 鲸的动作幅度也跟着潮位收：没有水的时候它不跃身，静静居中。
+    let lift = m.lift * level
+    let tilt = Double(m.tilt) * Double(level)
+    let dx = m.dx * level
+    let restY = SeaArt.whaleRestY * level
     ZStack {
       SeaArt.sky
-      WaveBand(baseY: 0.60, amplitude: 0.075, phase: t * 1.6)
-        .fill(SeaArt.waterFar.opacity(SeaArt.waterFarAlpha))
+      WaveBand(baseY: 0.60 + sink, amplitude: 0.075, phase: t * 1.6)
+        .fill(SeaArt.waterFar.opacity(SeaArt.waterFarAlpha * fade))
       WhaleMark()
         .frame(width: SeaArt.whaleSize * k, height: SeaArt.whaleSize * k)
         .rotationEffect(.degrees(tilt))
-        .offset(x: dx * k, y: (SeaArt.whaleRestY - SeaArt.whaleTravel * lift) * k)
+        .offset(x: dx * k, y: (restY - SeaArt.whaleTravel * lift) * k)
         .frame(width: side, height: side)
-      WaveBand(baseY: 0.70, amplitude: 0.065, phase: t * 2.2 + 2.1)
-        .fill(SeaArt.waterMid.opacity(SeaArt.waterMidAlpha))
-      WaveBand(baseY: 0.80, amplitude: 0.055, phase: t * 2.9 + 4.4)
-        .fill(SeaArt.waterNear.opacity(SeaArt.waterNearAlpha))
+      WaveBand(baseY: 0.70 + sink, amplitude: 0.065, phase: t * 2.2 + 2.1)
+        .fill(SeaArt.waterMid.opacity(SeaArt.waterMidAlpha * fade))
+      WaveBand(baseY: 0.80 + sink, amplitude: 0.055, phase: t * 2.9 + 4.4)
+        .fill(SeaArt.waterNear.opacity(SeaArt.waterNearAlpha * fade))
     }
     .frame(width: side, height: side)
-    .saturation(idle ? 0.62 : 1)
   }
 }

@@ -243,14 +243,16 @@ private struct CompletionDot: View {
   }
 }
 
-/// 悬浮圈里的海景：与转录尾部指示器、App 图标同一套形状与配色（都来自
-/// SeaArt / SeaWhaleScene），按 44pt 排布。运行中逐帧动画；静止态渲染一张
-/// 固定帧，不再空转 TimelineView。
+/// 悬浮圈里的海景，和转录尾部指示器、App 图标同一套形状与配色（都来自
+/// SeaArt / SeaWhaleScene），按 44pt 排布。
 ///
-/// 结束不突兀（用户反馈"结束的时候走完完整一遍"）：`animated` 关闭后先把
-/// 当前跃身周期走完——鲸落回水面——到周期边界才用 0.6s 透明度过渡淡入静
-/// 态帧；期间若重新开始运行则直接续播。周期边界正好是 lift = 0，和静止
-/// 态的半沉姿势对得上，所以切换发生在几乎同一个姿势上。
+/// 这里管的是**潮位**：空闲时潮位 0，圈里只有一只鲸静静浮着，没有海浪；
+/// 开始运行海水涨上来，鲸开始跃身；运行结束海水退去，回到那只鲸。
+/// "在不在跑"就是"有没有水"——不用靠动不动去分辨。
+///
+/// 退潮走完之前不熄火：TimelineView 一直跑到潮位归零才切回静态帧，所以
+/// 结束动画能完整播完（用户早先反馈"结束的时候走完完整一遍"）。中途又开始
+/// 运行的话，过渡从**当前潮位**起算，不会跳回去重来。
 private struct SeaBubbleScene: View {
   let animated: Bool
   /// 听写中海浪加速涌动（唤醒动画的一部分）；常态 1.0。
@@ -261,43 +263,59 @@ private struct SeaBubbleScene: View {
   /// 失效。
   private final class PhaseBox { var phase: Double = 0; var last: Date? }
   @State private var box = PhaseBox()
-  /// true = 显示静态帧。animated 关闭后延迟到周期边界才置 true。
-  @State private var frozen = true
-  /// 让迟到的"定格"回调作废（期间又开始了新一轮动画）。
-  @State private var finishGeneration = 0
+  /// 潮位过渡：从 fromLevel 走到 toLevel，用 startedAt 计时。
+  @State private var fromLevel: CGFloat = 0
+  @State private var toLevel: CGFloat = 0
+  @State private var startedAt = Date.distantPast
+  /// true = 潮位已归零且不再运行，渲染静态帧，不空转 TimelineView。
+  @State private var settled = true
+  /// 让迟到的"落潮完成"回调作废（期间又开始了新一轮运行）。
+  @State private var settleGeneration = 0
+
+  private var duration: Double { toLevel > fromLevel ? SeaArt.tideRise : SeaArt.tideFall }
+
+  private func level(at now: Date) -> CGFloat {
+    guard duration > 0 else { return toLevel }
+    let p = now.timeIntervalSince(startedAt) / duration
+    return fromLevel + (toLevel - fromLevel) * SeaArt.easeInOut(p)
+  }
 
   var body: some View {
     ZStack {
-      if frozen {
-        SeaWhaleScene(wavePhase: box.phase, breachTime: 0, idle: true)
-          .transition(.opacity)
+      if settled {
+        SeaWhaleScene(wavePhase: box.phase, breachTime: 0, level: 0)
       } else {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
           let t = context.date.timeIntervalSinceReferenceDate
           let dt = box.last.map { min(max(context.date.timeIntervalSince($0), 0), 0.2) } ?? 0
           let _ = { box.phase += dt * waveSpeed; box.last = context.date }()
-          SeaWhaleScene(wavePhase: box.phase, breachTime: t)
+          SeaWhaleScene(wavePhase: box.phase, breachTime: t, level: level(at: context.date))
         }
-        .transition(.opacity)
       }
     }
-    .onAppear { frozen = !animated }
+    .onAppear {
+      fromLevel = animated ? 1 : 0
+      toLevel = fromLevel
+      settled = !animated
+    }
     .onChange(of: animated) { _, nowAnimated in
-      finishGeneration += 1
-      let generation = finishGeneration
+      settleGeneration += 1
+      let generation = settleGeneration
+      let now = Date()
+      // 从当前潮位起算，中途反转不会跳回起点。
+      fromLevel = settled ? 0 : level(at: now)
+      toLevel = nowAnimated ? 1 : 0
+      startedAt = now
       if nowAnimated {
         box.last = nil
-        withAnimation(.easeInOut(duration: 0.3)) { frozen = false }
+        settled = false
         return
       }
-      // 走完当前跃身周期再定格：周期边界处鲸已落回水面，和静止态姿势一致。
-      let now = Date().timeIntervalSinceReferenceDate
-      let period = SeaArt.breachPeriod
-      let remain = period - now.truncatingRemainder(dividingBy: period) + 0.05
-      DispatchQueue.main.asyncAfter(deadline: .now() + remain) {
-        guard finishGeneration == generation else { return }
+      // 退潮播完再熄火。
+      DispatchQueue.main.asyncAfter(deadline: .now() + SeaArt.tideFall + 0.05) {
+        guard settleGeneration == generation else { return }
         box.last = nil
-        withAnimation(.easeInOut(duration: 0.6)) { frozen = true }
+        settled = true
       }
     }
   }

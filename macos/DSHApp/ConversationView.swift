@@ -325,11 +325,12 @@ struct WaveBand: Shape {
 private struct WaveIconArt: View {
   let t: Double
   var size: CGFloat = 18
-  /// Settled turns render the whale half-submerged and desaturated, so a
-  /// single frame says "not running" without having to watch it move.
-  var idle = false
+  /// Tide level: 1 while the turn runs (full sea, whale breaching), 0 once it
+  /// settles (just the whale, no waves). Presence of water is what says
+  /// "running" — a single frame is enough, no need to watch it move.
+  var level: CGFloat = 1
   var body: some View {
-    SeaWhaleScene(wavePhase: t, breachTime: t, idle: idle, side: 26)
+    SeaWhaleScene(wavePhase: t, breachTime: t, level: level, side: 26)
       .clipShape(RoundedRectangle(cornerRadius: 6.5, style: .continuous))
       .scaleEffect(size / 26)
       .frame(width: size, height: size)
@@ -360,11 +361,11 @@ private struct TranscriptTailIcon: View {
   }
 }
 
-/// End-of-turn marker: the same icon settled — whale resting at the surface,
-/// waves frozen — marking where the transcript ends.
+/// End-of-turn marker: the same icon at low tide — the waves have drained and
+/// only the whale is left — marking where the transcript ends.
 private struct TranscriptEndMarker: View {
   var body: some View {
-    WaveIconArt(t: 2.05, idle: true)
+    WaveIconArt(t: 2.05, level: 0)
       .opacity(0.75)
       .frame(maxWidth: .infinity, alignment: .leading)
   }
