@@ -331,6 +331,29 @@ private func testSubmissionRunning_updatesOnlyOriginatingSession() throws {
   }
 }
 
+private func testSubagentFailure_routesToOriginatingRootAfterNavigation() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let root = HarnessController.Session(
+      title: "Root",
+      workspaceName: "Workspace",
+      updatedAt: Date(),
+      messages: [],
+      hostSessionId: "root")
+    harness.sessions = [root]
+    harness.selectedSessionID = nil
+    harness.activeSubagentAddress = nil
+    harness.reportSubagentComposerFailure(
+      "network",
+      address: DSHSubagentAddress(
+        parentSessionId: "root",
+        childSessionId: "child",
+        mode: "continuable"),
+      localSessionID: root.id)
+    try expectEqual(harness.sessions[0].messages.last?.text, "子代理追问失败：network")
+  }
+}
+
 private func testPermissionProjection_rejectsOlderSnapshot() throws {
   try MainActor.assumeIsolated {
     let harness = HarnessController(startRuntime: false)
@@ -413,6 +436,7 @@ let dshPermissionAndSubmissionTests: [NamedTest] = [
   ("Accepted running submission preserves later typing", testAcceptedRunningDraftRemainder_preservesNewTyping),
   ("Accepted composer submission clears its prefix after navigation", testAcceptedComposerDraft_clearsSubmittedPrefixAfterNavigation),
   ("Submission completion updates only its originating session", testSubmissionRunning_updatesOnlyOriginatingSession),
+  ("Subagent failures route to their originating root session", testSubagentFailure_routesToOriginatingRootAfterNavigation),
   ("Permission projection rejects an older snapshot", testPermissionProjection_rejectsOlderSnapshot),
   ("Permission projection accepts restarted baseline after reset", testPermissionProjection_acceptsRestartedBaselineAfterReset),
   ("Permission projection keeps a valid subscribed baseline", testPermissionProjection_keepsBaselineAtOrBeforeSubscriptionWatermark),

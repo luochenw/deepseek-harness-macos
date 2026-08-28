@@ -60,6 +60,10 @@ grep -q 'executeCommand' "$ROOT/macos/DSHApp/DSHQueue.swift" || {
   echo "permission-composer-ui: running slash commands bypass the command plane" >&2
   exit 1
 }
+grep -q 'if displayedIsRunning { submitRunningDraft(mode: busyEnterMode) }' "$ROOT/macos/DSHApp/NativeCommandPalette.swift" || {
+  echo "permission-composer-ui: running command-palette picks bypass busy command submission" >&2
+  exit 1
+}
 grep -q 'danger-full-access' "$PERMISSIONS" || {
   echo "permission-composer-ui: full-access risk path is missing" >&2
   exit 1

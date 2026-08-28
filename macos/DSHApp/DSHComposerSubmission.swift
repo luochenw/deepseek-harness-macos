@@ -77,6 +77,7 @@ extension HarnessController {
       }
     }
     let submissionID = address.childSessionId
+    let localSessionID = selectedSessionID
     guard beginComposerSubmission(sessionID: submissionID) else { return }
     Task {
       do {
@@ -94,11 +95,25 @@ extension HarnessController {
       } catch {
         await MainActor.run {
           self.endComposerSubmission(sessionID: submissionID)
-          if self.activeSubagentAddress == address {
-            self.status = "子代理追问失败：\(error.localizedDescription)"
-          }
+          self.reportSubagentComposerFailure(
+            error.localizedDescription,
+            address: address,
+            localSessionID: localSessionID)
         }
       }
+    }
+  }
+
+  func reportSubagentComposerFailure(
+    _ detail: String,
+    address: DSHSubagentAddress,
+    localSessionID: UUID?
+  ) {
+    let message = "子代理追问失败：\(detail)"
+    if activeSubagentAddress == address {
+      status = message
+    } else if let localSessionID {
+      appendSystem(message, to: localSessionID)
     }
   }
 

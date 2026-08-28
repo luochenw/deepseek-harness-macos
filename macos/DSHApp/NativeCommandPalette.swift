@@ -184,7 +184,11 @@ extension HarnessController {
     switch entry.kind {
     case .command(let hint):
       if entry.name == "export" { draft = ""; exportCurrentSessionLog() }
-      else if hint == nil { draft = "/\(entry.name)"; send() }
+      else if hint == nil {
+        draft = "/\(entry.name)"
+        if displayedIsRunning { submitRunningDraft(mode: busyEnterMode) }
+        else { send() }
+      }
       else { draft = "/\(entry.name) " }
     case .skill:
       draft = "/\(entry.name) "
