@@ -1,6 +1,6 @@
 # Agent Note: 质量债修复计划 —— 规范补强 + 验证深度 + main.swift 拆分
 
-Status: implemented — Phase 0/1/2 全部完成，main.swift 3364 → 504 行
+Status: implemented — Phase 0/1/2 全部完成；后续继续收缩至 main.swift 489 行
 
 ## Problem
 
@@ -68,7 +68,7 @@ Status: implemented — Phase 0/1/2 全部完成，main.swift 3364 → 504 行
      - 可见性坑是目前最多的一批，因为这批第一次触碰到"写者搬出去、@Published 状态还留在原地"的情况：① `hostStatus`/`hostSessions`/`hostWorkspaces` 三个 `@Published private(set)` 属性——写者（`startPersistentHost`/`consumeMuxFrame`/`consumeHostFrame`/`refreshHostSnapshots`）全部搬出 main.swift，去掉 `private(set)`。② `hostRuntime`——批次 9 时刚改成 `private(set)`（因为当时只有 main.swift 内的 `startPersistentHost` 写它），这批 `startPersistentHost` 本身也搬出去了，`private(set)` 的"同文件可写"条件不再成立，改回普通 `var`（这次不是重复批次 9 的错误：批次 9 时"只放开读权限"是准确的，这批因为写者本身也换了文件，`private(set)` 才变得不再适用——用途不同，不是同一个坑踩两次）。③ `hostEvents`/`muxEvents`（`private var`）——`startPersistentHost`/`reconnectHostStreams` 都要写，两者都搬出主 main.swift，去掉 `private`。④ `resources`/`runtime`/`bundledNode`/`bundledDSH`（`private var` 计算属性，只有 `startPersistentHost` 用）——写者搬出，去掉 `private`；`dshHome` 本来就不是 private（批次 8 之前就有别的文件在用）不用动。⑤ `consumeMuxFrame`/`consumeHostFrame`（原来是 `private func`）——`reconnectHostStreams`（搬进了另一个文件 `DSHHostSync.swift`）需要把它们注册进新建的 `DSHEventSocket` 回调闭包里，跨文件调用，去掉 `private`。⑥ `seedConfigurationFromUserDSHIfNeeded`/`startPersistentHost`（原来是 `private func`）——main.swift 里留下的 `init()` 仍然要调这两个方法，跨文件调用，去掉 `private`。
      - 这批也是拼接步骤第一次严格照着批次 8/9 教训里定下的流程走（Write 工具写 header/footer 纯文本、只用 `cat 真实文件` 拼接、落盘前 Python 逐字节扫描 `\x1b`），两个新文件（`DSHEventSocket.swift` 追加、`DSHHostSync.swift` 新建）都一次成功，没有再踩第三次转义污染的坑。
      - 验证：typecheck（0 error）+ `--unit`（12/12）+ build + `--smoke` 全过——这批尤其看重 `--smoke`：它启动打包后的真实 Host 并通过 `DSHHostClient` 建立连接、拉设置快照，这条路径正是 `startPersistentHost`/`DSHEventSocket` 消费逻辑搬运后要保持能跑通的东西，不是碰巧顺带覆盖，是这批最相关的运行时信号。隔离 worktree 对抗式 review 待跑。
-3. ✅ `main.swift` 现在只剩 App 入口 + `HarnessController` 类声明 + `@Published` 属性 + `init()`/`deinit` + 少量计算属性（`sessionGroups`/`dshHome` 等），504 行，远低于 < 800 行的目标。没有额外加 `// MARK:` 分区——剩下的内容本身已经是单一连贯的"状态声明 + 生命周期"区块，不再有多个不同功能域混杂在一起需要用注释分区导航，加分区反而是为了加而加。
+3. ✅ `main.swift` 拆分完成时只剩 App 入口 + `HarnessController` 类声明 + `@Published` 属性 + `init()`/`deinit` + 少量计算属性（`sessionGroups`/`dshHome` 等），504 行。统一 Agent 平台一度增加聚合状态和无副作用测试初始化接线至 508 行，后续迁出工作区偏好恢复逻辑并清理旧详情状态后当前为 489 行，仍远低于 < 800 行的目标。没有额外加 `// MARK:` 分区——剩下的内容本身已经是单一连贯的"状态声明 + 生命周期"区块，不再有多个不同功能域混杂在一起需要用注释分区导航，加分区反而是为了加而加。
 4. （可选、单独开 Note）69 个 `@Published` 分组为子 ObservableObject——改变刷新语义、风险高，不并入本计划。
 
 ### Phase 2 rebase 冲突：合并进 main 前重新对齐
@@ -101,12 +101,12 @@ Phase 1 的 adversarial review workflow（`wams8yndi`）没加 `isolation: 'work
 
 ## Consequences
 
-- **main.swift**：3364 → 504 行（-2860，-85%）。只剩 App 入口（`DSHNativeApp`）+ `HarnessController` 类声明 + 全部 `@Published` 状态 + `init()`/`deinit` + 少量核心计算属性（`sessionGroups`/`dshHome` 等）。没有加 `// MARK:` 分区——剩下的内容评估后判断已经是单一连贯的"状态声明 + 生命周期"区块，加分区没有实际导航收益。
+- **main.swift**：拆分完成时 3364 → 504 行；统一 Agent 平台接线一度到 508 行，迁出工作区偏好恢复逻辑并清理旧详情状态后当前为 489 行。文件仍只包含 App 入口（`DSHNativeApp`）+ `HarnessController` 类声明 + 状态 + `init()`/`deinit` + 少量核心计算属性（`sessionGroups`/`dshHome` 等）。没有加 `// MARK:` 分区——剩下的内容评估后判断已经是单一连贯的"状态声明 + 生命周期"区块，加分区没有实际导航收益。
 - **新增/大幅扩充的文件**：`ContentView.swift`/`SidebarView.swift`/`ConversationView.swift`/`ComposerView.swift`（批次 1，view 层）；`DSHWorkspaceActions.swift`/`DSHSessionActions.swift`/`DSHHistory.swift`/`DSHSubagents.swift`/`DSHGoalActions.swift`/`DSHModels.swift`/`DSHSettingsActions.swift`（批次 2-8，既有文件新增 `extension HarnessController`）；`DSHSendActions.swift`/`DSHHostSync.swift`（批次 9-10，全新文件，没有既有 wire-type 文件可并入）；`DSHAttachments.swift`/`DSHQueue.swift`/`DSHEventSocket.swift`（批次 9-10，既有文件扩充）。
-- **main.swift 冻结令现在有实质约束力**：gate 基线从 3364 一路下调到 504，新代码想绕开"写进 extension"的规则会立刻被 `test-macos-native.sh` 拦下来，不再是纸面规范。
+- **main.swift 冻结令现在有实质约束力**：gate 基线从 3364 一路下调到 504，一度随统一 Agent 平台接线校准到 508，后续继续收紧到当前的 489；新代码想绕开"写进 extension"的规则会立刻被 `test-macos-native.sh` 拦下来，不再是纸面规范。
 - **验证深度**：`--unit`（12 个断言）+ 扩展后的 `--smoke`（含 `settings.update` 写路径）+ CI 五步流水线全部落地并在本地跑通；10 个 Phase 2 批次每批都过 typecheck + `--unit` + build + `--smoke`，最后一批的 `--smoke` 还实际验证了这批搬运的 Host 连接建立路径。
 - **可见性代价**：`private`/`private(set)` 在这个"按功能域拆文件"架构下已经普遍无法表达"仅内部使用"，只能靠文件组织本身体现意图——这是分批过程中反复验证到的架构性权衡，不是某一批的失误。批次 9→10 之间 `hostRuntime` 从 `private(set)` 又改回普通 `var`（因为写者本身也搬到了另一个文件）是这个权衡的典型例子。
-- **已知遗留项**（不在本计划范围内，留给后续按需处理）：`DSHModels.swift` 的 `toolDetail(_:)`、`DSHAttachments.swift` 的 `loadAttachment(_:)` 是两处移动前就存在的死代码（零调用点），批次 7/9 review 各自发现；69 个 `@Published` 属性未拆分为子 `ObservableObject`（见下方 Alternatives，改变刷新语义、风险不同量级，需要单独一份 Note）。
+- **已知遗留项**（不在本计划范围内，留给后续按需处理）：`DSHAttachments.swift` 的 `loadAttachment(_:)` 是移动前就存在的死代码（零调用点），批次 9 review 发现；69 个原有 `@Published` 属性未拆分为子 `ObservableObject`（见下方 Alternatives，改变刷新语义、风险不同量级，需要单独一份 Note）。`toolDetail(_:)` 已由统一 Agent 平台接管，并通过转录工具行进入右侧详情，不再是死代码。
 - **过程性收获**：识别并修复了一个会反复复现的 shell 拼接坑（`{ printf ...; cat ...; } > file` 会把终端转义序列写进文件）——最终固化为「Write 工具写 header/footer 纯文本 + 只用 `cat 真实文件` 拼接 + 落盘前逐字节扫描 `\x1b`」的标准流程；也把一次性 review workflow 脚本改造成了参数化、可复用的通用脚本（`ds-harness-phase2-batch-review`）。
 
 ## Risks（历史记录，实施期间的风险评估）

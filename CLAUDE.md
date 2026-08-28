@@ -66,14 +66,14 @@
 
 **规则**：直接在 `main` 分支开发，不强制 feature 分支（外部贡献者提 PR 除外，见 README 的 Contributing）。
 
-任务做完，**验证 → 自查 就停下**，把改动报告给用户，**等用户明确说「提交」/「推送」再走提交 → 推送**。改完一件事先停，用户没说提交就只改不提交。
+任务做完，**验证 → 自查 就停下**，把改动报告给用户，**等用户明确说「提交」/「推送」再走提交 → 推送与发布**。改完一件事先停，用户没说提交就只改不提交。用户说「推送」时，默认同时发布一个新版本；只有用户明确说「只推送、不发布」时才跳过发布。
 
 #### Step 1 — 本地验证（必须过）
 
 ```bash
 ./scripts/test-macos-native.sh          # swiftc -typecheck 全部生产源码 + Info.plist lint
 ./scripts/build-macos-app.sh            # 实际构建（涉及运行时行为的改动才需要）
-./scripts/test-macos-native.sh --smoke  # 启动打包后的 Host，验证只读 API（构建后才需要）
+./scripts/test-macos-native.sh --smoke  # 启动打包后的 Host，验证读写 API 与 Agent 平台（构建后才需要）
 ```
 
 - 纯文档（`*.md`、Agent Note）改动可跳过构建
@@ -83,7 +83,10 @@
 
 1. `git diff` 通读改动
 2. 跨功能域 / 新协议对接 / 改了 `HarnessController` 核心状态时，跑 `/code-review` 做一遍审查
-3. 确认对应 Agent Note 状态已经从 `proposed` 挪到 `implemented`（如果适用），[macos/WEB_PARITY.md](macos/WEB_PARITY.md) 已更新
+3. 新增或改变用户可见功能时，同步更新 `README.md` 及当前维护的语言版本
+   （如 `README.en.md` / `README.zh.md`），确保功能说明、使用方式、快捷键和
+   依赖要求与实际产品一致；README 未更新不得发布新功能版本。
+4. 确认对应 Agent Note 状态已经从 `proposed` 挪到 `implemented`（如果适用），[macos/WEB_PARITY.md](macos/WEB_PARITY.md) 已更新
 
 #### Step 3 — 提交（等用户发话）
 
@@ -91,7 +94,27 @@
 - 一次任务一个 commit，不 amend
 - HEREDOC 形式传 message，带 `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`
 
-#### Step 4 — 推送（等用户发话）
+#### Step 4 — 推送并发布（等用户发话）
+
+用户说「推送」后，默认完成以下闭环：
+
+1. 以远端最新已发布 SemVer 为基准自主决定下一个版本号，无需再向用户确认：
+   - bug 修复、文档或内部工程调整：递增 patch；
+   - 向后兼容的用户功能：递增 minor；
+   - 不兼容变更：1.0 以后递增 major，0.x 阶段递增 minor；
+   - 同批包含多类变更时按影响最大的级别升级。
+2. 更新 `macos/DSHApp/Info.plist`：`CFBundleShortVersionString` 写入新版本，
+   `CFBundleVersion` 递增。若功能提交已经完成，版本更新使用独立的
+   `chore(release): v<version>` 提交，不 amend。
+3. 每次发包都必须先编写完整的 GitHub Release notes（即版本更新日志），
+   基于“上一发布 tag 到当前 HEAD”的实际差异，至少写清用户可见的新功能、
+   修复、兼容性或迁移事项、已知限制与验证结果。禁止留空、只贴 commit
+   标题列表或仅使用自动生成文本。
+4. 重新执行 Step 1 的完整验证并生成 Release zip。
+5. 推送 `main`，创建 `v<version>` tag 和 GitHub Release。推送只有在
+   Release 已创建且附件上传成功后才算完成；中途失败应修复或重试并明确报告。
+
+仅当用户明确说「只推送、不发布」时，才只执行：
 
 ```bash
 git push origin main
@@ -117,8 +140,11 @@ gh release create v<version> \
 ```
 
 - Release **附带 ad-hoc 签名的 zip**（arm64，未 notarize）——决策见 [Agent Note](.agents/notes/implemented/architecture/2026-08-17-adhoc-release-distribution.md)。Release notes 必须写清 Gatekeeper 首次打开步骤（隐私与安全性 → 仍要打开，或 `xattr -rd com.apple.quarantine`），并给出「从源码构建」替代路径。
+- 新功能发布必须在打 tag 前完成 README 同步；每次 Release 都必须有人工整理的版本更新日志，并与实际发布内容一致。
 - 以后拿到 Developer ID 后升级为签名 + notarize + DMG，并补 Homebrew cask；流程不变，只换打包一步。
 - 每次发版前确认 Step 1 的三条验证命令都过。
+- 「推送」默认触发本节完整发布流程；不再要求用户额外再说一次「发布」。
+- 发布前先检查远端 tag / Release，禁止复用或覆盖已有版本号。
 
 ## 速查
 
@@ -129,5 +155,6 @@ gh release create v<version> \
 | 构建后冒烟测试 | `./scripts/test-macos-native.sh --smoke` |
 | 自查代码 | `git diff` / `/code-review` |
 | 提交 | `git commit`（等用户发话） |
-| 推送 | `git push origin main`（等用户发话） |
-| 发布 | `gh release create`（仅用户说「发布」时） |
+| 推送 | 选择版本 → 更新版本 → 完整验证 → push → tag + GitHub Release |
+| 仅推送 | `git push origin main`（仅用户明确说「只推送、不发布」时） |
+| 发布 | `gh release create`（包含在默认推送流程中） |

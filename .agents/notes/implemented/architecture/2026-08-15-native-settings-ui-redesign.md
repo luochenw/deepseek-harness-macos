@@ -25,8 +25,7 @@ Status: implemented
   `puzzlepiece`/`square.stack`），而不是纯文字
 - 每个分区拆成独立的私有 View（`GeneralSettingsSection`/
   `ModelSettingsSection`/`ProviderSettingsSection`/`PluginSettingsSection`/
-  `PresetSettingsSection`），用 `Form` + `.formStyle(.grouped)`（macOS 13+，
-  Info.plist 的 `LSMinimumSystemVersion` 已经是 13.0）分组，配 `Section`
+  `PresetSettingsSection`），用 `Form` + `.formStyle(.grouped)` 分组，配 `Section`
   header/footer 承载原本散落的说明文字和状态提示
 - 凭据/配置可写状态用 SF Symbol + 语义色（`checkmark.circle.fill` 绿 /
   `lock.fill` 或 `exclamationmark.triangle.fill` 橙）替代纯文字颜色提示
@@ -69,6 +68,6 @@ Status: implemented
   全黑），既不能给 Accessibility 权限做按键自动化，也不能截图看渲染效果。
   已完成的是构建/类型检查/Host API 冒烟这三层机械验证；侧栏图标切换、
   Form 分组的实际视觉效果需要用户在真机上手动 Cmd+, 打开设置窗口自查。
-- `Form`/`.formStyle(.grouped)` 在 macOS 13+ 上的分组间距由系统决定，不能像
+- `Form`/`.formStyle(.grouped)` 的分组间距由系统决定，不能像
   手写 VStack 那样逐像素控制——如果后续还有间距上的具体意见，在 `.formStyle`
   基础上加 padding 微调即可，不需要推倒重来。

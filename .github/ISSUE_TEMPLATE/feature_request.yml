@@ -1,23 +1,23 @@
-name: Feature request
-description: Propose a new native feature or a web-parity gap to close.
+name: 功能请求
+description: 提议一个新的原生功能，或认领一个 web 对齐缺口。
 labels: [enhancement]
 body:
   - type: textarea
     id: problem
     attributes:
-      label: What's missing?
-      description: Describe the gap independent of any particular solution. If it's a web-parity gap, check [WEB_PARITY.md](../../macos/WEB_PARITY.md) first — it may already be tracked.
+      label: 缺了什么？
+      description: 独立于任何具体方案描述这个缺口。如果是 web 对齐类缺口，先查一下 [WEB_PARITY.md](../../macos/WEB_PARITY.md)——可能已经在追踪了。
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed behavior
-      description: What should the native app do?
+      label: 期望的行为
+      description: 你希望原生 App 做到什么？
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
-      description: Optional, but appreciated — this project records decisions with their rejected alternatives (see .agents/notes/).
+      label: 考虑过的替代方案
+      description: 选填，但非常欢迎——这个项目的决策记录（见 .agents/notes/）都会写明被放弃的方案和原因。

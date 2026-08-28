@@ -1,35 +1,35 @@
-name: Bug report
-description: Something in the native app is broken or behaves unexpectedly.
+name: Bug 反馈
+description: 原生 App 出了问题或行为不符合预期。
 labels: [bug]
 body:
   - type: textarea
     id: what-happened
     attributes:
-      label: What happened?
-      description: What did you do, what did you expect, and what happened instead?
+      label: 发生了什么？
+      description: 你做了什么操作、预期看到什么、实际发生了什么？
       placeholder: |
-        1. Open the app and choose workspace …
-        2. Run task …
-        3. Expected …, but got …
+        1. 打开 App，选择工作区 …
+        2. 运行任务 …
+        3. 预期 …，实际 …
     validations:
       required: true
   - type: input
     id: macos-version
     attributes:
-      label: macOS version
-      placeholder: e.g. macOS 15.5 (Apple Silicon)
+      label: macOS 版本
+      placeholder: 例如 macOS 15.5（Apple Silicon）
     validations:
       required: true
   - type: input
     id: app-version
     attributes:
-      label: App version or commit
-      description: Release tag (e.g. v0.1.0) if you downloaded a build, or `git rev-parse --short HEAD` if you built from source.
+      label: App 版本或 commit
+      description: 下载的构建填 Release tag（如 v0.1.0）；自己构建的填 `git rev-parse --short HEAD`。
       placeholder: v0.1.0
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
-      label: Logs or screenshots
-      description: Console output, the app's error diagnostics panel, or a screenshot. Please remove API keys and private paths.
+      label: 日志或截图
+      description: 控制台输出、App 的错误诊断面板内容或截图。请先移除 API Key 和隐私路径。

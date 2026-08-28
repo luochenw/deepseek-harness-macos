@@ -10,9 +10,8 @@ A SwiftUI/AppKit **native** macOS client for [DSH](https://github.com/deepseek-a
 
 ```
 macos/DSHApp/       All Swift sources — flat directory, no Xcode project (see below)
-  main.swift           @main App entry, HarnessController (the one ObservableObject),
-                        and every top-level SwiftUI View (Sidebar, ConversationView,
-                        Composer, DetailsPanel, SettingsView, ...)
+  main.swift           @main App entry and HarnessController
+                        (the one ObservableObject)
   DSHHostProtocol.swift   RPC envelope types, DSHHostClient actor, DSHHostRuntime
                           (spawns/reads the bundled `dsh web` process)
   DSHHostClientExtensions.swift   Additional DSHHostClient RPC methods (subagents,
@@ -44,19 +43,18 @@ you do not need to register it anywhere.
 There is **one** `@MainActor final class HarnessController: ObservableObject`
 (defined in `main.swift`) that owns essentially all app state as `@Published`
 properties and all business logic as methods. `main.swift` is **frozen**: it
-keeps its remaining lines of history (being migrated out in batches — see
-the Agent Note linked from CLAUDE.md) but takes no new `@Published`
+keeps only App entry, shared state declarations, initialization, and core
+lifecycle (see the Agent Note linked from CLAUDE.md) and takes no new `@Published`
 state, no new controller methods, and no new top-level View structs (see
 CLAUDE.md's "质量规范" — `./scripts/test-macos-native.sh` enforces this as a
 line-count gate, not just a convention). All *new* feature-specific logic is
 added via `extension HarnessController { ... }` in a dedicated
 `DSH<Feature>.swift` file — e.g. settings mutation lives in
-`DSHSettingsMutate.swift` / `DSHSettingsActions.swift`. (Some older logic,
-like the subagent-navigation methods, still lives inline in `main.swift` from
-before the freeze; that's tracked as migration debt in the Agent Note linked
-from CLAUDE.md, not a pattern to copy for new code.) SwiftUI views read state
-via `@EnvironmentObject private var harness: HarnessController` and never
-hold their own copy of Host-derived state.
+`DSHSettingsMutate.swift` / `DSHSettingsActions.swift`; session, history,
+subagent, goal, model, settings, send, and Host event actions live in their
+corresponding extension files. SwiftUI views read state via
+`@EnvironmentObject private var harness: HarnessController` and never hold
+their own copy of Host-derived state.
 
 When adding a feature:
 1. New wire types (`Encodable`/`Decodable` structs mirroring a Host RPC
@@ -112,7 +110,7 @@ When adding a feature:
 ```bash
 ./scripts/build-macos-app.sh                 # builds dist/DeepSeek Harness.app
 ./scripts/test-macos-native.sh               # swiftc -typecheck + Info.plist lint (no build needed)
-./scripts/test-macos-native.sh --smoke       # + starts the built app's Host, checks read-only API
+./scripts/test-macos-native.sh --smoke       # + starts the built app's Host, checks read/write API and Agent platform
 ./scripts/verify-native-host-api.sh <App>    # what --smoke calls; runnable standalone
 plutil -lint "dist/DeepSeek Harness.app/Contents/Info.plist"
 codesign --verify --deep --strict --verbose=2 "dist/DeepSeek Harness.app"
