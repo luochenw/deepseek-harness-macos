@@ -57,21 +57,14 @@ private func testRPCServerResponse_decodesOkResult() throws {
   try expect(response.result.value?.cwd == "/tmp")
 }
 
-private func testHostDescription_decodesLatestAndLegacyShapes() throws {
-  let latest = try JSONDecoder().decode(DSHHostDescription.self, from: Data("""
+private func testHostDescription_decodesBundledRuntimeShape() throws {
+  let description = try JSONDecoder().decode(DSHHostDescription.self, from: Data("""
   {"version":"0.1.1-rc.2","cwd":"/tmp/project","attachedSessions":2,"home":"/Users/test","canOpenPath":true}
   """.utf8))
-  try expectEqual(latest.version, "0.1.1-rc.2")
-  try expect(latest.provider == nil)
-  try expect(latest.model == nil)
-  try expectEqual(latest.home, "/Users/test")
-
-  let legacy = try JSONDecoder().decode(DSHHostDescription.self, from: Data("""
-  {"version":"0.1.0-rc.7","cwd":"/tmp/project","provider":"deepseek","model":"deepseek-chat","attachedSessions":1,"canOpenPath":true}
-  """.utf8))
-  try expectEqual(legacy.provider, "deepseek")
-  try expectEqual(legacy.model, "deepseek-chat")
-  try expect(legacy.home == nil)
+  try expectEqual(description.version, "0.1.1-rc.2")
+  try expect(description.provider == nil)
+  try expect(description.model == nil)
+  try expectEqual(description.home, "/Users/test")
 }
 
 private func testCreateSessionPayload_omitsNilWorkspace() throws {
@@ -80,12 +73,9 @@ private func testCreateSessionPayload_omitsNilWorkspace() throws {
   try expect(payload?.isEmpty == true)
 }
 
-private func testHostLaunchArguments_gateNoOpenByRuntimeVersion() throws {
-  let latest = DSHHostRuntime.launchArguments(dshPath: "/tmp/dsh/lib/bin.js", runtimeVersion: "0.1.1-rc.2")
-  try expect(latest.contains("--no-open"))
-
-  let legacy = DSHHostRuntime.launchArguments(dshPath: "/tmp/dsh/lib/bin.js", runtimeVersion: "0.1.0-rc.7")
-  try expect(!legacy.contains("--no-open"))
+private func testHostLaunchArguments_alwaysSuppressWebUI() throws {
+  let arguments = DSHHostRuntime.launchArguments(dshPath: "/tmp/dsh/lib/bin.js")
+  try expect(arguments.contains("--no-open"))
 }
 
 let dshHostProtocolTests: [NamedTest] = [
@@ -94,7 +84,7 @@ let dshHostProtocolTests: [NamedTest] = [
   ("DSHJSONPatch encodes nested structure as real JSON", testJSONPatch_encodesNestedStructureAsRealJSON),
   ("DSHRPCEnvelope encodes expected shape", testRPCEnvelope_encodesExpectedShape),
   ("DSHRPCServerResponse decodes ok result", testRPCServerResponse_decodesOkResult),
-  ("DSHHostDescription decodes latest and legacy shapes", testHostDescription_decodesLatestAndLegacyShapes),
+  ("DSHHostDescription decodes bundled runtime shape", testHostDescription_decodesBundledRuntimeShape),
   ("DSHCreateSessionPayload omits nil workspace", testCreateSessionPayload_omitsNilWorkspace),
-  ("DSHHostRuntime gates --no-open by runtime version", testHostLaunchArguments_gateNoOpenByRuntimeVersion),
+  ("DSHHostRuntime always suppresses the Web UI", testHostLaunchArguments_alwaysSuppressWebUI),
 ]

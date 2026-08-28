@@ -33,7 +33,7 @@ struct DSHHostDescription: Decodable {
   let provider: String?
   let model: String?
   let attachedSessions: Int
-  let home: String?
+  let home: String
   let canOpenPath: Bool
 }
 
@@ -393,7 +393,6 @@ struct DSHSettingsUpdatePayload: Encodable {
 /// protocol instead of launching one headless process per prompt.
 final class DSHHostRuntime {
   private static let startupTimeout: TimeInterval = 20
-  private struct RuntimeManifest: Decodable { let version: String }
 
   private let node: URL
   private let dsh: URL
@@ -407,19 +406,15 @@ final class DSHHostRuntime {
     self.home = home
   }
 
-  static func launchArguments(dshPath: String, runtimeVersion: String?) -> [String] {
-    var arguments = [dshPath, "web", "--host", "127.0.0.1", "--port", "0"]
-    if runtimeVersion == "0.1.1-rc.2" { arguments.append("--no-open") }
-    return arguments
+  static func launchArguments(dshPath: String) -> [String] {
+    [dshPath, "web", "--host", "127.0.0.1", "--port", "0", "--no-open"]
   }
 
   func start(onReady: @escaping (Result<URL, Error>) -> Void) {
     guard process == nil else { return }
     let process = Process()
     process.executableURL = node
-    let manifestURL = dsh.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("package.json")
-    let runtimeVersion = try? JSONDecoder().decode(RuntimeManifest.self, from: Data(contentsOf: manifestURL)).version
-    process.arguments = Self.launchArguments(dshPath: dsh.path, runtimeVersion: runtimeVersion)
+    process.arguments = Self.launchArguments(dshPath: dsh.path)
     var environment = ProcessInfo.processInfo.environment
     environment["DSH_HOME"] = home.path
     environment["PATH"] = "\(node.deletingLastPathComponent().path):/usr/bin:/bin:/usr/sbin:/sbin"

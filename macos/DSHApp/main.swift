@@ -16,7 +16,7 @@ struct DSHNativeApp: App {
     WindowGroup(appName) {
       ContentView()
         .environmentObject(controller)
-        .frame(minWidth: 1180, minHeight: 760)
+        .frame(minWidth: DSHMainWindowLayout.minimumWidth, minHeight: DSHMainWindowLayout.minimumHeight)
         .onAppear { FloatingBubbleManager.shared.attach(controller) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
           controller.stopForTermination()
@@ -25,7 +25,7 @@ struct DSHNativeApp: App {
     // Custom chrome: the in-app header (ConversationHeader + sidebar top) IS
     // the top of the page; the native title bar only duplicated the app name.
     // Traffic lights float over the sidebar's padded top row.
-    .windowStyle(.hiddenTitleBar)
+    .windowStyle(.hiddenTitleBar).windowResizability(.contentMinSize).defaultSize(width: DSHMainWindowLayout.defaultWidth, height: DSHMainWindowLayout.defaultHeight)
     .commands {
       WorkbenchCommands(controller: controller)
       CommandGroup(after: .newItem) {

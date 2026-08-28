@@ -6,6 +6,14 @@ private struct VoiceComposerTarget: Equatable {
   let executionTarget: DSHDisplayedExecutionTarget
 }
 
+enum DSHComposerLayout {
+  static let stackedControlsThreshold: CGFloat = 720
+
+  static func usesStackedControls(availableWidth: CGFloat) -> Bool {
+    availableWidth < stackedControlsThreshold
+  }
+}
+
 struct Composer: View {
   @EnvironmentObject var harness: HarnessController
   @FocusState private var editorFocused: Bool
@@ -22,6 +30,7 @@ struct Composer: View {
   @State private var paletteDismissed = false
   @State private var mentionSelection = 0
   @State private var mentionDismissed = false
+  var compactControls = false
 
   /// The palette roster for the current draft — commands, native locals, and
   /// skills, matched by NativeCommandPalette's mirror of the web `/` menu.
@@ -210,126 +219,10 @@ struct Composer: View {
             Spacer()
           }
         }
-        HStack(spacing: DSHSpace.s3) {
-          Menu {
-            if harness.canUseRootSlashCatalog {
-              Button("进入计划模式", action: harness.enterPlanMode)
-              Button("设定目标") { harness.draft = "/goal " }
-              Divider()
-              Button("重命名当前会话", action: harness.beginRenameCurrentSession)
-              Button("创建会话分支", action: harness.forkCurrentSession)
-              Button("归档当前会话", action: harness.archiveCurrentSession)
-              Button("导出会话日志", action: harness.exportCurrentSessionLog)
-              Button("查看归档会话") { harness.showArchivedSessions = true }
-              Divider()
-            }
-            Button("新会话", action: harness.newSession)
-            Button("打开工作区", action: harness.openWorkspace)
-          } label: { Image(systemName: "ellipsis.circle") }
-            .menuStyle(.borderlessButton).fixedSize().foregroundStyle(DSHTheme.inkSoft).help("更多操作")
-          Button(action: harness.pickImage) { Image(systemName: "paperclip") }.buttonStyle(.borderless).foregroundStyle(DSHTheme.inkSoft).help("添加图片")
-          PermissionMenu()
-          // Dictation streams live into the input box (partials replace from
-          // the pre-dictation base). Two command classes on the final text:
-          // 定稿类（结束/发送）ends capture early (handled in VoiceController);
-          // 取消类（取消/不需要…）discards the whole utterance — the draft is
-          // restored and nothing is sent or created. Manual dictation never
-          // auto-sends; wake-initiated does (switchable in 设置→语音).
-          VoiceInputButton(
-            onPartial: { partial in
-              let currentTarget = VoiceComposerTarget(
-                selectedSessionID: harness.selectedSessionID,
-                executionTarget: harness.displayedExecutionTarget)
-              guard voiceTarget == currentTarget else { return }
-              if dictationBase == nil { dictationBase = harness.draft }
-              let base = dictationBase ?? ""
-              harness.draft = base + (base.isEmpty ? "" : " ") + partial
-            },
-            onCommit: { text, viaWake, route in
-              voiceDiag("[voice] commit '\(text)' viaWake=\(viaWake) route=\(route == .dialog ? "dialog" : "background") autoSend=\(VoiceSettings.wakeAutoSend)")
-              let base = dictationBase ?? harness.draft
-              dictationBase = nil
-              let currentTarget = VoiceComposerTarget(
-                selectedSessionID: harness.selectedSessionID,
-                executionTarget: harness.displayedExecutionTarget)
-              let targetChanged = route == .dialog
-                && voiceTarget != nil
-                && voiceTarget != currentTarget
-              voiceTarget = nil
-              // 空文本 = 放弃（取消、超时无语音、或剔除命令词后一无所剩）
-              // —— 恢复实时分段覆盖前的草稿，绝不派发空任务。
-              if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || VoiceSettings.isCancelCommand(text) {
-                if !targetChanged { harness.draft = base }
-                return
-              }
-              let action = targetChanged ? VoiceCommitAction.fillComposer : route.commitAction(
-                viaWake: viaWake,
-                autoSend: VoiceSettings.wakeAutoSend,
-                canSubmit: harness.composerCanSubmit,
-                canQueue: harness.displayedIsRunning && harness.composerAgentProfileID == nil
-              )
-              if targetChanged {
-                harness.status = "听写期间会话已切换，语音结果已保留在输入框"
-              }
-              switch action {
-              case .fillComposer:
-                if targetChanged {
-                  let current = harness.draft
-                  harness.draft = current + (current.isEmpty ? "" : " ") + text
-                } else {
-                  harness.draft = base + (base.isEmpty ? "" : " ") + text
-                }
-              case .submitCurrent:
-                harness.draft = base + (base.isEmpty ? "" : " ") + text
-                harness.submitComposer()
-              case .queueCurrent:
-                harness.draft = base + (base.isEmpty ? "" : " ") + text
-                harness.queueDraft()
-              case .dispatchBackground:
-                harness.draft = base
-                harness.dispatchVoiceTask(text)
-              }
-            })
-            // dialog 路由听写开始：把焦点交给输入框，让语音落进正在输入的
-            // 位置（VoiceController.startListening 里发起的请求）。
-            .onChange(of: voiceFocus.requestID) { _, _ in
-              voiceTarget = VoiceComposerTarget(
-                selectedSessionID: harness.selectedSessionID,
-                executionTarget: harness.displayedExecutionTarget)
-              editorFocused = true
-            }
-          Spacer()
-          if harness.canUseRootSlashCatalog {
-            ComposerModelMenu()
-          }
-          if harness.displayedIsRunning {
-            Button(action: harness.stop) { Image(systemName: "stop.fill").font(.system(size: 13)) }
-              .buttonStyle(.dshSecondary).help("停止")
-            if harness.composerAgentProfileID == nil {
-              if harness.activeSubagentAddress == nil {
-                Button(action: harness.steerDraft) { Image(systemName: "arrow.turn.down.right").font(.system(size: 13, weight: .semibold)) }
-                  .buttonStyle(.dshPrimary)
-                  .disabled(!harness.canSubmitRunningDraft)
-                  .help("插话发送：追加到当前轮")
-              }
-              Button(action: harness.queueDraft) { Image(systemName: "tray.and.arrow.down") }
-                .buttonStyle(.dshSecondary)
-                .disabled(!harness.canSubmitRunningDraft)
-                .help("排队发送：本轮结束后自动发送")
-            }
-          } else if harness.selectedComposerAgentProfile != nil {
-            Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
-              .buttonStyle(.dshPrimary).disabled(!harness.composerCanSubmit)
-              .help("派发 Agent Batch")
-          } else {
-            Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
-              .buttonStyle(.dshPrimary).disabled(!harness.composerCanSubmit)
-              .help(AppPrefs.enterToSend ? "发送（回车）" : "发送（⌘回车）")
-          }
-        }
+        composerControls
       }
       .padding(DSHSpace.s3)
+      .frame(maxWidth: .infinity, alignment: .leading)
       .dshCard(tint: DSHTheme.surface, radius: DSHRadius.lg)
     }.padding(DSHSpace.s5)
     // Any edit re-arms the palette: selection returns to the top hit and an
@@ -344,6 +237,144 @@ struct Composer: View {
       if newValue == "/" { harness.refreshSlashCatalog() }
       if newValue.hasSuffix("@") { harness.refreshAgentProfiles() }
     }
+    }
+  }
+
+  @ViewBuilder private var composerControls: some View {
+    if compactControls {
+      VStack(alignment: .leading, spacing: DSHSpace.s2) {
+        if harness.canUseRootSlashCatalog {
+          ComposerModelMenu(compact: true)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        HStack(spacing: DSHSpace.s2) {
+          composerAccessoryControls
+          Spacer(minLength: DSHSpace.s1)
+          composerSubmissionControls
+        }
+      }
+    } else {
+      HStack(spacing: DSHSpace.s3) {
+        composerAccessoryControls
+        Spacer()
+        if harness.canUseRootSlashCatalog { ComposerModelMenu() }
+        composerSubmissionControls
+      }
+    }
+  }
+
+  @ViewBuilder private var composerAccessoryControls: some View {
+    Menu {
+      if harness.canUseRootSlashCatalog {
+        Button("进入计划模式", action: harness.enterPlanMode)
+        Button("设定目标") { harness.draft = "/goal " }
+        Divider()
+        Button("重命名当前会话", action: harness.beginRenameCurrentSession)
+        Button("创建会话分支", action: harness.forkCurrentSession)
+        Button("归档当前会话", action: harness.archiveCurrentSession)
+        Button("导出会话日志", action: harness.exportCurrentSessionLog)
+        Button("查看归档会话") { harness.showArchivedSessions = true }
+        Divider()
+      }
+      Button("新会话", action: harness.newSession)
+      Button("打开工作区", action: harness.openWorkspace)
+    } label: { Image(systemName: "ellipsis.circle") }
+      .menuStyle(.borderlessButton).fixedSize().foregroundStyle(DSHTheme.inkSoft).help("更多操作")
+    Button(action: harness.pickImage) { Image(systemName: "paperclip") }.buttonStyle(.borderless).foregroundStyle(DSHTheme.inkSoft).help("添加图片")
+    PermissionMenu()
+    voiceInputButton
+  }
+
+  private var voiceInputButton: some View {
+    // Dictation streams live into the input box (partials replace from the
+    // pre-dictation base); finalized commands reuse the existing routing.
+    VoiceInputButton(
+      onPartial: { partial in
+        let currentTarget = VoiceComposerTarget(
+          selectedSessionID: harness.selectedSessionID,
+          executionTarget: harness.displayedExecutionTarget)
+        guard voiceTarget == currentTarget else { return }
+        if dictationBase == nil { dictationBase = harness.draft }
+        let base = dictationBase ?? ""
+        harness.draft = base + (base.isEmpty ? "" : " ") + partial
+      },
+      onCommit: { text, viaWake, route in
+        voiceDiag("[voice] commit '\(text)' viaWake=\(viaWake) route=\(route == .dialog ? "dialog" : "background") autoSend=\(VoiceSettings.wakeAutoSend)")
+        let base = dictationBase ?? harness.draft
+        dictationBase = nil
+        let currentTarget = VoiceComposerTarget(
+          selectedSessionID: harness.selectedSessionID,
+          executionTarget: harness.displayedExecutionTarget)
+        let targetChanged = route == .dialog
+          && voiceTarget != nil
+          && voiceTarget != currentTarget
+        voiceTarget = nil
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          || VoiceSettings.isCancelCommand(text) {
+          if !targetChanged { harness.draft = base }
+          return
+        }
+        let action = targetChanged ? VoiceCommitAction.fillComposer : route.commitAction(
+          viaWake: viaWake,
+          autoSend: VoiceSettings.wakeAutoSend,
+          canSubmit: harness.composerCanSubmit,
+          canQueue: harness.displayedIsRunning && harness.composerAgentProfileID == nil
+        )
+        if targetChanged {
+          harness.status = "听写期间会话已切换，语音结果已保留在输入框"
+        }
+        switch action {
+        case .fillComposer:
+          if targetChanged {
+            let current = harness.draft
+            harness.draft = current + (current.isEmpty ? "" : " ") + text
+          } else {
+            harness.draft = base + (base.isEmpty ? "" : " ") + text
+          }
+        case .submitCurrent:
+          harness.draft = base + (base.isEmpty ? "" : " ") + text
+          harness.submitComposer()
+        case .queueCurrent:
+          harness.draft = base + (base.isEmpty ? "" : " ") + text
+          harness.queueDraft()
+        case .dispatchBackground:
+          harness.draft = base
+          harness.dispatchVoiceTask(text)
+        }
+      })
+      // dialog 路由听写开始：把焦点交给输入框，让语音落进正在输入的位置。
+      .onChange(of: voiceFocus.requestID) { _, _ in
+        voiceTarget = VoiceComposerTarget(
+          selectedSessionID: harness.selectedSessionID,
+          executionTarget: harness.displayedExecutionTarget)
+        editorFocused = true
+      }
+  }
+
+  @ViewBuilder private var composerSubmissionControls: some View {
+    if harness.displayedIsRunning {
+      Button(action: harness.stop) { Image(systemName: "stop.fill").font(.system(size: 13)) }
+        .buttonStyle(.dshSecondary).help("停止")
+      if harness.composerAgentProfileID == nil {
+        if harness.activeSubagentAddress == nil {
+          Button(action: harness.steerDraft) { Image(systemName: "arrow.turn.down.right").font(.system(size: 13, weight: .semibold)) }
+            .buttonStyle(.dshPrimary)
+            .disabled(!harness.canSubmitRunningDraft)
+            .help("插话发送：追加到当前轮")
+        }
+        Button(action: harness.queueDraft) { Image(systemName: "tray.and.arrow.down") }
+          .buttonStyle(.dshSecondary)
+          .disabled(!harness.canSubmitRunningDraft)
+          .help("排队发送：本轮结束后自动发送")
+      }
+    } else if harness.selectedComposerAgentProfile != nil {
+      Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
+        .buttonStyle(.dshPrimary).disabled(!harness.composerCanSubmit)
+        .help("派发 Agent Batch")
+    } else {
+      Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
+        .buttonStyle(.dshPrimary).disabled(!harness.composerCanSubmit)
+        .help(AppPrefs.enterToSend ? "发送（回车）" : "发送（⌘回车）")
     }
   }
 
@@ -370,6 +401,7 @@ struct Composer: View {
 /// provider id the catalog actually has.
 private struct ComposerModelMenu: View {
   @EnvironmentObject var harness: HarnessController
+  var compact = false
   var body: some View {
     Menu {
       if harness.availableModels.isEmpty {
@@ -405,9 +437,14 @@ private struct ComposerModelMenu: View {
         }
       }
     } label: {
-      Text(harness.currentModelLabel).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(DSHTheme.inkFaint)
+      Text(harness.currentModelLabel)
+        .font(.system(size: 10.5, design: .monospaced))
+        .foregroundStyle(DSHTheme.inkFaint)
+        .lineLimit(1)
+        .truncationMode(.middle)
     }
-    .menuStyle(.borderlessButton).fixedSize()
+    .menuStyle(.borderlessButton)
+    .fixedSize(horizontal: !compact, vertical: true)
     // `/model` 的落点：同一目录的 popover 形态（Menu 无法编程打开）。
     .popover(isPresented: $harness.showModelPicker, arrowEdge: .top) { ModelPickerPanel().environmentObject(harness) }
   }

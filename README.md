@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)
 
-这是一个独立的、**非官方**的 SwiftUI/AppKit 原生 macOS 客户端，面向 [DSH](https://github.com/deepseek-ai/deepseek-harness)（DeepSeek Harness）——不是把 DSH Web UI 套进 WebView 的壳，也与 DeepSeek AI 官方无关联、未经其认可。应用界面由 macOS 原生 API 实现；WebKit 只用于右侧工作台中用户打开或模型请求打开的浏览器标签。
+这是一个独立的、**非官方**的 SwiftUI/AppKit 原生 macOS 客户端，面向 [DSH](https://github.com/deepseek-ai/deepseek-harness)（DeepSeek Harness）——不是把 DSH Web UI 套进 WebView 的壳。应用界面由 macOS 原生 API 实现；WebKit 只用于右侧工作台中用户打开或模型请求打开的浏览器标签。
 
 Agent 推理、工具、MCP、终端、文件系统与子代理仍由 DSH runtime 提供。App 内置 Node.js 和完整 DSH runtime，运行时不依赖系统已安装的 node 或 dsh。
 
@@ -47,16 +47,16 @@ Agent 推理、工具、MCP、终端、文件系统与子代理仍由 DSH runtim
 
 ## 构建
 
-要求：macOS 14+、Swift Command Line Tools；构建机需要一份完整 DSH 安装和 Node。运行生成的 App 不要求这两个全局安装。
+要求：macOS 14+、Swift Command Line Tools、Node.js 与 npm。运行生成的 App 不要求这些全局工具。
 
 ```bash
 ./scripts/build-macos-app.sh
 open "dist/DeepSeek Harness.app"
 ```
 
-脚本会自动探测 `PATH` 上的 `node` 和全局安装的 `@deepseek-ai/dsh`（推荐 `npm install -g @deepseek-ai/dsh@0.1.1-rc.2`；当前也兼容 `0.1.0-rc.6` / `0.1.0-rc.7`）；如果你的安装在别处，用 `NODE_SOURCE` / `DSH_SOURCE` 环境变量覆盖。
+脚本会自动探测 `PATH` 上的 `node`，核对 `scripts/dsh-runtime-version.txt` 指定的版本仍是 npm `latest`，再安装到 `dist` 下的隔离缓存并嵌入 App。构建不读取全局 DSH，也不回退到旧版本；缓存命中时只需完成 latest 校验。`NODE_SOURCE` 可覆盖 Node 路径；`DSH_SOURCE` 仅用于指向同一精确版本的完整 runtime。离线重建可显式设置 `DSH_RUNTIME_VERIFY_LATEST=0`，但仍不能使用其他版本。
 
-产物是 `dist/DeepSeek Harness.app`，视打包的 DSH 版本大约 340–570 MB，并与当前构建机架构一致。当前 Release 采用 ad-hoc 签名、未经 notarize，首次运行需按上方 Gatekeeper 步骤确认；未来正式签名分发还需固定 Node/DSH artifact、逐层 Developer ID 签名、启用 hardened runtime 并 notarize。
+产物是 `dist/DeepSeek Harness.app`，内置当前指定的 DSH runtime，并与当前构建机架构一致。当前 Release 采用 ad-hoc 签名、未经 notarize，首次运行需按上方 Gatekeeper 步骤确认；未来正式签名分发还需固定 Node artifact、逐层 Developer ID 签名、启用 hardened runtime 并 notarize。
 
 ## 使用
 
@@ -118,4 +118,4 @@ Release 的 zip 只有 Apple Silicon 版。Intel 机器用一条命令从源码�
 
 ## 许可证与归属
 
-本项目自身源码采用 [MIT 许可证](LICENSE)。**构建出的 App** 额外内置 `@deepseek-ai/dsh`（MIT，版权归 DeepSeek 所有）和 Node.js 运行时。构建会为 Agent 平台应用一组窄范围、版本门控的 runtime 补丁，补丁源码公开在本仓库；完整归属说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目与 DeepSeek AI 官方无关联，未经其认可。
+本项目自身源码采用 [MIT 许可证](LICENSE)。**构建出的 App** 额外内置 `@deepseek-ai/dsh`（MIT，版权归 DeepSeek 所有）和 Node.js 运行时。构建会为 Agent 平台应用一组窄范围、版本门控的 runtime 补丁，补丁源码公开在本仓库；完整归属说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

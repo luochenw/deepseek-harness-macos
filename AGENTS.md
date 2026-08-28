@@ -116,5 +116,7 @@ plutil -lint "dist/DeepSeek Harness.app/Contents/Info.plist"
 codesign --verify --deep --strict --verbose=2 "dist/DeepSeek Harness.app"
 ```
 
-`NODE_SOURCE` and `DSH_SOURCE` env vars override what the build embeds; see
-`scripts/build-macos-app.sh` for their auto-detected defaults.
+`NODE_SOURCE` overrides the Node executable embedded by the build.
+`scripts/dsh-runtime-version.txt` is the single supported DSH version;
+`scripts/prepare-dsh-runtime.sh` installs it into an ignored `dist` cache.
+`DSH_SOURCE` is accepted only when it points to that same complete version.

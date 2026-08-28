@@ -92,6 +92,43 @@ struct WorkbenchSnapshotCheck {
       }
       .background(DSHTheme.canvasGradient)
       .environmentObject(fullHarness))
+
+    let compactHarness = HarnessController(startRuntime: false)
+    compactHarness.workspace = output
+    let compactSession = HarnessController.Session(
+      title: "紧凑工作台",
+      workspaceName: output.lastPathComponent,
+      updatedAt: Date(),
+      messages: [
+        HarnessController.Message(role: .user, text: "在窄窗口里继续对话。"),
+        HarnessController.Message(role: .assistant, text: "侧栏、输入框和工作台保持并排且不互相覆盖。"),
+      ],
+      isRunning: true,
+      hostSessionId: "workbench-compact")
+    compactHarness.sessions = [compactSession]
+    compactHarness.selectedSessionID = compactSession.id
+    compactHarness.hostCurrentSessionID = "workbench-compact"
+    compactHarness.isRunning = true
+    compactHarness.draft = "补充一条运行中的指令"
+    compactHarness.provider = "relay"
+    compactHarness.model = "Ark DeepSeek V4 Flash"
+    compactHarness.rememberPermissionSelection(
+      DSHPermissionSelection(
+        options: [
+          DSHPermissionOption(value: "read-only", name: "read-only", description: nil),
+          DSHPermissionOption(value: "workspace-write", name: "workspace-write", description: nil),
+          DSHPermissionOption(value: "danger-full-access", name: "danger-full-access", description: nil),
+        ],
+        currentValue: "workspace-write"),
+      sessionID: "workbench-compact",
+      seq: 1)
+    compactHarness.openMarkdownWorkbench(document.path)
+    RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    try render(
+      "workbench-compact-window",
+      size: CGSize(width: 1024, height: 736),
+      output: output,
+      content: ContentView().environmentObject(compactHarness))
     print("workbench-snapshots: \(output.path)")
   }
 

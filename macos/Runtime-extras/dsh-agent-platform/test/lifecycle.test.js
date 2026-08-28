@@ -44,7 +44,7 @@ test("closing a DSH context disposes the child before workspace cleanup and stat
   ]);
 });
 
-test("latest DSH drains an exact managed child through the live parent", async () => {
+test("DSH drains an exact managed child through the live parent", async () => {
   const calls = [];
   const parent = { id: "parent-1" };
   const child = { id: "child-1" };
@@ -61,26 +61,7 @@ test("latest DSH drains an exact managed child through the live parent", async (
   assert.deepEqual(calls, [["drain", "parent-1", ["child-1"]]]);
 });
 
-test("legacy DSH uses the version-gated exact-child disposal shim", async () => {
-  const calls = [];
-  await disposeManagedChild({
-    subagents: {
-      disposeContinuable: async (childSessionId, authority) => {
-        calls.push(["dispose", childSessionId, authority]);
-      },
-    },
-    agents: { get: () => undefined },
-    childSessionId: "child-1",
-    parentSessionId: "parent-1",
-  });
-  assert.deepEqual(calls, [[
-    "dispose",
-    "child-1",
-    { kind: "user", parentSessionId: "parent-1" },
-  ]]);
-});
-
-test("latest DSH treats an already-cold managed child as disposed", async () => {
+test("DSH treats an already-cold managed child as disposed", async () => {
   const calls = [];
   await disposeManagedChild({
     subagents: { drainContinuableChildren: async () => { calls.push("drain"); } },
@@ -91,7 +72,7 @@ test("latest DSH treats an already-cold managed child as disposed", async () => 
   assert.deepEqual(calls, []);
 });
 
-test("latest DSH keeps a live-child close intent pending when its parent is not live", async () => {
+test("DSH keeps a live-child close intent pending when its parent is not live", async () => {
   await assert.rejects(() => disposeManagedChild({
     subagents: { drainContinuableChildren: async () => {} },
     agents: { get: (id) => id === "child-1" ? { id } : undefined },

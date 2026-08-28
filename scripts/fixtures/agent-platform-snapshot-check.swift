@@ -194,7 +194,7 @@ struct AgentPlatformSnapshotCheck {
   private static func sampleRuntimeStatuses() -> [DSHAgentRuntimeStatus] {
     [
       DSHAgentRuntimeStatus(
-        runtime: "dsh", displayName: "DSH", available: true, version: "rc.7",
+        runtime: "dsh", displayName: "DSH", available: true, version: "0.1.1-rc.2",
         detail: "continuable child", analysisSupported: true, executionSupported: true),
       DSHAgentRuntimeStatus(
         runtime: "claude-code", displayName: "Claude Code", available: true, version: "2.1.193",

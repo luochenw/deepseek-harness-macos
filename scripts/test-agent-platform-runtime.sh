@@ -51,10 +51,7 @@ for module in "${modules[@]}" "${workbench_modules[@]}"; do
   "$NODE" --check "$module"
 done
 "$NODE" --test "${tests[@]}" "${workbench_tests[@]}"
-DSH_SOURCE="${DSH_SOURCE:-}"
-if [[ -z "$DSH_SOURCE" ]] && command -v npm >/dev/null; then
-  DSH_SOURCE="$(npm root -g 2>/dev/null || true)/@deepseek-ai/dsh"
-fi
+DSH_SOURCE="${DSH_SOURCE:-$("$ROOT/scripts/prepare-dsh-runtime.sh")}"
 if [[ -n "$DSH_SOURCE" && -f "$DSH_SOURCE/package.json" ]]; then
   DSH_SOURCE="$DSH_SOURCE" "$NODE" "$ROOT/scripts/test-agent-platform-runtime-patch.mjs"
 else

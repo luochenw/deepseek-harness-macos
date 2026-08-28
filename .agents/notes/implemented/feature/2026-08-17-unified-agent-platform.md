@@ -97,9 +97,10 @@ child/worktree。
   审阅/丢弃，旧 DSH context 不再复用。
 - Profile 删除后不能新建或重试，但历史 Batch、Run、日志、diff 与配置快照
   继续可读。
-- 运行时补丁支持 DSH 0.1.0-rc.6、0.1.0-rc.7 与 0.1.1-rc.2；升级时
-  源码形状漂移会使构建失败，而不是静默回落父 checkout。rc.2 的 child ID
-  与精确 child drain 使用上游实现，其余平台扩展仍由版本门控补丁提供。
+- 当时运行时补丁覆盖 DSH 0.1.0-rc.6、0.1.0-rc.7 与 0.1.1-rc.2；
+  该兼容策略已由
+  [单一最新版 runtime 决策](../architecture/2026-08-28-single-latest-dsh-runtime.md)
+  取代。当前构建只接受版本文件指定的 npm latest。
 
 ## Risks
 

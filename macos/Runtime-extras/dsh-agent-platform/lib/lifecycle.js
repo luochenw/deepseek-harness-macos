@@ -27,17 +27,10 @@ export async function disposeManagedChild({
   childSessionId,
   parentSessionId,
 }) {
-  if (typeof subagents.drainContinuableChildren === "function") {
-    if (agents.get(childSessionId) === undefined) return;
-    const parent = agents.get(parentSessionId);
-    if (parent === undefined) throw new Error(`DSH parent "${parentSessionId}" is not live`);
-    await subagents.drainContinuableChildren(parent, [childSessionId]);
-    return;
-  }
-  await subagents.disposeContinuable(childSessionId, {
-    kind: "user",
-    parentSessionId,
-  });
+  if (agents.get(childSessionId) === undefined) return;
+  const parent = agents.get(parentSessionId);
+  if (parent === undefined) throw new Error(`DSH parent "${parentSessionId}" is not live`);
+  await subagents.drainContinuableChildren(parent, [childSessionId]);
 }
 
 export function shouldCloseContextOnAdoption(run) {

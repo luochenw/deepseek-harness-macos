@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)
 
-An independent, **unofficial** SwiftUI/AppKit native macOS client for [DSH](https://github.com/deepseek-ai/deepseek-harness) (DeepSeek Harness) — not a WebView or Electron wrapper around the DSH Web UI, and not affiliated with or endorsed by DeepSeek AI. The application shell is native; WebKit is used only for browser tabs opened by the user or explicitly requested by a model in the right workbench.
+An independent, **unofficial** SwiftUI/AppKit native macOS client for [DSH](https://github.com/deepseek-ai/deepseek-harness) (DeepSeek Harness) — not a WebView or Electron wrapper around the DSH Web UI. The application shell is native; WebKit is used only for browser tabs opened by the user or explicitly requested by a model in the right workbench.
 
 Agent reasoning, tools, MCP, terminal, filesystem, and subagents are still provided by the bundled DSH runtime. The app embeds Node.js and a complete DSH runtime, so it doesn't depend on a system-wide Node or `dsh` install to run.
 
@@ -47,16 +47,16 @@ Grab the zip from the [latest release](https://github.com/luochenw/deepseek-harn
 
 ## Build
 
-Requirements: macOS 14+, Swift Command Line Tools. The build machine needs a full DSH install and Node; running the built app requires neither globally.
+Requirements: macOS 14+, Swift Command Line Tools, Node.js, and npm. Running the built app requires none of these globally.
 
 ```bash
 ./scripts/build-macos-app.sh
 open "dist/DeepSeek Harness.app"
 ```
 
-The script auto-detects `node` on your `PATH` and a globally-installed `@deepseek-ai/dsh` (recommended: `npm install -g @deepseek-ai/dsh@0.1.1-rc.2`; `0.1.0-rc.6` and `0.1.0-rc.7` remain supported); override with the `NODE_SOURCE` / `DSH_SOURCE` env vars if yours live elsewhere.
+The script auto-detects `node` on your `PATH`, verifies that the version pinned in `scripts/dsh-runtime-version.txt` is still npm `latest`, installs it into an isolated cache under `dist`, and embeds it in the app. It never reads a global DSH installation or falls back to an older release; cached builds still perform the latest-version check. `NODE_SOURCE` may override Node, while `DSH_SOURCE` is accepted only for a complete runtime at the same exact version. Set `DSH_RUNTIME_VERIFY_LATEST=0` explicitly for an offline rebuild; other DSH versions are still rejected.
 
-The result is `dist/DeepSeek Harness.app`, roughly 340–570MB depending on the bundled DSH version, and matches the build machine's architecture. Current releases are ad-hoc signed and not notarized, so first launch requires the Gatekeeper step above. A future fully signed distribution would use pinned Node/DSH artifacts, sign every layer with a Developer ID, enable the hardened runtime, and notarize the package.
+The result is `dist/DeepSeek Harness.app`, embeds the currently pinned DSH runtime, and matches the build machine's architecture. Current releases are ad-hoc signed and not notarized, so first launch requires the Gatekeeper step above. A future fully signed distribution would use a pinned Node artifact, sign every layer with a Developer ID, enable the hardened runtime, and notarize the package.
 
 ## Usage
 
@@ -118,4 +118,4 @@ Issues and PRs welcome. Before changing code, read [CLAUDE.md](CLAUDE.md) — it
 
 ## License and attribution
 
-This project's own source is [MIT licensed](LICENSE). A **built app** additionally embeds `@deepseek-ai/dsh` (MIT, Copyright DeepSeek) plus a Node.js runtime. The build applies a narrow, version-gated runtime patch for the Agent platform; the patch source is in this repository. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for full attribution. This project is not affiliated with or endorsed by DeepSeek AI.
+This project's own source is [MIT licensed](LICENSE). A **built app** additionally embeds `@deepseek-ai/dsh` (MIT, Copyright DeepSeek) plus a Node.js runtime. The build applies a narrow, version-gated runtime patch for the Agent platform; the patch source is in this repository. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for full attribution.

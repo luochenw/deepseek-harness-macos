@@ -3,17 +3,17 @@ import { existsSync } from "node:fs";
 import { cp, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { patchRuntime } from "./patch-agent-platform-runtime.mjs";
+import { patchRuntime, supportedRuntimeVersion } from "./patch-agent-platform-runtime.mjs";
 
 const root = await mkdtemp(path.join(os.tmpdir(), "dsh-agent-patch-"));
 await mkdir(path.join(root, "node_modules/@deepseek-ai/dsh-subagent/lib/types"), { recursive: true });
 await mkdir(path.join(root, "node_modules/@deepseek-ai/dsh-session/lib/types"), { recursive: true });
 await mkdir(path.join(root, "node_modules/@deepseek-ai/dsh-web-app"), { recursive: true });
-await writeFile(path.join(root, "package.json"), JSON.stringify({ version: "0.1.0-rc.6" }));
+await writeFile(path.join(root, "package.json"), JSON.stringify({ version: supportedRuntimeVersion }));
 for (const name of ["dsh-subagent", "dsh-session", "dsh-web-app"]) {
   await writeFile(
     path.join(root, "node_modules/@deepseek-ai", name, "package.json"),
-    JSON.stringify({ name: `@deepseek-ai/${name}`, version: "0.1.0-rc.6" }));
+    JSON.stringify({ name: `@deepseek-ai/${name}`, version: supportedRuntimeVersion }));
 }
 await writeFile(path.join(root, "node_modules/@deepseek-ai/dsh-subagent/lib/index.js"), `
 import { HarnessError, MessageId, boundContextSummary, createUserMessage, errorChain, freezeMessage } from "@deepseek-ai/dsh-llm";
@@ -85,7 +85,7 @@ function foldSubagentDescriptor(events) {
 \t\treturn this.submit(activation, content, source, parent);
 \t}
 \tasync startContinuable(spec) {
-\t\tconst childId = SessionId(randomUUID());
+\t\tconst childId = spec.childId ?? SessionId(randomUUID());
 \t\tconst delegatedPolicies = captureDelegatedPolicyOverrides(parent);
 \t\tconst activation = {};
 \t\tconst parent = {};
@@ -106,31 +106,13 @@ function foldSubagentDescriptor(events) {
 \t\t\treturn this.setupRegistry.apply(childCtx);
 \t\t};
 \t}
-\tinterrupt(targetSessionId, authority) {
-\t\tif (authority.kind === "ancestor") {
-\t\t\tconst caller = authority.agent;
-\t\t\tif (this.ctx.agents.get(caller.id) !== caller) throw new SubagentError("bad", "UNAUTHORIZED");
-\t\t}
-\t\tconst activation = this.activations.get(targetSessionId);
-\t\tif (activation === void 0) return;
-\t}
-\t/**
-\t* Deliver explicitly selected content from one resident continuable child to
-\t*/
-\tasync reportFrom(child, content, options) {}
-\tinterrupt(targetSessionId, authority) {
-\t\tthis.continuations?.interrupt(targetSessionId, authority);
-\t}
-\t/**
-\t* Deliver selected content from one live continuable child to its durable
-\t*/
-\tasync reportFrom(child, content, options) {}
 `);
 await writeFile(path.join(root, "node_modules/@deepseek-ai/dsh-subagent/lib/types/continuation.d.ts"), `
 import { SessionId } from '@deepseek-ai/dsh-session';
 import { MessageId } from '@deepseek-ai/dsh-llm';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 export interface ContinuableStartSpec {
+    readonly childId?: SessionId;
 }
 export interface SubagentFollowupOptions {
 }
@@ -144,13 +126,6 @@ export declare function childSessionMeta(parent: Agent, childDepth: number, line
 export interface ChildComposition {
     readonly persona?: string | undefined;
     readonly toolFilter?: ToolRestriction | undefined;
-}
-`);
-await writeFile(path.join(root, "node_modules/@deepseek-ai/dsh-subagent/lib/types/index.d.ts"), `
-import type { SessionId } from '@deepseek-ai/dsh-session';
-import type { SubagentInterruptAuthority } from './continuation.ts';
-export declare class SubagentRuntime {
-    interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): void;
 }
 `);
 await writeFile(path.join(root, "node_modules/@deepseek-ai/dsh-session/lib/index.js"), 'const x = [\n\t"agent-preset/selected",\n];\n');
@@ -174,8 +149,6 @@ assert.match(subagent, /spec\.signal, spec\.messageId/);
 assert.match(subagent, /options\.messageId/);
 assert.match(subagent, /activation\.handle\.agent\.session\.events\.some\(\(event\) => event\.type === "user\/message" && event\.data\?\.id === message\.id\)/);
 assert.match(subagent, /activation\.handle\.agent\.inbox\.remove\(message\.id\)/);
-assert.match(subagent, /async disposeContinuable\(targetSessionId, authority\)/);
-assert.match(subagent, /return this\.continuations\?\.disposeContinuable\(targetSessionId, authority\)/);
 assert.match(subagent, /function assertAgentPlatformFollowup\(descriptor, source, childId\)/);
 assert.match(subagent, /source\.kind === "plugin" && source\.plugin === "agent-platform"/);
 assert.match(subagent, /assertAgentPlatformFollowup\(descriptor, options\.source, childId\)/);
@@ -186,7 +159,6 @@ assert.match(continuationTypes, /readonly messageId\?: MessageId/);
 assert.match(continuationTypes, /readonly sandboxMode\?: "read-only" \| "workspace-write" \| "danger-full-access"/);
 assert.match(continuationTypes, /readonly agentPreset\?: string/);
 assert.match(continuationTypes, /readonly agentOptions\?: AgentOptions/);
-assert.match(continuationTypes, /disposeContinuable\(targetSessionId: SessionId, authority: SubagentInterruptAuthority\): Promise<void>/);
 const childAgentTypes = await readFile(path.join(root, "node_modules/@deepseek-ai/dsh-subagent/lib/types/child-agent.d.ts"), "utf8");
 assert.match(childAgentTypes, /lineageSeedLength: number, cwd\?: string, agentPreset\?: string/);
 assert.match(childAgentTypes, /readonly agentPreset\?: string \| undefined/);
@@ -214,16 +186,24 @@ const mismatchedRoot = await mkdtemp(path.join(os.tmpdir(), "dsh-agent-patch-mis
 await cp(root, mismatchedRoot, { recursive: true });
 await writeFile(
   path.join(mismatchedRoot, "node_modules/@deepseek-ai/dsh-subagent/package.json"),
-  JSON.stringify({ name: "@deepseek-ai/dsh-subagent", version: "0.1.1-rc.2" }));
+  JSON.stringify({ name: "@deepseek-ai/dsh-subagent", version: "0.1.0-rc.7" }));
 await assert.rejects(
   () => patchRuntime(mismatchedRoot),
-  /requires @deepseek-ai\/dsh-subagent 0\.1\.0-rc\.6/);
+  new RegExp(`requires @deepseek-ai/dsh-subagent ${supportedRuntimeVersion.replaceAll(".", "\\.")}`));
+
+const oldRuntimeRoot = await mkdtemp(path.join(os.tmpdir(), "dsh-agent-patch-old-runtime-"));
+await cp(root, oldRuntimeRoot, { recursive: true });
+await writeFile(path.join(oldRuntimeRoot, "package.json"), JSON.stringify({ version: "0.1.0-rc.7" }));
+await assert.rejects(
+  () => patchRuntime(oldRuntimeRoot),
+  new RegExp(`requires @deepseek-ai/dsh ${supportedRuntimeVersion.replaceAll(".", "\\.")}`));
 
 const installedRoot = process.env.DSH_SOURCE;
 if (installedRoot !== undefined
     && installedRoot !== ""
     && existsSync(path.join(installedRoot, "package.json"))) {
   const installedManifest = JSON.parse(await readFile(path.join(installedRoot, "package.json"), "utf8"));
+  assert.equal(installedManifest.version, supportedRuntimeVersion);
   const installedFixture = await mkdtemp(path.join(os.tmpdir(), "dsh-agent-patch-installed-"));
   await mkdir(path.join(installedFixture, "node_modules/@deepseek-ai"), { recursive: true });
   await writeFile(path.join(installedFixture, "package.json"), JSON.stringify({ version: installedManifest.version }));
@@ -241,10 +221,8 @@ if (installedRoot !== undefined
   assert.match(installedSubagent, /function createContinuableMessage\(content, source, messageId\)/);
   assert.match(installedSubagent, /childCwd = cwd \?\? parentHeader\.cwd/);
   assert.match(installedSubagent, /assertAgentPlatformFollowup\(descriptor, options\.source, childId\)/);
-  if (installedManifest.version === "0.1.1-rc.2") {
-    assert.doesNotMatch(installedSubagent, /async disposeContinuable\(targetSessionId, authority\)/);
-    assert.match(installedSubagent, /async drainContinuableChildren\(parent, childIds\)/);
-  }
+  assert.doesNotMatch(installedSubagent, /async disposeContinuable\(targetSessionId, authority\)/);
+  assert.match(installedSubagent, /async drainContinuableChildren\(parent, childIds\)/);
 }
 
 console.log("agent-platform-runtime-patch: OK");

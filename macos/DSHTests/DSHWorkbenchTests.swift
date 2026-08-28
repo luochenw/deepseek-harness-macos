@@ -21,6 +21,82 @@ private func testWorkbenchContext_closesLastSelectedTabToLeftNeighbor() throws {
   try expectEqual(context.selectedTabID, first.id)
 }
 
+private func testWorkbenchLayout_fitsRegularWindowWithoutOverflow() throws {
+  let main = DSHMainWindowLayout.resolve(totalWidth: 1180)
+  let split = DSHWorkbenchSplitLayout.resolve(
+    availableWidth: 1180 - main.sidebarWidth,
+    compact: main.compact,
+    workbenchVisible: true,
+    preferredWorkbenchWidth: 520)
+
+  try expectEqual(main.sidebarWidth, 290)
+  try expect(!main.compact)
+  try expectEqual(split.conversationWidth, 500)
+  try expectEqual(split.workbenchWidth, 383)
+  try expectEqual(
+    main.sidebarWidth
+      + split.conversationWidth
+      + DSHWorkbenchSplitLayout.resizeHandleWidth
+      + (split.workbenchWidth ?? 0),
+    1180)
+}
+
+private func testWorkbenchLayout_compactsAtScreenshotWidth() throws {
+  let main = DSHMainWindowLayout.resolve(totalWidth: 1024)
+  let split = DSHWorkbenchSplitLayout.resolve(
+    availableWidth: 1024 - main.sidebarWidth,
+    compact: main.compact,
+    workbenchVisible: true,
+    preferredWorkbenchWidth: 520)
+
+  try expectEqual(main.sidebarWidth, 260)
+  try expect(main.compact)
+  try expectEqual(split.conversationWidth, 420)
+  try expectEqual(split.workbenchWidth, 337)
+  try expect(DSHComposerLayout.usesStackedControls(
+    availableWidth: split.conversationWidth))
+  try expectEqual(
+    main.sidebarWidth
+      + split.conversationWidth
+      + DSHWorkbenchSplitLayout.resizeHandleWidth
+      + (split.workbenchWidth ?? 0),
+    1024)
+}
+
+private func testWorkbenchLayout_fitsMinimumWindow() throws {
+  let main = DSHMainWindowLayout.resolve(totalWidth: DSHMainWindowLayout.minimumWidth)
+  let split = DSHWorkbenchSplitLayout.resolve(
+    availableWidth: DSHMainWindowLayout.minimumWidth - main.sidebarWidth,
+    compact: main.compact,
+    workbenchVisible: true,
+    preferredWorkbenchWidth: 520)
+
+  try expectEqual(main.sidebarWidth, 260)
+  try expectEqual(split.conversationWidth, 420)
+  try expectEqual(split.workbenchWidth, 313)
+  try expectEqual(
+    main.sidebarWidth
+      + split.conversationWidth
+      + DSHWorkbenchSplitLayout.resizeHandleWidth
+      + (split.workbenchWidth ?? 0),
+    DSHMainWindowLayout.minimumWidth)
+}
+
+private func testWorkbenchLayout_temporarilyHidesBelowInlineThreshold() throws {
+  let main = DSHMainWindowLayout.resolve(totalWidth: 960)
+  let split = DSHWorkbenchSplitLayout.resolve(
+    availableWidth: 960 - main.sidebarWidth,
+    compact: main.compact,
+    workbenchVisible: true,
+    preferredWorkbenchWidth: 520)
+
+  try expectEqual(main.sidebarWidth, 260)
+  try expectEqual(split.conversationWidth, 700)
+  try expect(split.workbenchWidth == nil)
+  try expect(DSHComposerLayout.usesStackedControls(
+    availableWidth: split.conversationWidth))
+}
+
 private func testBrowserURL_normalizesLocalAndPublicHosts() throws {
   try MainActor.assumeIsolated {
     try expectEqual(DSHBrowserRuntime.normalizedURL(from: "localhost:5173")?.absoluteString, "http://localhost:5173")
@@ -655,6 +731,10 @@ private func testMarkdownResources_respectModelDocumentBoundary() throws {
 let dshWorkbenchTests: [NamedTest] = [
   ("Workbench closes selected tab to its right neighbor", testWorkbenchContext_closesSelectedTabToRightNeighbor),
   ("Workbench closes last selected tab to its left neighbor", testWorkbenchContext_closesLastSelectedTabToLeftNeighbor),
+  ("Workbench layout fits the regular window", testWorkbenchLayout_fitsRegularWindowWithoutOverflow),
+  ("Workbench layout compacts at screenshot width", testWorkbenchLayout_compactsAtScreenshotWidth),
+  ("Workbench layout fits the minimum window", testWorkbenchLayout_fitsMinimumWindow),
+  ("Workbench layout hides below the inline threshold", testWorkbenchLayout_temporarilyHidesBelowInlineThreshold),
   ("Browser URL normalizes local and public hosts", testBrowserURL_normalizesLocalAndPublicHosts),
   ("Workbench migrates default tabs to local and Host sessions", testWorkbench_migratesDefaultTabsToLocalAndHostSession),
   ("Workbench root tool stays live while viewing a subagent", testWorkbench_rootToolStaysLiveWhileViewingSubagent),

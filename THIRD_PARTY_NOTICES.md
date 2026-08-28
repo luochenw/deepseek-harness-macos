@@ -5,8 +5,8 @@ licensed under the MIT License — see [LICENSE](LICENSE).
 
 A **built app** (`./scripts/build-macos-app.sh`) additionally embeds two
 third-party components as its local execution backend. Neither is
-redistributed in this git repository — the build script copies them from your
-local machine at build time — but anyone distributing a *built* `.app` is
+redistributed in this git repository — the build script obtains them at build
+time — but anyone distributing a *built* `.app` is
 redistributing them. The build embeds this notice plus the project, Node.js,
 and DSH license texts under `Contents/Resources/Licenses` and
 `Contents/Resources/Runtime/dsh/LICENSE`.
@@ -17,12 +17,15 @@ and DSH license texts under `Contents/Resources/Licenses` and
   plugin system this app is a native UI for.
 - **Source**: <https://github.com/deepseek-ai/deepseek-harness>
 - **License**: MIT, Copyright (c) 2026 DeepSeek.
-- **How it's embedded**: `scripts/build-macos-app.sh` copies the installed npm
-  package into `Contents/Resources/Runtime/dsh` with its `LICENSE` file, adds
-  this app's local Host plugins, and applies
-  `scripts/patch-agent-platform-runtime.mjs`. That patch is restricted to
-  DSH `0.1.0-rc.6`, `0.1.0-rc.7`, and `0.1.1-rc.2`, and fails closed when
-  source anchors drift;
+- **How it's embedded**: `scripts/prepare-dsh-runtime.sh` installs the single
+  DSH version declared in `scripts/dsh-runtime-version.txt` into an isolated
+  build cache; normal builds and CI verify that version is npm's current
+  `latest`.
+  `scripts/build-macos-app.sh` copies that package into
+  `Contents/Resources/Runtime/dsh` with its `LICENSE` file, adds this app's
+  local Host plugins, and applies `scripts/patch-agent-platform-runtime.mjs`.
+  The patch accepts only that exact DSH version and fails closed when source
+  anchors drift;
   it extends continuable-child cwd, identity, preset/sandbox inheritance,
   follow-up authorization, exact disposal, and Host plugin mounting. The
   original DSH copyright and MIT license remain unchanged. The copied npm

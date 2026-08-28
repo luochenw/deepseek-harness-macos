@@ -1,34 +1,112 @@
 import AppKit
 import SwiftUI
 
+struct DSHMainWindowLayout: Equatable {
+  static let defaultWidth: CGFloat = 1180
+  static let defaultHeight: CGFloat = 760
+  static let minimumWidth: CGFloat = 1000
+  static let minimumHeight: CGFloat = 680
+  static let compactThreshold: CGFloat = 1180
+  static let regularSidebarWidth: CGFloat = 290
+  static let compactSidebarWidth: CGFloat = 260
+
+  let sidebarWidth: CGFloat
+  let compact: Bool
+
+  static func resolve(totalWidth: CGFloat) -> Self {
+    let compact = totalWidth < compactThreshold
+    return Self(
+      sidebarWidth: compact ? compactSidebarWidth : regularSidebarWidth,
+      compact: compact)
+  }
+}
+
+struct DSHWorkbenchSplitLayout: Equatable {
+  static let resizeHandleWidth: CGFloat = 7
+  static let regularConversationMinimum: CGFloat = 500
+  static let compactConversationMinimum: CGFloat = 420
+  static let regularWorkbenchMinimum: CGFloat = 360
+  static let compactWorkbenchMinimum: CGFloat = 300
+  static let workbenchMaximum: CGFloat = 900
+
+  let conversationWidth: CGFloat
+  let workbenchWidth: CGFloat?
+  let maximumWorkbenchWidth: CGFloat
+  let minimumWorkbenchWidth: CGFloat
+
+  static func resolve(
+    availableWidth: CGFloat,
+    compact: Bool,
+    workbenchVisible: Bool,
+    preferredWorkbenchWidth: CGFloat
+  ) -> Self {
+    let conversationMinimum = compact
+      ? compactConversationMinimum
+      : regularConversationMinimum
+    let workbenchMinimum = compact
+      ? compactWorkbenchMinimum
+      : regularWorkbenchMinimum
+    let required = conversationMinimum + resizeHandleWidth + workbenchMinimum
+    guard workbenchVisible, availableWidth >= required else {
+      return Self(
+        conversationWidth: max(0, availableWidth),
+        workbenchWidth: nil,
+        maximumWorkbenchWidth: 0,
+        minimumWorkbenchWidth: workbenchMinimum)
+    }
+    let maximumWorkbenchWidth = min(
+      workbenchMaximum,
+      availableWidth - conversationMinimum - resizeHandleWidth)
+    let workbenchWidth = min(
+      maximumWorkbenchWidth,
+      max(workbenchMinimum, preferredWorkbenchWidth))
+    return Self(
+      conversationWidth: max(
+        conversationMinimum,
+        availableWidth - resizeHandleWidth - workbenchWidth),
+      workbenchWidth: workbenchWidth,
+      maximumWorkbenchWidth: maximumWorkbenchWidth,
+      minimumWorkbenchWidth: workbenchMinimum)
+  }
+}
+
 struct ConversationWorkbenchLayout: View {
   @EnvironmentObject private var harness: HarnessController
   @AppStorage("dsh.workbench.width") private var storedWidth = 520.0
   @State private var dragOrigin: CGFloat?
+  var compact = false
 
   var body: some View {
     GeometryReader { geometry in
-      let maximum = min(900, max(360, geometry.size.width - 507))
-      let width = min(maximum, max(360, storedWidth))
+      let layout = DSHWorkbenchSplitLayout.resolve(
+        availableWidth: geometry.size.width,
+        compact: compact,
+        workbenchVisible: harness.showDetails,
+        preferredWorkbenchWidth: storedWidth)
       HStack(spacing: 0) {
         VStack(spacing: 0) {
           ConversationHeader()
           ConversationView().frame(maxWidth: .infinity, maxHeight: .infinity)
-          Composer()
+          Composer(compactControls: DSHComposerLayout.usesStackedControls(
+            availableWidth: layout.conversationWidth))
         }
-        .frame(minWidth: 500, maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: layout.conversationWidth)
+        .frame(maxHeight: .infinity)
+        .clipped()
 
-        if harness.showDetails {
+        if let workbenchWidth = layout.workbenchWidth {
           WorkbenchResizeHandle()
             .gesture(DragGesture(minimumDistance: 0)
               .onChanged { value in
-                let origin = dragOrigin ?? width
+                let origin = dragOrigin ?? workbenchWidth
                 if dragOrigin == nil { dragOrigin = origin }
-                storedWidth = min(maximum, max(360, origin - value.translation.width))
+                storedWidth = min(
+                  layout.maximumWorkbenchWidth,
+                  max(layout.minimumWorkbenchWidth, origin - value.translation.width))
               }
               .onEnded { _ in dragOrigin = nil })
           WorkbenchView()
-            .frame(width: width)
+            .frame(width: workbenchWidth)
             .transition(.opacity)
         }
       }

@@ -3,10 +3,13 @@ import SwiftUI
 struct ContentView: View {
   @EnvironmentObject private var harness: HarnessController
   var body: some View {
-    HStack(spacing: 0) {
-      Sidebar().frame(width: 290)
-      ConversationWorkbenchLayout()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    GeometryReader { geometry in
+      let layout = DSHMainWindowLayout.resolve(totalWidth: geometry.size.width)
+      HStack(spacing: 0) {
+        Sidebar().frame(width: layout.sidebarWidth)
+        ConversationWorkbenchLayout(compact: layout.compact)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
     }
     // 果冻海：窗口底是一整片海水渐变，上面的侧栏/卡片全是半透明薄层，
     // 让海水透出来 — 见 2026-08-17-jelly-sea-theme.md

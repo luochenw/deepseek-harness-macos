@@ -20,8 +20,8 @@ jobs:
         run: ./scripts/test-macos-native.sh
       - name: Unit tests (macos/DSHTests)
         run: ./scripts/test-macos-native.sh --unit
-      - name: Install DSH runtime (bundled into the build)
-        run: npm install -g @deepseek-ai/dsh@0.1.1-rc.2
+      - name: Prepare pinned latest DSH runtime
+        run: echo "DSH_SOURCE=$(DSH_RUNTIME_VERIFY_LATEST=1 ./scripts/prepare-dsh-runtime.sh)" >> "$GITHUB_ENV"
       - name: Agent Platform runtime contracts
         run: ./scripts/test-agent-platform-runtime-script.sh && ./scripts/test-agent-platform-runtime.sh
       - name: Build DeepSeek Harness.app

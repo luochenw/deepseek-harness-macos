@@ -130,15 +130,14 @@ Batch with no still-eligible member cannot request an empty integration.
 
 ## Embedded Runtime Patch
 
-`scripts/patch-agent-platform-runtime.mjs` is version-gated to DSH
-0.1.0-rc.6, 0.1.0-rc.7, and 0.1.1-rc.2 and fails the app build when expected
-source anchors drift. It adds:
+`scripts/patch-agent-platform-runtime.mjs` is version-gated to the single DSH
+release in `scripts/dsh-runtime-version.txt` and fails the app build when the
+package version or expected source anchors drift. It adds:
 
 - continuable child `cwd` override;
 - fixed child sandbox mode and Agent Preset overrides, restored on cold resume;
 - reserved child/message identities and idempotent message acceptance;
-- exact authorized `disposeContinuable` on rc.6/rc.7; rc.2 uses upstream
-  `drainContinuableChildren`;
+- exact child disposal through upstream `drainContinuableChildren`;
 - managed-child follow-up protection;
 - the replayable `agent-platform/batches` Session event;
 - default Host plugin mounting.

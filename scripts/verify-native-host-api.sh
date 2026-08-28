@@ -16,8 +16,12 @@ cleanup() {
 trap cleanup EXIT
 
 DSH_VERSION="$("$NODE" -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(p.version)' "$APP/Contents/Resources/Runtime/dsh/package.json")"
-HOST_ARGS=(web --host 127.0.0.1 --port 0)
-[[ "$DSH_VERSION" == "0.1.1-rc.2" ]] && HOST_ARGS+=(--no-open)
+EXPECTED_DSH_VERSION="$(tr -d '[:space:]' < "$ROOT/scripts/dsh-runtime-version.txt")"
+[[ "$DSH_VERSION" == "$EXPECTED_DSH_VERSION" ]] || {
+  echo "Packaged DSH runtime is $DSH_VERSION, expected $EXPECTED_DSH_VERSION." >&2
+  exit 1
+}
+HOST_ARGS=(web --host 127.0.0.1 --port 0 --no-open)
 DSH_HOME="$HOME_DIR" "$NODE" "$DSH" "${HOST_ARGS[@]}" >"$LOG" 2>&1 &
 PID=$!
 
@@ -51,7 +55,7 @@ assert_gateway() {
   assert_rpc "$method" "{\"args\":$args}" "$check"
 }
 
-assert_rpc host.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); const v=d.result?.value; if(d.type!=="server-response"||d.result?.ok!==true||typeof v?.version!=="string"||typeof v?.cwd!=="string"||(process.env.DSH_VERSION==="0.1.1-rc.2"&&typeof v.home!=="string")) process.exit(1)'
+assert_rpc host.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); const v=d.result?.value; if(d.type!=="server-response"||d.result?.ok!==true||typeof v?.version!=="string"||typeof v?.cwd!=="string"||typeof v?.home!=="string") process.exit(1)'
 assert_rpc session.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.items)) process.exit(1)'
 assert_rpc workspace.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.items)||!Array.isArray(d.result.value?.archivedSessionIds)) process.exit(1)'
 assert_rpc settings.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||typeof d.result.value?.writable!=="boolean"||!Array.isArray(d.result.value?.namespaces)) process.exit(1)'
@@ -88,11 +92,7 @@ PERMISSION_SESSION_RESPONSE="$(call session.create '{}')"
 PERMISSION_SESSION_ID="$(RESPONSE="$PERMISSION_SESSION_RESPONSE" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const id=d.result?.value?.sessionId; if(d.result?.ok!==true||typeof id!=="string") process.exit(1); process.stdout.write(id)')"
 PERMISSION_LIST="$(call session.list '{}')"
 RESPONSE="$PERMISSION_LIST" PERMISSION_SESSION_ID="$PERMISSION_SESSION_ID" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const s=d.result?.value?.items?.find(x=>x.sessionId===process.env.PERMISSION_SESSION_ID); if(d.result?.ok!==true||s?.projections?.values?.permissions?.currentValue!=="read-only") process.exit(1)'
-if [[ "$DSH_VERSION" == "0.1.1-rc.2" ]]; then
-  PERMISSION_COMMAND_ARGS="{\"agentId\":\"$PERMISSION_SESSION_ID\",\"line\":\"/permission workspace-write\",\"images\":[]}"
-else
-  PERMISSION_COMMAND_ARGS="{\"agentId\":\"$PERMISSION_SESSION_ID\",\"line\":\"/permission workspace-write\"}"
-fi
+PERMISSION_COMMAND_ARGS="{\"agentId\":\"$PERMISSION_SESSION_ID\",\"line\":\"/permission workspace-write\",\"images\":[]}"
 assert_gateway commands/execute "$PERMISSION_COMMAND_ARGS" 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||d.result.value?.result?.kind!=="success") process.exit(1)'
 PERMISSION_LIST="$(call session.list '{}')"
 RESPONSE="$PERMISSION_LIST" PERMISSION_SESSION_ID="$PERMISSION_SESSION_ID" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const s=d.result?.value?.items?.find(x=>x.sessionId===process.env.PERMISSION_SESSION_ID); if(d.result?.ok!==true||s?.projections?.values?.permissions?.currentValue!=="workspace-write") process.exit(1)'

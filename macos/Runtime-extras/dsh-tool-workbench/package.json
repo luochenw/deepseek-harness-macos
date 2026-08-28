@@ -15,6 +15,6 @@
     "check": "node --check lib/index.js && node --check lib/core.js"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.1-rc.2"
+    "@deepseek-ai/dsh-tools": "0.1.1-rc.2"
   }
 }

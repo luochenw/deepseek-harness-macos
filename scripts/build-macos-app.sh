@@ -8,19 +8,13 @@ MINIMUM_MACOS_VERSION="14.0"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos${MINIMUM_MACOS_VERSION}}"
 BUILD_ARCH="${SWIFT_TARGET%%-*}"
 
-# Auto-detected from the build machine's own toolchain; override with
-# NODE_SOURCE / DSH_SOURCE env vars if yours live somewhere nonstandard.
+# Node comes from the build machine. DSH is prepared below from the repository's
+# single pinned latest version; DSH_SOURCE is accepted only when it is that
+# exact complete runtime.
 NODE_SOURCE="${NODE_SOURCE:-$(command -v node || true)}"
-DSH_SOURCE="${DSH_SOURCE:-$(npm root -g 2>/dev/null)/@deepseek-ai/dsh}"
 
 [[ -n "$NODE_SOURCE" && -x "$NODE_SOURCE" ]] || {
   echo "Node runtime not found. Install Node.js, or set NODE_SOURCE to a node executable." >&2
-  exit 1
-}
-[[ -f "$DSH_SOURCE/lib/bin.js" ]] || {
-  echo "DSH runtime not found at: $DSH_SOURCE" >&2
-  echo "Install it with: npm install -g @deepseek-ai/dsh@0.1.1-rc.2" >&2
-  echo "...or set DSH_SOURCE to point at an existing @deepseek-ai/dsh package directory." >&2
   exit 1
 }
 NODE_EXECUTABLE="$("$NODE_SOURCE" -p 'process.execPath')"
@@ -51,6 +45,8 @@ while ! mkdir "$LOCK_DIR" 2>/dev/null; do
   sleep 2
 done
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+
+DSH_SOURCE="$(DSH_RUNTIME_VERIFY_LATEST="${DSH_RUNTIME_VERIFY_LATEST:-1}" "$ROOT/scripts/prepare-dsh-runtime.sh")"
 
 # Each run's STAGE dir has a fresh random suffix, so a run that gets killed or
 # crashes mid-build leaves its stage dir (and a dangling "$APP.previous" from
@@ -179,9 +175,9 @@ done
 shopt -u nullglob
 
 # Native extensions need narrow, version-specific embedded-Runtime changes.
-# The fail-closed patch supports rc.6, rc.7, and rc.2, mounts the Agent
-# Platform plus model-facing workbench tools, and registers the platform's
-# replayable projection event.
+# The fail-closed patch accepts only scripts/dsh-runtime-version.txt, mounts
+# the Agent Platform plus model-facing workbench tools, and registers the
+# platform's replayable projection event.
 "$NODE_SOURCE" "$ROOT/scripts/patch-agent-platform-runtime.mjs" "$RUNTIME_DSH"
 
 cd "$STAGE/Contents/Resources"
