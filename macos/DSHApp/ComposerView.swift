@@ -1,10 +1,18 @@
 import SwiftUI
 import AppKit
 
+private struct VoiceComposerTarget: Equatable {
+  let selectedSessionID: UUID?
+  let executionTarget: DSHDisplayedExecutionTarget
+}
+
 struct Composer: View {
   @EnvironmentObject var harness: HarnessController
   @FocusState private var editorFocused: Bool
+  /// dialog 路由听写开始时 VoiceController 通过它请求输入框获得焦点。
+  @ObservedObject private var voiceFocus = VoiceFocusRequest.shared
   @State private var editorContentHeight: CGFloat = 22
+  @State private var voiceTarget: VoiceComposerTarget?
   /// Draft content captured when dictation starts streaming — partials
   /// replace from here, and a cancel command restores it verbatim.
   @State private var dictationBase: String?
@@ -174,6 +182,7 @@ struct Composer: View {
                 paletteDismissed = true
                 return .handled
               }
+              if editorHasMarkedText { return .ignored }
               // 对话运行中：Esc 直接停止本轮（面板优先，其次停止）。
               guard harness.displayedIsRunning else { return .ignored }
               harness.stop()
@@ -228,52 +237,91 @@ struct Composer: View {
           // auto-sends; wake-initiated does (switchable in 设置→语音).
           VoiceInputButton(
             onPartial: { partial in
+              let currentTarget = VoiceComposerTarget(
+                selectedSessionID: harness.selectedSessionID,
+                executionTarget: harness.displayedExecutionTarget)
+              guard voiceTarget == currentTarget else { return }
               if dictationBase == nil { dictationBase = harness.draft }
               let base = dictationBase ?? ""
               harness.draft = base + (base.isEmpty ? "" : " ") + partial
             },
-            onCommit: { text, viaWake in
-              voiceDiag("[voice] commit '\(text)' viaWake=\(viaWake) autoSend=\(VoiceSettings.wakeAutoSend)")
+            onCommit: { text, viaWake, route in
+              voiceDiag("[voice] commit '\(text)' viaWake=\(viaWake) route=\(route == .dialog ? "dialog" : "background") autoSend=\(VoiceSettings.wakeAutoSend)")
               let base = dictationBase ?? harness.draft
               dictationBase = nil
+              let currentTarget = VoiceComposerTarget(
+                selectedSessionID: harness.selectedSessionID,
+                executionTarget: harness.displayedExecutionTarget)
+              let targetChanged = route == .dialog
+                && voiceTarget != nil
+                && voiceTarget != currentTarget
+              voiceTarget = nil
               // 空文本 = 放弃（取消、超时无语音、或剔除命令词后一无所剩）
               // —— 恢复实时分段覆盖前的草稿，绝不派发空任务。
               if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || VoiceSettings.isCancelCommand(text) {
-                harness.draft = base
+                if !targetChanged { harness.draft = base }
                 return
               }
-              // 唤醒 = 派活：任务进独立新会话后台执行（工作区按话里
-              // 提到的名字判定，未提及用当前工作区），不占用当前对话
-              // 和输入框；完成/待审批走系统通知。手动听写照旧只填入。
-              if viaWake, VoiceSettings.wakeAutoSend {
+              let action = targetChanged ? VoiceCommitAction.fillComposer : route.commitAction(
+                viaWake: viaWake,
+                autoSend: VoiceSettings.wakeAutoSend,
+                canSubmit: harness.composerCanSubmit,
+                canQueue: harness.displayedIsRunning && harness.composerAgentProfileID == nil
+              )
+              if targetChanged {
+                harness.status = "听写期间会话已切换，语音结果已保留在输入框"
+              }
+              switch action {
+              case .fillComposer:
+                if targetChanged {
+                  let current = harness.draft
+                  harness.draft = current + (current.isEmpty ? "" : " ") + text
+                } else {
+                  harness.draft = base + (base.isEmpty ? "" : " ") + text
+                }
+              case .submitCurrent:
+                harness.draft = base + (base.isEmpty ? "" : " ") + text
+                harness.submitComposer()
+              case .queueCurrent:
+                harness.draft = base + (base.isEmpty ? "" : " ") + text
+                harness.queueDraft()
+              case .dispatchBackground:
                 harness.draft = base
                 harness.dispatchVoiceTask(text)
-                return
               }
-              harness.draft = base + (base.isEmpty ? "" : " ") + text
             })
+            // dialog 路由听写开始：把焦点交给输入框，让语音落进正在输入的
+            // 位置（VoiceController.startListening 里发起的请求）。
+            .onChange(of: voiceFocus.requestID) { _, _ in
+              voiceTarget = VoiceComposerTarget(
+                selectedSessionID: harness.selectedSessionID,
+                executionTarget: harness.displayedExecutionTarget)
+              editorFocused = true
+            }
           Spacer()
           if harness.canUseRootSlashCatalog {
             ComposerModelMenu()
           }
-          if harness.selectedComposerAgentProfile != nil {
+          if harness.displayedIsRunning {
+            Button(action: harness.stop) { Image(systemName: "stop.fill").font(.system(size: 13)) }
+              .buttonStyle(.dshSecondary).help("停止")
+            if harness.composerAgentProfileID == nil {
+              if harness.activeSubagentAddress == nil {
+                Button(action: harness.steerDraft) { Image(systemName: "arrow.turn.down.right").font(.system(size: 13, weight: .semibold)) }
+                  .buttonStyle(.dshPrimary)
+                  .disabled(!harness.canSubmitRunningDraft)
+                  .help("插话发送：追加到当前轮")
+              }
+              Button(action: harness.queueDraft) { Image(systemName: "tray.and.arrow.down") }
+                .buttonStyle(.dshSecondary)
+                .disabled(!harness.canSubmitRunningDraft)
+                .help("排队发送：本轮结束后自动发送")
+            }
+          } else if harness.selectedComposerAgentProfile != nil {
             Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
               .buttonStyle(.dshPrimary).disabled(!harness.composerCanSubmit)
               .help("派发 Agent Batch")
-          } else if harness.displayedIsRunning {
-            Button(action: harness.stop) { Image(systemName: "stop.fill").font(.system(size: 13)) }
-              .buttonStyle(.dshSecondary).help("停止")
-            if harness.activeSubagentAddress == nil {
-              Button(action: harness.steerDraft) { Image(systemName: "arrow.turn.down.right").font(.system(size: 13, weight: .semibold)) }
-                .buttonStyle(.dshPrimary)
-                .disabled(!harness.canSubmitRunningDraft)
-                .help("插话发送：追加到当前轮")
-            }
-            Button(action: harness.queueDraft) { Image(systemName: "tray.and.arrow.down") }
-              .buttonStyle(.dshSecondary)
-              .disabled(!harness.canSubmitRunningDraft)
-              .help("排队发送：本轮结束后自动发送")
           } else {
             Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
               .buttonStyle(.dshPrimary).disabled(!harness.composerCanSubmit)

@@ -45,6 +45,7 @@ extension HarnessController {
       do {
         let models = try await hostClient.sessionModels(sessionId: sessionId)
         await MainActor.run {
+          guard self.hostCurrentSessionID == sessionId else { return }
           self.currentSessionModels = models
           self.provider = models.current.provider
           self.model = models.current.model
@@ -91,7 +92,10 @@ extension HarnessController {
     hostEvents?.stop()
     muxEvents?.stop()
     hostEvents = DSHEventSocket(baseURL: client.baseURL, path: "api/events.host", handler: { [weak self] frame in self?.consumeHostFrame(frame) }, onClosed: { [weak self] in self?.hostStatus = "Host 事件流已断开" })
-    muxEvents = DSHEventSocket(baseURL: client.baseURL, path: "api/events.mux", handler: { [weak self] frame in self?.consumeMuxFrame(frame) }, onClosed: { [weak self] in self?.hostStatus = "Host 消息流已断开" })
+    muxEvents = DSHEventSocket(baseURL: client.baseURL, path: "api/events.mux", handler: { [weak self] frame in self?.consumeMuxFrame(frame) }, onClosed: { [weak self] in
+      self?.hostStatus = "Host 消息流已断开"
+      self?.clearPendingModelWorkbenchRequests()
+    })
     hostEvents?.start()
     muxEvents?.start()
     hostStatus = "Host 事件流已重新连接"
@@ -117,8 +121,13 @@ extension HarnessController {
         let archived = Set(snapshot.archivedSessionIds)
         let visibleSessions = nextSessions.filter { !archived.contains($0.sessionId) }
         await MainActor.run {
+          self.discardArchivedWorkbenchContexts(hostSessionIDs: archived)
+          if let current = self.hostCurrentSessionID, archived.contains(current) {
+            self.clearToDefaultPage()
+          }
           self.hostSessions = visibleSessions
           self.hostWorkspaces = snapshot.items
+          self.resumePendingModelWorkbenchRequests()
           for summary in visibleSessions {
             self.rememberPermissionSelection(
               summary.projections?.values.permissions,

@@ -30,8 +30,8 @@ struct VoiceSettingsView: View {
           caption: "手动关闭唤醒词后不会再被自动开启。",
           isOn: $wakeAutoEnable)
         DSHToggleRow(
-          title: "唤醒识别的内容自动发送",
-          caption: "开启时唤醒任务派发到独立后台会话执行；关闭则只填进输入框。手动点麦克风的听写从不自动发送。",
+          title: "语音结果自动发送",
+          caption: "开启时：在对话框前（app 在前台）唤醒听写停止后自动发送到当前会话，app 在后台时派发到独立后台会话执行；关闭则只填进输入框。手动点麦克风的听写从不自动发送。",
           isOn: $wakeAutoSend)
         HStack(spacing: DSHSpace.s3) {
           VStack(alignment: .leading, spacing: 2) {

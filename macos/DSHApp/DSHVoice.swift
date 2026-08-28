@@ -170,6 +170,63 @@ enum VoiceSettings {
   }
 }
 
+// MARK: - Voice routing
+
+/// 听写结果去向。在激活（唤醒命中 / 点击麦克风）那一刻快照到
+/// VoiceController.sessionRoute，听写中途 app 状态变化不再翻转。
+enum VoiceRoute: Equatable {
+  /// 用户在对话框前（app 在最顶层）：进输入框，唤醒听写停止后自动发送到
+  /// 当前会话（运行中则排队续接）。
+  case dialog
+  /// app 在后台：不进输入框，静默派发到独立后台会话执行。
+  case background
+}
+
+enum VoiceCommitAction: Equatable {
+  case fillComposer
+  case submitCurrent
+  case queueCurrent
+  case dispatchBackground
+}
+
+extension VoiceRoute {
+  func commitAction(
+    viaWake: Bool,
+    autoSend: Bool,
+    canSubmit: Bool,
+    canQueue: Bool
+  ) -> VoiceCommitAction {
+    guard viaWake, autoSend else { return .fillComposer }
+    switch self {
+    case .background:
+      return .dispatchBackground
+    case .dialog:
+      if canSubmit { return .submitCurrent }
+      if canQueue { return .queueCurrent }
+      return .fillComposer
+    }
+  }
+}
+
+/// 判定"是否在对话框前"：app 是当前活动（最顶层）应用，且 keyWindow 不是
+/// 悬浮圈这类非激活面板（它们不会偷走激活，也不该算"在对话框前"）。
+@MainActor
+func computeVoiceRoute() -> VoiceRoute {
+  guard NSApp.isActive else { return .background }
+  guard let key = NSApp.keyWindow, !(key is NSPanel) else { return .background }
+  return .dialog
+}
+
+/// dialog 路由听写开始时，请求主窗口 composer 输入框获得焦点——语音"落进"
+/// 正在输入的位置。ComposerView 监听 requestID 变化，把焦点交给输入框。
+@MainActor
+final class VoiceFocusRequest: ObservableObject {
+  static let shared = VoiceFocusRequest()
+  @Published private(set) var requestID = 0
+  func request() { requestID += 1 }
+  private init() {}
+}
+
 // MARK: - Apple default engines
 
 /// SFSpeechRecognizer + AVAudioEngine streaming transcriber (zh_CN).
@@ -665,6 +722,8 @@ final class VoiceController: NSObject, ObservableObject {
   /// on a struct proved unreliable, and the symptom was wake dictation
   /// filling the composer without sending.
   private(set) var sessionViaWake = false
+  /// 本次听写会话的路由，startListening 调用瞬间快照（激活时刻）。
+  private(set) var sessionRoute: VoiceRoute = .dialog
 
   func startListening(viaWake: Bool = false) {
     switch state {
@@ -673,6 +732,11 @@ final class VoiceController: NSObject, ObservableObject {
     }
     voiceDiag("[voice] startListening viaWake=\(viaWake)")
     sessionViaWake = viaWake
+    // 路由在"激活瞬间"快照：唤醒词在 app 前台（对话框前）时进输入框、
+    // 后台时派发；手动点麦克风必然在对话框前，恒为 dialog。dialog 路由
+    // 顺手把输入框焦点要过来，让语音落进正在输入的位置。
+    sessionRoute = viaWake ? computeVoiceRoute() : .dialog
+    if sessionRoute == .dialog { VoiceFocusRequest.shared.request() }
     state = .requestingPermission
     Task { [weak self] in
       let speechGranted = await Self.requestSpeechAuthorization()

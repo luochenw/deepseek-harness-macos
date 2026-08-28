@@ -158,6 +158,10 @@ extension HarnessController {
     subagentPresentationState.contexts[sessionID] != nil
   }
 
+  func subagentTool(sessionID: String, callID: String) -> ToolActivity? {
+    subagentPresentationState.contexts[sessionID]?.tools.last { $0.callId == callID }
+  }
+
   @discardableResult
   func beginSubagentPresentationLoad(address: DSHSubagentAddress) -> Int {
     let state = subagentPresentationState

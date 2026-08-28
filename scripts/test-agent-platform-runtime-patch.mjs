@@ -194,6 +194,21 @@ const session = await readFile(path.join(root, "node_modules/@deepseek-ai/dsh-se
 assert.match(session, /agent-platform\/batches/);
 const web = await readFile(path.join(root, "node_modules/@deepseek-ai/dsh-web-app/cordis.patch.yml"), "utf8");
 assert.equal(web.match(/@dsh-app\/dsh-agent-platform/g)?.length, 1);
+assert.equal(web.match(/@dsh-app\/dsh-tool-workbench/g)?.length, 1);
+
+for (const [name, existing, expected] of [
+  ["platform-only", "@dsh-app/dsh-agent-platform", "@dsh-app/dsh-tool-workbench"],
+  ["workbench-only", "@dsh-app/dsh-tool-workbench", "@dsh-app/dsh-agent-platform"],
+]) {
+  const variant = await mkdtemp(path.join(os.tmpdir(), `dsh-agent-patch-${name}-`));
+  await cp(root, variant, { recursive: true });
+  const patchFile = path.join(variant, "node_modules/@deepseek-ai/dsh-web-app/cordis.patch.yml");
+  await writeFile(patchFile, `- insert:\n    - id: existing\n      name: '${existing}'\n`);
+  await patchRuntime(variant);
+  const patched = await readFile(patchFile, "utf8");
+  assert.equal(patched.match(new RegExp(existing.replaceAll("/", "\\/"), "g"))?.length, 1);
+  assert.equal(patched.match(new RegExp(expected.replaceAll("/", "\\/"), "g"))?.length, 1);
+}
 
 const mismatchedRoot = await mkdtemp(path.join(os.tmpdir(), "dsh-agent-patch-mismatch-"));
 await cp(root, mismatchedRoot, { recursive: true });

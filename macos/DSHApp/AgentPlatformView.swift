@@ -95,64 +95,6 @@ struct AgentComposerSelectionBar: View {
   }
 }
 
-struct AgentPlatformDetailsPanel: View {
-  @EnvironmentObject private var harness: HarnessController
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: DSHSpace.s3) {
-      HStack(spacing: DSHSpace.s2) {
-        if harness.detailsPanelMode == .tool {
-          Button(action: { harness.detailsPanelMode = .execution; harness.selectedTool = nil }) {
-            Image(systemName: "chevron.left")
-          }.buttonStyle(.dshGhost).help("返回执行")
-          Text("工具").font(.system(size: 13, weight: .semibold)).foregroundStyle(DSHTheme.ink)
-        } else {
-          Picker("", selection: Binding(
-            get: { harness.detailsPanelMode },
-            set: { mode in
-              harness.detailsPanelMode = mode
-              if mode == .agents { harness.refreshAgentProfiles(); harness.refreshAgentRuntimeStatuses() }
-              else { harness.refreshAgentBatches() }
-            })) {
-              Text("执行").tag(DSHAgentDetailsMode.execution)
-              Text("Agent").tag(DSHAgentDetailsMode.agents)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-        }
-        Spacer()
-        Button(action: { harness.showDetails = false }) { Image(systemName: "xmark") }
-          .buttonStyle(.dshGhost).help("关闭右栏")
-      }
-
-      switch harness.detailsPanelMode {
-      case .agents:
-        AgentPlatformProfilesView()
-      case .execution:
-        AgentPlatformExecutionView()
-      case .tool:
-        NativeDashboard()
-        if let tool = harness.selectedTool {
-          VStack(alignment: .leading, spacing: DSHSpace.s2) {
-            Label(tool.name, systemImage: toolIcon(tool.state)).foregroundStyle(DSHTheme.ink)
-            Text(tool.summary).font(.caption).foregroundStyle(DSHTheme.inkFaint)
-            ScrollView { NativeToolPresentationView(tool: tool).frame(maxWidth: .infinity, alignment: .leading) }
-          }
-        } else {
-          Spacer()
-          Text("尚未选择工具").font(.caption).foregroundStyle(DSHTheme.inkFaint).frame(maxWidth: .infinity)
-          Spacer()
-        }
-      }
-    }
-    .padding(DSHSpace.s4)
-  }
-
-  private func toolIcon(_ state: HarnessController.ToolActivity.State) -> String {
-    switch state { case .running: "hourglass"; case .succeeded: "checkmark.circle"; case .failed: "exclamationmark.triangle" }
-  }
-}
-
 struct AgentPlatformProfilesView: View {
   @EnvironmentObject private var harness: HarnessController
   @State private var removeTarget: DSHAgentProfile?

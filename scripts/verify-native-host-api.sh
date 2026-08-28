@@ -57,6 +57,16 @@ assert_rpc workspace.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.r
 assert_rpc settings.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||typeof d.result.value?.writable!=="boolean"||!Array.isArray(d.result.value?.namespaces)) process.exit(1)'
 assert_rpc llm.models '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.groups)) process.exit(1)'
 assert_rpc agentPreset.list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.presets)) process.exit(1)'
+assert_gateway pluginInventory/list '{}' 'const d=JSON.parse(process.env.RESPONSE); const p=d.result?.value?.entries?.find((x)=>x.moduleName==="@dsh-app/dsh-tool-workbench"); if(d.result?.ok!==true||p?.enabled!==true||p?.fiberPhase!=="active") process.exit(1)'
+[[ -f "$APP/Contents/Resources/Runtime/dsh/node_modules/@dsh-app/dsh-tool-workbench/package.json" ]] || {
+  echo "Packaged workbench tool plugin is missing." >&2
+  exit 1
+}
+"$NODE" -e '
+  const fs = require("node:fs");
+  const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (manifest.dependencies?.["@dsh-app/dsh-tool-workbench"] !== "0.1.0") process.exit(1);
+' "$APP/Contents/Resources/Runtime/dsh/package.json"
 # The native "无工作区" path omits cwd entirely. Keep that protocol surface
 # covered independently from the Agent Platform smoke below, whose root
 # session intentionally requires an explicit cwd.
@@ -101,7 +111,7 @@ ROOT_SESSION_ID="$(RESPONSE="$SESSION_RESPONSE" "$NODE" -e 'const d=JSON.parse(p
 FAIL_PROFILE_RESPONSE="$(call agentProfiles/save '{"args":{"profile":{"name":"Unavailable Runtime","mention":"unavailable-runtime","defaultMode":"analysis","allowModelDispatch":false,"integrationPolicy":"manual","adapters":[{"id":"missing","runtime":"missing-runtime","enabled":true}]}}}')"
 FAIL_PROFILE_ID="$(RESPONSE="$FAIL_PROFILE_RESPONSE" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const id=d.result?.value?.id; if(d.result?.ok!==true||typeof id!=="string") process.exit(1); process.stdout.write(id)')"
 BATCH_RESPONSE="$(call agentBatches/start "{\"args\":{\"profileId\":\"$FAIL_PROFILE_ID\",\"rootSessionId\":\"$ROOT_SESSION_ID\",\"initiatorSessionId\":\"$ROOT_SESSION_ID\",\"task\":\"smoke failure isolation\",\"mode\":\"analysis\",\"integrationPolicy\":\"manual\",\"source\":\"manual\"}}")"
-BATCH_ID="$(RESPONSE="$BATCH_RESPONSE" EXPECTED_CWD="$HOME_DIR" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const b=d.result?.value; const id=b?.id; if(d.result?.ok!==true||typeof id!=="string"||b.capabilitySnapshotVersion!==1||b.sourceCwd!==process.env.EXPECTED_CWD||typeof b.sandboxMode!=="string"||!Array.isArray(b.sourceToolAllowlist)) process.exit(1); process.stdout.write(id)')"
+BATCH_ID="$(RESPONSE="$BATCH_RESPONSE" EXPECTED_CWD="$HOME_DIR" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const b=d.result?.value; const id=b?.id; const tools=b?.sourceToolAllowlist; if(d.result?.ok!==true||typeof id!=="string"||b.capabilitySnapshotVersion!==1||b.sourceCwd!==process.env.EXPECTED_CWD||typeof b.sandboxMode!=="string"||!Array.isArray(tools)||!tools.includes("open_workbench_browser")||!tools.includes("open_workbench_markdown")) process.exit(1); process.stdout.write(id)')"
 for _ in $(seq 1 50); do
   BATCH_DETAIL="$(call agentBatches/detail "{\"args\":{\"batchId\":\"$BATCH_ID\"}}")"
   if RESPONSE="$BATCH_DETAIL" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const b=d.result?.value; if(d.result?.ok!==true||b?.status!=="failed"||b.runs?.length!==1||b.runs[0]?.status!=="failed"||!String(b.runs[0]?.error).includes("runtime-unavailable")) process.exit(1)'; then

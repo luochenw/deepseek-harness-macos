@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NODE="${NODE_SOURCE:-$(command -v node || true)}"
 PLUGIN="${AGENT_PLATFORM_PLUGIN_PATH:-$ROOT/macos/Runtime-extras/dsh-agent-platform}"
+WORKBENCH_PLUGIN="${WORKBENCH_PLUGIN_PATH:-$ROOT/macos/Runtime-extras/dsh-tool-workbench}"
 
 [[ -n "$NODE" && -x "$NODE" ]] || {
   echo "agent-platform-runtime: Node runtime not found. Install Node.js, or set NODE_SOURCE to a node executable." >&2
@@ -18,10 +19,16 @@ node_version="$("$NODE" -p 'process.versions.node' 2>/dev/null || true)"
   echo "agent-platform-runtime: missing plugin at $PLUGIN" >&2
   exit 1
 }
+[[ -d "$WORKBENCH_PLUGIN" ]] || {
+  echo "agent-platform-runtime: missing workbench plugin at $WORKBENCH_PLUGIN" >&2
+  exit 1
+}
 
 shopt -s nullglob
 modules=("$PLUGIN"/lib/*.js)
 tests=("$PLUGIN"/test/*.test.js)
+workbench_modules=("$WORKBENCH_PLUGIN"/lib/*.js)
+workbench_tests=("$WORKBENCH_PLUGIN"/test/*.test.js)
 shopt -u nullglob
 (( ${#modules[@]} > 0 )) || {
   echo "agent-platform-runtime: no plugin modules found in $PLUGIN/lib" >&2
@@ -31,11 +38,19 @@ shopt -u nullglob
   echo "agent-platform-runtime: no plugin tests found in $PLUGIN/test" >&2
   exit 1
 }
+(( ${#workbench_modules[@]} > 0 )) || {
+  echo "agent-platform-runtime: no plugin modules found in $WORKBENCH_PLUGIN/lib" >&2
+  exit 1
+}
+(( ${#workbench_tests[@]} > 0 )) || {
+  echo "agent-platform-runtime: no plugin tests found in $WORKBENCH_PLUGIN/test" >&2
+  exit 1
+}
 
-for module in "${modules[@]}"; do
+for module in "${modules[@]}" "${workbench_modules[@]}"; do
   "$NODE" --check "$module"
 done
-"$NODE" --test "${tests[@]}"
+"$NODE" --test "${tests[@]}" "${workbench_tests[@]}"
 DSH_SOURCE="${DSH_SOURCE:-}"
 if [[ -z "$DSH_SOURCE" ]] && command -v npm >/dev/null; then
   DSH_SOURCE="$(npm root -g 2>/dev/null || true)/@deepseek-ai/dsh"

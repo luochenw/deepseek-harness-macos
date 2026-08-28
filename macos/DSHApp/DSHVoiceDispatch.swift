@@ -1,9 +1,8 @@
 import AppKit
 import Foundation
 
-/// 语音派活：唤醒词说出的任务不进当前对话，而是派发到一个独立的后台会话
-/// 静默执行 —— 见 voice-dispatch Agent Note。工作区判定是两级方案的第一级
-/// （本地名称匹配，未命中回落当前工作区）；模型判定留给后续版本。
+/// 后台语音派活：唤醒词在 App 后台触发时，任务进入独立会话静默执行。
+/// 前台唤醒由 Composer 发送到当前会话。见 voice-dispatch Agent Note。
 extension HarnessController {
   func dispatchVoiceTask(_ instruction: String) {
     voiceDiag("[dispatch] instruction='\(instruction)' hostClient=\(hostClient == nil ? "nil" : "ok")")
@@ -52,16 +51,20 @@ extension HarnessController {
         + "\n若任务针对其中某个文件夹，请直接在对应目录执行；未提及则使用当前目录。"
     }
     Task {
+      var createdSessionID: String?
       do {
         let created = try await hostClient.createSession(cwd: cwd, agentPreset: presetId)
+        createdSessionID = created.sessionId
+        await MainActor.run {
+          self.voiceTaskSessions[created.sessionId] = String(instruction.prefix(24))
+          self.pendingVoiceTaskFocusID = created.sessionId
+        }
         if !chosenProvider.isEmpty, !chosenModel.isEmpty {
-          try? await hostClient.selectModel(sessionId: created.sessionId, provider: chosenProvider, model: chosenModel, reasoningEffort: chosenEffort)
+          _ = try? await hostClient.selectModel(sessionId: created.sessionId, provider: chosenProvider, model: chosenModel, reasoningEffort: chosenEffort)
         }
         try await hostClient.prompt(sessionId: created.sessionId, content: [.text(outgoing)])
         await MainActor.run {
           voiceDiag("[dispatch] created \(created.sessionId) cwd=\(cwd ?? "nil")")
-          self.voiceTaskSessions[created.sessionId] = String(instruction.prefix(24))
-          self.pendingVoiceTaskFocusID = created.sessionId
           self.status = "语音任务已派发到「\(targetName)」"
           self.appendSystem("语音任务已派发到「\(targetName)」，后台执行中：\(String(instruction.prefix(48)))")
           self.refreshHostSnapshots()
@@ -69,6 +72,12 @@ extension HarnessController {
       } catch {
         await MainActor.run {
           voiceDiag("[dispatch] FAILED: \(error.localizedDescription)")
+          if let createdSessionID {
+            self.voiceTaskSessions[createdSessionID] = nil
+            if self.pendingVoiceTaskFocusID == createdSessionID {
+              self.pendingVoiceTaskFocusID = nil
+            }
+          }
           // App 在前台时系统通知会被抑制、未选中会话时系统备注无处可写
           // ——失败必须在状态条上直接可见，否则表现为"说完没反应"。
           self.status = "语音任务派发失败：\(error.localizedDescription)"
@@ -101,8 +110,10 @@ extension HarnessController {
     switch kind {
     case "turn/end":
       voiceTaskSessions[sessionID] = nil
-      nativeAlerts.notifyTurnFinished(summary: "语音任务完成：\(label)。点击查看会话列表。")
-      nativeAlerts.setBadge(running: !voiceTaskSessions.isEmpty, needsAttention: true)
+      if sessionID != hostCurrentSessionID {
+        nativeAlerts.notifyTurnFinished(summary: "语音任务完成：\(label)。点击查看会话列表。")
+        nativeAlerts.setBadge(running: !voiceTaskSessions.isEmpty, needsAttention: true)
+      }
       refreshHostSnapshots()
     default:
       break

@@ -5,15 +5,8 @@ struct ContentView: View {
   var body: some View {
     HStack(spacing: 0) {
       Sidebar().frame(width: 290)
-      VStack(spacing: 0) {
-        ConversationHeader()
-        ConversationView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        Composer()
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      if harness.showDetails {
-        DetailsPanel().frame(width: 330).background(DSHTheme.surfaceTint)
-      }
+      ConversationWorkbenchLayout()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     // 果冻海：窗口底是一整片海水渐变，上面的侧栏/卡片全是半透明薄层，
     // 让海水透出来 — 见 2026-08-17-jelly-sea-theme.md

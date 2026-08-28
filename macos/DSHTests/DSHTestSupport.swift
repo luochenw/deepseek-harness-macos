@@ -25,6 +25,19 @@ func expectEqual<T: Equatable>(_ actual: T, _ expected: T, file: StaticString = 
   try expect(actual == expected, "expected \(expected), got \(actual)", file: file, line: line)
 }
 
+func expectThrows(
+  _ body: () throws -> Void,
+  file: StaticString = #filePath,
+  line: UInt = #line
+) throws {
+  do {
+    try body()
+  } catch {
+    return
+  }
+  throw TestFailure.message("\(file):\(line) — expected an error")
+}
+
 typealias NamedTest = (name: String, body: () throws -> Void)
 
 @discardableResult

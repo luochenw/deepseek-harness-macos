@@ -5,6 +5,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="${APP_PATH:-$ROOT/dist/DeepSeek Harness.app}"
 MODE="contract"
+MINIMUM_MACOS_VERSION="14.0"
+SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos${MINIMUM_MACOS_VERSION}}"
+export SWIFT_TARGET
 
 usage() {
   cat <<'EOF'
@@ -15,8 +18,10 @@ native Settings surface stays scrollable, uses visible field chrome, and does
 not restore the legacy Relay-only model entry. This includes the compile-time
 fixtures in macos/DSHApp/NativeContractCheck.swift, which exercise native RPC
 envelope, prompt, settings-patch, queue, and attachment wire types. It also
-enforces the main.swift freeze (see CLAUDE.md/AGENTS.md): main.swift may only
-shrink, never grow past its recorded baseline.
+runs Agent-platform, workbench, permission/composer, and long-conversation
+layout snapshots plus a loopback WKWebView smoke, and enforces the main.swift
+freeze (see CLAUDE.md/AGENTS.md): main.swift may only shrink, never grow past
+its recorded baseline.
 
 --smoke [APP_PATH] additionally starts the packaged DSH Host and verifies
 read/write settings, session creation without a workspace cwd, plus Agent
@@ -66,19 +71,35 @@ echo "main.swift size check: OK ($main_swift_lines/$MAIN_SWIFT_LINE_LIMIT lines)
 
 # The production build compiles this exact glob; keeping the command here avoids
 # a second source list or a synthetic test project that could drift from builds.
-swiftc -typecheck -parse-as-library "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI
+swiftc -target "$SWIFT_TARGET" -typecheck -parse-as-library "$ROOT"/macos/DSHApp/*.swift \
+  -framework AppKit -framework SwiftUI -framework WebKit
 plutil -lint "$ROOT/macos/DSHApp/Info.plist" >/dev/null
 "$ROOT/scripts/test-settings-ui.sh"
 bash "$ROOT/scripts/test-agent-platform-ui.sh"
 bash "$ROOT/scripts/test-attachment-rail-ui.sh"
 bash "$ROOT/scripts/test-tool-presentation-ui.sh"
 bash "$ROOT/scripts/test-subagent-context-ui.sh"
+bash "$ROOT/scripts/test-workbench-ui.sh"
 bash "$ROOT/scripts/test-permission-composer-ui.sh"
+bash "$ROOT/scripts/test-conversation-window-ui.sh"
 echo "native-contract: OK"
 
 if [[ "$MODE" == "smoke" ]]; then
   [[ -x "$APP/Contents/MacOS/node" ]] || { echo "Packaged Node runtime is missing: $APP" >&2; exit 1; }
   [[ -f "$APP/Contents/Resources/Runtime/dsh/lib/bin.js" ]] || { echo "Packaged DSH runtime is missing: $APP" >&2; exit 1; }
+  [[ -f "$APP/Contents/Resources/Licenses/DeepSeek-Harness-LICENSE" ]] || { echo "Project license is missing from the app bundle: $APP" >&2; exit 1; }
+  [[ -f "$APP/Contents/Resources/Licenses/THIRD_PARTY_NOTICES.md" ]] || { echo "Third-party notices are missing from the app bundle: $APP" >&2; exit 1; }
+  [[ -f "$APP/Contents/Resources/Licenses/Node.js-LICENSE" ]] || { echo "Node.js license is missing from the app bundle: $APP" >&2; exit 1; }
+  [[ -f "$APP/Contents/Resources/Licenses/sharp-libvips-LICENSE" ]] || { echo "sharp-libvips license is missing from the app bundle: $APP" >&2; exit 1; }
+  [[ -f "$APP/Contents/Resources/Licenses/sharp-libvips-THIRD-PARTY-NOTICES.md" ]] || { echo "sharp-libvips notices are missing from the app bundle: $APP" >&2; exit 1; }
+  [[ -f "$APP/Contents/Resources/Licenses/LGPL-3.0.txt" ]] || { echo "GNU LGPLv3 text is missing from the app bundle: $APP" >&2; exit 1; }
+  [[ -f "$APP/Contents/Resources/Licenses/GPL-3.0.txt" ]] || { echo "GNU GPLv3 text is missing from the app bundle: $APP" >&2; exit 1; }
+  [[ -f "$APP/Contents/Resources/Runtime/dsh/LICENSE" ]] || { echo "DSH license is missing from the app bundle: $APP" >&2; exit 1; }
+  app_minos="$(xcrun vtool -show-build "$APP/Contents/MacOS/DSH" | awk '/minos / { print $2; exit }')"
+  [[ "$app_minos" == "$MINIMUM_MACOS_VERSION" ]] || {
+    echo "Packaged app minimum macOS version is $app_minos, expected $MINIMUM_MACOS_VERSION." >&2
+    exit 1
+  }
   "$ROOT/scripts/verify-native-host-api.sh" "$APP"
 fi
 
@@ -90,11 +111,11 @@ if [[ "$MODE" == "unit" ]]; then
   # instead of an app executable — main.swift's own @main entry point never
   # gets linked into an executable here, so it can't collide with the test
   # runner's @main below.
-  swiftc -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
+  swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
     -o "$UNIT_DIR/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-    "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI
-  swiftc -parse-as-library -I "$UNIT_DIR" -L "$UNIT_DIR" -lDSHAppLib \
+    "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
+  swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$UNIT_DIR" -L "$UNIT_DIR" -lDSHAppLib \
     -o "$UNIT_DIR/dsh-unit-tests" \
-    "$ROOT"/macos/DSHTests/*.swift -framework AppKit -framework SwiftUI
+    "$ROOT"/macos/DSHTests/*.swift -framework AppKit -framework SwiftUI -framework WebKit
   DYLD_LIBRARY_PATH="$UNIT_DIR" "$UNIT_DIR/dsh-unit-tests"
 fi

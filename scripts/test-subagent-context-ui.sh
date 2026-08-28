@@ -76,6 +76,10 @@ grep -q 'harness.displayedQueuedItems' "$QUEUE_DOCK" || {
   echo "subagent-context-ui: queue dock is still root-scoped" >&2
   exit 1
 }
+grep -q 'displayedQueueItems.filter' "$PROJECTIONS" || {
+  echo "subagent-context-ui: queued/steering filters bypass displayed child context" >&2
+  exit 1
+}
 grep -q 'harness.canMutateDisplayedQueue' "$QUEUE_DOCK" || {
   echo "subagent-context-ui: child queue mutation controls are still visible" >&2
   exit 1

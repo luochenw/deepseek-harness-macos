@@ -32,10 +32,36 @@ private func testIsCancelCommand_rejectsEmbeddedCancelPhrase() throws {
   try expect(!VoiceSettings.isCancelCommand("算了吧，继续写"))
 }
 
+private func testVoiceRoute_commitActionRespectsForegroundAndAutoSend() throws {
+  try expectEqual(
+    VoiceRoute.dialog.commitAction(viaWake: true, autoSend: true, canSubmit: true, canQueue: false),
+    .submitCurrent)
+  try expectEqual(
+    VoiceRoute.dialog.commitAction(viaWake: true, autoSend: true, canSubmit: false, canQueue: true),
+    .queueCurrent)
+  try expectEqual(
+    VoiceRoute.background.commitAction(viaWake: true, autoSend: true, canSubmit: false, canQueue: false),
+    .dispatchBackground)
+}
+
+private func testVoiceRoute_commitActionKeepsTextWhenAutoSendIsOff() throws {
+  try expectEqual(
+    VoiceRoute.background.commitAction(viaWake: true, autoSend: false, canSubmit: false, canQueue: false),
+    .fillComposer)
+  try expectEqual(
+    VoiceRoute.dialog.commitAction(viaWake: false, autoSend: true, canSubmit: true, canQueue: false),
+    .fillComposer)
+  try expectEqual(
+    VoiceRoute.dialog.commitAction(viaWake: true, autoSend: true, canSubmit: false, canQueue: false),
+    .fillComposer)
+}
+
 let dshVoiceTests: [NamedTest] = [
   ("VoiceSettings.normalizedForWakeMatch folds fullwidth/case/punctuation", testNormalizedForWakeMatch_foldsFullwidthPunctuationAndCase),
   ("VoiceSettings.strippingTrailingEndPhrase strips known phrase", testStrippingTrailingEndPhrase_stripsKnownPhraseAndPunctuation),
   ("VoiceSettings.strippingTrailingEndPhrase leaves non-matching text alone", testStrippingTrailingEndPhrase_noMatchReturnsOriginalUnchanged),
   ("VoiceSettings.isCancelCommand matches whole-utterance phrase", testIsCancelCommand_matchesWholeUtteranceCancelPhrase),
   ("VoiceSettings.isCancelCommand rejects embedded phrase", testIsCancelCommand_rejectsEmbeddedCancelPhrase),
+  ("VoiceRoute routes foreground and background auto-send", testVoiceRoute_commitActionRespectsForegroundAndAutoSend),
+  ("VoiceRoute preserves text when auto-send is off", testVoiceRoute_commitActionKeepsTextWhenAutoSendIsOff),
 ]

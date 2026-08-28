@@ -54,6 +54,7 @@ const PLATFORM_CHILD_LABEL_PREFIX = "__dsh_agent_platform__:";
 const ANALYSIS_SAFE_TOOLS = [
   "read", "read_image", "glob", "grep", "web_search", "web_fetch",
   "skill", "ask_user_question", "get_goal",
+  "open_workbench_browser", "open_workbench_markdown",
 ];
 
 function remoteInitializers(klass, methods) {

@@ -79,7 +79,8 @@ extension HarnessController {
               self.clearPendingLocalUserMessage(localSessionID: localSessionID, messageID: pendingMessageID)
               if let output = execution.result.text, !output.isEmpty {
                 self.appendSystem(execution.succeeded ? output : "命令失败：\(output)", to: localSessionID)
-              } else if self.selectedSessionID == localSessionID {
+              } else if self.selectedSessionID == localSessionID,
+                        self.hostCurrentSessionID == hostSessionID {
                 self.status = execution.succeeded ? "命令已执行" : "命令执行失败"
               }
               // Command execution isn't a turn — no `turn/end` event will
@@ -141,7 +142,8 @@ extension HarnessController {
         if let image, let bytes = try? Data(contentsOf: image.url) { content.append(.image(data: bytes.base64EncodedString(), mediaType: image.mediaType, name: image.url.lastPathComponent)) }
         try await hostClient.prompt(sessionId: hostSessionID, content: content)
         await MainActor.run {
-          if self.selectedSessionID == localSessionID {
+          if self.selectedSessionID == localSessionID,
+             self.hostCurrentSessionID == hostSessionID {
             self.status = "已交给持久 Host；等待事件流接入"
           }
         }
@@ -199,5 +201,5 @@ extension HarnessController {
   /// is the only place it's asked to stop. `deinit` firing is not reliable
   /// for a GUI app's actual quit path, so `applicationWillTerminate` (wired
   /// in DSHNativeApp) calls this explicitly.
-  func stopForTermination() { hostRuntime?.stop() }
+  func stopForTermination() { shutdownWorkbench(); hostRuntime?.stop() }
 }

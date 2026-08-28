@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 
 const ANALYSIS_TOOLS = {
-  dsh: ["read", "read_image", "glob", "grep", "web_search", "web_fetch", "skill", "ask_user_question", "get_goal"],
+  dsh: [
+    "read", "read_image", "glob", "grep", "web_search", "web_fetch",
+    "skill", "ask_user_question", "get_goal",
+    "open_workbench_browser", "open_workbench_markdown",
+  ],
   "claude-code": ["Read", "Grep", "Glob", "WebFetch", "WebSearch"],
   zcode: ["Read", "Grep", "Glob", "WebFetch", "WebSearch"],
 };

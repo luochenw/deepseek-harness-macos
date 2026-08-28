@@ -117,8 +117,9 @@ private func testBusySubmission_requiresPlainComposerMode() throws {
     harness.isRunning = true
     harness.draft = "补充约束"
     harness.composerAgentProfileID = "profile-1"
-    try expect(!harness.submitBusyComposer(accelerated: false))
+    try expect(harness.submitBusyComposer(accelerated: false))
     try expectEqual(harness.draft, "补充约束")
+    try expectEqual(harness.status, "当前会话运行中，暂不能派发 Agent Batch")
   }
 }
 

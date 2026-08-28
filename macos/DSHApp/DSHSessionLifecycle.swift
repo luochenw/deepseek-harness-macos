@@ -1,6 +1,29 @@
 import Foundation
 
 extension HarnessController {
+  func resetRootSessionPresentationState() {
+    activeTools = []
+    subagents = []
+    skills = []
+    workflows = []
+    selectedWorkflowRunID = nil
+    hostCommands = []
+    messageFeedback = [:]
+    historyHasMore = false
+    historyOldestSeq = nil
+    todos = []
+    hostPlanActive = false
+    goal = nil
+    tokenUsage = nil
+    contextPressure = nil
+    sessionStats = nil
+    queueItems = []
+    runNotice = nil
+    retryNotice = nil
+    currentSessionModels = nil
+    resetAgentSessionState()
+  }
+
   /// "新会话" / ⌘N only returns to the default page. The first submitted
   /// message or Agent Batch lazily creates the durable Host session.
   func newSession() {
@@ -17,7 +40,7 @@ extension HarnessController {
     ])
     sessions.insert(session, at: 0)
     selectedSessionID = session.id
-    selectedTool = nil
+    migrateDefaultWorkbenchContext(to: session.id)
     invalidateRootHistoryRequests()
     invalidateSubagentPresentationLoad()
     activeSubagentAddress = nil
@@ -28,26 +51,16 @@ extension HarnessController {
   }
 
   func clearToDefaultPage() {
+    pauseWorkbenchMedia()
     invalidateRootHistoryRequests()
     invalidateSubagentPresentationLoad()
+    resetRootSessionPresentationState()
     hostCurrentSessionID = nil
     selectedSessionID = nil
-    selectedTool = nil
     activeSubagentAddress = nil
     subagentPath = []
     subagentTranscript = nil
-    selectedWorkflowRunID = nil
     isRunning = false
-    todos = []
-    hostPlanActive = false
-    goal = nil
-    tokenUsage = nil
-    contextPressure = nil
-    sessionStats = nil
-    queueItems = []
-    runNotice = nil
-    retryNotice = nil
-    resetAgentSessionState()
   }
 
   /// Bind Host creation to one exact local row. Session switching while the
@@ -66,6 +79,7 @@ extension HarnessController {
             self.sessions[index].hostSessionId = created.sessionId
             self.sessions[index].messages = [Message(role: .system, text: "已连接到持久 DSH 会话。")]
           }
+          self.migrateWorkbenchContext(localSessionID: localSessionID, hostSessionID: created.sessionId)
           if self.selectedSessionID == localSessionID {
             self.hostCurrentSessionID = created.sessionId
           }
@@ -100,13 +114,16 @@ extension HarnessController {
   }
 
   func selectSession(_ id: UUID) {
+    pauseWorkbenchMedia()
     invalidateRootHistoryRequests()
     invalidateSubagentPresentationLoad()
+    if selectedSessionID != id { resetRootSessionPresentationState() }
     activeSubagentAddress = nil
     subagentPath = []
     subagentTranscript = nil
     selectedSessionID = id
     if let index = sessions.firstIndex(where: { $0.id == id }) {
+      hostCurrentSessionID = sessions[index].hostSessionId
       sessions[index].hasUnread = false
       isRunning = sessions[index].isRunning
     }

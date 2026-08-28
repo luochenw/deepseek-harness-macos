@@ -87,6 +87,7 @@ extension HarnessController {
         try await hostClient.archiveSession(sessionId)
         await MainActor.run {
           self.status = "会话已删除（可在归档中找回）"
+          self.discardWorkbenchContext(hostSessionID: sessionId)
           if self.hostCurrentSessionID == sessionId { self.clearToDefaultPage() }
           self.refreshHostSnapshots()
         }
@@ -101,26 +102,30 @@ extension HarnessController {
         try await hostClient.archiveSession(sessionId)
         await MainActor.run {
           self.status = "会话已归档"
+          self.discardWorkbenchContext(hostSessionID: sessionId)
           self.refreshHostSnapshots()
-          self.clearToDefaultPage()
+          if self.hostCurrentSessionID == sessionId { self.clearToDefaultPage() }
         }
       } catch { await MainActor.run { self.appendSystem("归档会话失败：\(error.localizedDescription)") } }
     }
   }
 
   func openHostSession(_ summary: DSHSessionSummary) {
+    pauseWorkbenchMedia()
     invalidateRootHistoryRequests()
     invalidateSubagentPresentationLoad()
+    if hostCurrentSessionID != summary.sessionId { resetRootSessionPresentationState() }
     hostCurrentSessionID = summary.sessionId
     activeSubagentAddress = nil
     subagentPath = []
     subagentTranscript = nil
-    selectedWorkflowRunID = nil
     // Durable host-id match first; the legacy title+workspace pair only
     // rescues rows created before the id existed (renames broke it).
     if let existing = sessions.firstIndex(where: { $0.hostSessionId == summary.sessionId })
       ?? sessions.firstIndex(where: { $0.hostSessionId == nil && $0.title == summary.title && $0.workspaceName == (summary.cwd ?? "") }) {
+      let localSessionID = sessions[existing].id
       sessions[existing].hostSessionId = summary.sessionId
+      migrateWorkbenchContext(localSessionID: localSessionID, hostSessionID: summary.sessionId)
       sessions[existing].hasUnread = false
       selectedSessionID = sessions[existing].id
       // Re-selecting an already-open row previously kept every

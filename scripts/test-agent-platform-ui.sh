@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
 VIEW="$ROOT/macos/DSHApp/AgentPlatformView.swift"
 WIRE="$ROOT/macos/DSHApp/DSHAgentPlatform.swift"
 COMPOSER="$ROOT/macos/DSHApp/ComposerView.swift"
@@ -29,15 +30,15 @@ grep -q 'ns: "agentProfiles", method: "list"' "$WIRE" || { echo "agent-platform-
 grep -q 'ns: "agentProfiles", method: "runtimeStatus"' "$WIRE" || { echo "agent-platform-ui: runtime status gateway call is missing" >&2; exit 1; }
 grep -q 'profileSnapshot' "$WIRE" || { echo "agent-platform-ui: historical profile snapshot is missing" >&2; exit 1; }
 grep -q 'integrationSummary' "$WIRE" || { echo "agent-platform-ui: integration evidence is missing" >&2; exit 1; }
-swiftc "$POLICY" "$POLICY_FIXTURE" -o "$POLICY_BIN"
+swiftc -target "$SWIFT_TARGET" "$POLICY" "$POLICY_FIXTURE" -o "$POLICY_BIN"
 "$POLICY_BIN"
 rm -rf "$SNAPSHOT_DIR"
-swiftc -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
+swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
   -o "$SNAPSHOT_BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI
-swiftc -parse-as-library -I "$SNAPSHOT_BUILD" -L "$SNAPSHOT_BUILD" -lDSHAppLib \
+  "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
+swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$SNAPSHOT_BUILD" -L "$SNAPSHOT_BUILD" -lDSHAppLib \
   -o "$SNAPSHOT_BUILD/agent-platform-snapshot-check" \
-  "$SNAPSHOT_FIXTURE" -framework AppKit -framework SwiftUI
+  "$SNAPSHOT_FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit
 DYLD_LIBRARY_PATH="$SNAPSHOT_BUILD" "$SNAPSHOT_BUILD/agent-platform-snapshot-check" "$SNAPSHOT_DIR"
 
 echo "agent-platform-ui: OK"

@@ -136,8 +136,16 @@ extension HarnessController {
     Task {
       do {
         let result = try await hostClient.skills(sessionId: sessionId)
-        await MainActor.run { self.skills = result }
-      } catch { await MainActor.run { self.skills = [] } }
+        await MainActor.run {
+          guard self.hostCurrentSessionID == sessionId else { return }
+          self.skills = result
+        }
+      } catch {
+        await MainActor.run {
+          guard self.hostCurrentSessionID == sessionId else { return }
+          self.skills = []
+        }
+      }
     }
   }
 
@@ -146,7 +154,14 @@ extension HarnessController {
   /// ApiProxy layer — see DSHTypertGateway.swift.
   func loadCommands(sessionId: String) {
     guard let hostClient else { return }
-    Task { if let commands = try? await hostClient.listCommands(sessionId: sessionId) { await MainActor.run { self.hostCommands = commands } } }
+    Task {
+      if let commands = try? await hostClient.listCommands(sessionId: sessionId) {
+        await MainActor.run {
+          guard self.hostCurrentSessionID == sessionId else { return }
+          self.hostCommands = commands
+        }
+      }
+    }
   }
 
   /// Re-pull the slash palette's two catalogs for the current session.
@@ -163,7 +178,10 @@ extension HarnessController {
     guard let hostClient else { return }
     Task {
       if let items = try? await hostClient.messageFeedback(sessionId: sessionId) {
-        await MainActor.run { self.messageFeedback = Dictionary(uniqueKeysWithValues: items.map { ($0.messageId, $0) }) }
+        await MainActor.run {
+          guard self.hostCurrentSessionID == sessionId else { return }
+          self.messageFeedback = Dictionary(uniqueKeysWithValues: items.map { ($0.messageId, $0) })
+        }
       }
     }
   }
@@ -229,12 +247,6 @@ extension HarnessController {
           else { return }
           self.sessions[index].messages = folded.messages.isEmpty ? [Message(role: .system, text: "这个会话还没有可显示的消息。")] : folded.messages
           self.activeTools = folded.tools
-          if let selected = self.selectedTool,
-             let refreshed = folded.tools.last(where: { $0.callId == selected.callId }) {
-            self.selectedTool = refreshed
-          } else {
-            self.selectedTool = folded.tools.first
-          }
           self.historyHasMore = page.hasMore
           self.historyOldestSeq = page.events.map { $0.event.seq }.min()
           self.sessions[index].updatedAt = Date()
@@ -262,6 +274,7 @@ extension HarnessController {
           let before = historyOldestSeq, historyHasMore,
           let localSessionID = selectedSessionID
     else { return }
+    let restoreAnchor = displayedWindowMessages.first?.id
     let generation = beginRootHistoryRequest(
       sessionID: sessionId,
       localSessionID: localSessionID)
@@ -277,6 +290,9 @@ extension HarnessController {
             let index = self.sessions.firstIndex(where: { $0.id == localSessionID })
           else { return }
           self.sessions[index].messages = older.messages + self.sessions[index].messages
+          self.prepareDisplayedConversationForPrepend(
+            insertedCount: older.messages.count,
+            anchorMessageID: restoreAnchor)
           for tool in older.tools
           where !self.activeTools.contains(where: { $0.callId == tool.callId }) {
             self.activeTools.append(tool)
@@ -304,7 +320,6 @@ extension HarnessController {
   func foldHistory(_ entries: [DSHHistoryEntry]) -> [Message] {
     let folded = foldHistoryContent(entries)
     activeTools = folded.tools
-    if selectedTool == nil { selectedTool = activeTools.first }
     return folded.messages
   }
 

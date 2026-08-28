@@ -71,6 +71,18 @@ grep -Fq 'libnode*.dylib' "$BUILD" || {
   echo "agent-platform-runtime-script: build must detect libnode dynamic libraries" >&2
   exit 1
 }
+grep -Fq 'cp "$NODE_EXECUTABLE"' "$BUILD" || {
+  echo "agent-platform-runtime-script: build must copy the resolved Node executable, not a shim" >&2
+  exit 1
+}
+grep -Fq 'swiftc -target "$SWIFT_TARGET"' "$BUILD" || {
+  echo "agent-platform-runtime-script: build must pin the supported macOS deployment target" >&2
+  exit 1
+}
+grep -Fq '@dsh-app/dsh-tool-workbench' "$ROOT/scripts/patch-agent-platform-runtime.mjs" || {
+  echo "agent-platform-runtime-script: native workbench tools are not mounted into the Host runtime" >&2
+  exit 1
+}
 
 grep -Fq 'npm install -g @deepseek-ai/dsh@0.1.1-rc.2' "$CI" || {
   echo "agent-platform-runtime-script: CI must pin DSH to the runtime-patch support boundary" >&2

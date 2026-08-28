@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
 PERMISSIONS="$ROOT/macos/DSHApp/DSHPermissions.swift"
 SUBMISSION="$ROOT/macos/DSHApp/DSHComposerSubmission.swift"
 COMPOSER="$ROOT/macos/DSHApp/ComposerView.swift"
@@ -74,12 +75,12 @@ grep -q 'confirmationDialog' "$ROOT/macos/DSHApp/PermissionViews.swift" || {
 }
 
 rm -rf "$SNAPSHOT_DIR"
-swiftc -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
+swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
   -o "$BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI
-swiftc -parse-as-library -I "$BUILD" -L "$BUILD" -lDSHAppLib \
+  "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
+swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$BUILD" -L "$BUILD" -lDSHAppLib \
   -o "$BUILD/permission-composer-snapshot-check" \
-  "$FIXTURE" -framework AppKit -framework SwiftUI
+  "$FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit
 DYLD_LIBRARY_PATH="$BUILD" "$BUILD/permission-composer-snapshot-check" "$SNAPSHOT_DIR"
 
 echo "permission-composer-ui: OK"

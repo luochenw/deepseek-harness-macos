@@ -365,15 +365,25 @@ function createContinuableMessage(content, source, messageId) {
 
   const webPatch = path.join(runtimeRoot, "node_modules/@deepseek-ai/dsh-web-app/cordis.patch.yml");
   await patchFile(webPatch, (source) => {
-    if (source.includes("@dsh-app/dsh-agent-platform")) return source;
-    return `${source.trimEnd()}
-
-# Native macOS unified Agent Profile / Runtime / Batch coordinator.
+    const additions = [];
+    if (!source.includes("@dsh-app/dsh-agent-platform")) {
+      additions.push(`# Native macOS unified Agent Profile / Runtime / Batch coordinator.
 - insert:
     - id: dsh-agent-platform
       name: '@dsh-app/dsh-agent-platform'
       config:
-        root: !!js dshHomePath('agent-platform')
+        root: !!js dshHomePath('agent-platform')`);
+    }
+    if (!source.includes("@dsh-app/dsh-tool-workbench")) {
+      additions.push(`# Model-facing requests for native workbench browser and Markdown tabs.
+- insert:
+    - id: dsh-tool-workbench
+      name: '@dsh-app/dsh-tool-workbench'`);
+    }
+    if (additions.length === 0) return source;
+    return `${source.trimEnd()}
+
+${additions.join("\n\n")}
 `;
   });
 }

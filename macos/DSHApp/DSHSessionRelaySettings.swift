@@ -8,7 +8,7 @@ import Foundation
 /// 用户手改 patch 文件产生状态漂移（这份文件里可能还有用户自己写的
 /// provider 配置，写入/移除时只动标记内的区块，其余内容原样保留）。
 ///
-/// 见 .agents/notes/proposed/feature/2026-08-17-cross-session-relay.md
+/// 见 .agents/notes/implemented/feature/2026-08-17-cross-session-relay.md
 enum SessionRelaySettings {
   private static let beginMarker = "# --- dsh-tool-session-relay: begin (managed by DeepSeek Harness settings, do not edit by hand) ---"
   private static let endMarker = "# --- dsh-tool-session-relay: end ---"

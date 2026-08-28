@@ -28,6 +28,23 @@ private func profileFixture(id: String = "profile-1", mention: String = "reviewe
     ])
 }
 
+private func batchFixture(id: String = "batch-old", rootSessionID: String = "root-old") throws -> DSHAgentBatch {
+  let json = """
+  {
+    "id":"\(id)",
+    "rootSessionId":"\(rootSessionID)",
+    "profileName":"Old Agent",
+    "task":"Old task",
+    "mode":"analysis",
+    "integrationPolicy":"manual",
+    "status":"running",
+    "createdAt":1,
+    "runs":[]
+  }
+  """
+  return try JSONDecoder().decode(DSHAgentBatch.self, from: Data(json.utf8))
+}
+
 private func testMentionMatcher_findsTrailingProfileToken() throws {
   let draft = "检查这个实现 @rev"
   guard let query = DSHAgentMentionMatcher.query(in: draft) else {
@@ -232,6 +249,62 @@ private func testBatchStartEncodesModeAndIntegrationOverride() throws {
   try expectEqual(object?["source"] as? String, "composer")
 }
 
+private func testSessionSwitchClearsAgentExecutionState() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let old = HarnessController.Session(
+      title: "Old",
+      workspaceName: "workspace",
+      updatedAt: Date(),
+      messages: [],
+      hostSessionId: "root-old")
+    let next = HarnessController.Session(
+      title: "Next",
+      workspaceName: "workspace",
+      updatedAt: Date(),
+      messages: [],
+      hostSessionId: "root-next")
+    harness.sessions = [old, next]
+    harness.selectedSessionID = old.id
+    harness.hostCurrentSessionID = "root-old"
+    harness.agentBatches = [try batchFixture()]
+    harness.selectedAgentBatchID = "batch-old"
+    harness.selectedAgentRunID = "run-old"
+    harness.selectedAgentRunLog = [
+      DSHAgentRunLogEntry(seq: 1, time: 1, stream: "stdout", text: "old"),
+    ]
+    harness.agentRunLogHasMore = true
+    harness.agentIntegrationRequests = ["batch-old"]
+    harness.activeTools = [
+      HarnessController.ToolActivity(
+        callId: "old-tool",
+        name: "Read",
+        summary: "done",
+        state: .succeeded,
+        output: "old",
+        presentation: nil),
+    ]
+    harness.workflows = [
+      HarnessController.WorkflowRun(
+        id: "old-workflow",
+        parentSessionId: "root-old",
+        name: "Old workflow"),
+    ]
+
+    harness.selectSession(next.id)
+
+    try expectEqual(harness.hostCurrentSessionID, "root-next")
+    try expect(harness.agentBatches.isEmpty)
+    try expect(harness.selectedAgentBatchID == nil)
+    try expect(harness.selectedAgentRunID == nil)
+    try expect(harness.selectedAgentRunLog.isEmpty)
+    try expect(!harness.agentRunLogHasMore)
+    try expect(harness.agentIntegrationRequests.isEmpty)
+    try expect(harness.activeTools.isEmpty)
+    try expect(harness.workflows.isEmpty)
+  }
+}
+
 let dshAgentPlatformTests: [NamedTest] = [
   ("Agent mention matcher finds trailing token", testMentionMatcher_findsTrailingProfileToken),
   ("Agent mention matcher ignores completed token", testMentionMatcher_ignoresCompletedToken),
@@ -241,4 +314,5 @@ let dshAgentPlatformTests: [NamedTest] = [
   ("Agent Profile draft preserves default task", testProfileDraft_preservesDefaultTask),
   ("Agent Batch decodes snapshots and integration evidence", testBatchDecodesHistoricalSnapshotsAndIntegrationEvidence),
   ("Agent Batch start encodes per-run overrides", testBatchStartEncodesModeAndIntegrationOverride),
+  ("Session switch clears Agent execution state", testSessionSwitchClearsAgentExecutionState),
 ]

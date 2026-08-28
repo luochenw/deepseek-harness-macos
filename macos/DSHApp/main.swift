@@ -27,6 +27,7 @@ struct DSHNativeApp: App {
     // Traffic lights float over the sidebar's padded top row.
     .windowStyle(.hiddenTitleBar)
     .commands {
+      WorkbenchCommands(controller: controller)
       CommandGroup(after: .newItem) {
         Button("新会话") { controller.newSession() }.keyboardShortcut("n", modifiers: .command)
         Button("选择工作区…") { controller.chooseWorkspace() }.keyboardShortcut("w", modifiers: .command)
@@ -286,7 +287,6 @@ final class HarnessController: ObservableObject {
   @Published var searchResults: [DSHSessionSearchItem] = []
   @Published var searchHasMore = false
   @Published var showDetails = false
-  @Published var selectedTool: ToolActivity?
   @Published var provider = ""
   @Published var model = ""
   @Published var reasoningEffort = "high"

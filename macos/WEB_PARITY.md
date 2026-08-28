@@ -8,11 +8,11 @@ Last audited against the installed DSH Web Host API and the web bundle compositi
 |---|---|---|
 | Workspaces and persistent sessions | Implemented with native workspace create/rename/delete | `workspace.list`, `session.list`, `session.create`, host events |
 | Session search, rename, fork, archive | Implemented | `session.search`, `session.rename`, `session.fork`, `workspace.archiveSession` |
-| Conversation history and streaming | Implemented with reasoning, retry, compaction, pagination and trajectory baseline | `session.history`, `events.mux` |
+| Conversation history and streaming | Implemented with reasoning, retry, compaction, pagination, anchored 240-message render windows and a 2,000-message nonblank snapshot gate | `session.history`, `events.mux` |
 | Prompt, queue, cancel | Implemented with separate running-state Queue/Steer actions, configurable busy-Enter behavior, pending steering bubbles, queue edit/remove/steer, and cancel | `session.prompt`, `session.cancel`, `session/queue`, `ui-conversation` settings |
 | Images | Implemented send, durable history ref, Host retrieval and automatic native preview | `session.prompt` image content block |
 | Slash commands, message feedback, plugin inventory | Keyboard-driven `/` menu (↑/↓ select, Tab complete, Enter run, Esc dismiss) listing the host command roster plus the session's skills (prefix-matched, command names shadow, `仅手动` badge for user-only skills), subsequence fuzzy matching with prefix-first ranking for commands, dispatch via the native Typert Gateway client; `/export` routes to the native `session.export` download (the registry handler is a web-plugin stub) and `/model` opens the composer's model picker (client-plane command upstream). Per-message thumbs up/down and a read-only plugin-inventory list in Settings | `commands/list`, `commands/execute`, `skill.list`, `messageFeedback/*`, `pluginInventory/list` |
-| Tool and job state | Implemented callId-correlated Host render-intent cards in both the transcript and DetailsPanel, including bounded terminal/diff/read/search/web/generic output plus delivered file open/reveal controls | `tool/*`, `session/jobs`, `host.openPath` |
+| Tool and job state | Implemented callId-correlated Host render-intent cards in both the transcript and workbench tool tabs, including bounded terminal/diff/read/search/web/generic output plus delivered file open/reveal controls | `tool/*`, `session/jobs`, `host.openPath` |
 | Todo, plan, goal | Todo list, Host-driven plan mode (`plan.active`, not a local toggle), and a composer-docked goal bar (objective, phase, round progress, pause/resume/complete/clear) implemented. When a child transcript is open, these projections are child-scoped and Goal/plan/queue mutations remain unavailable because the Host rejects session-backed child Goal writes | session projections, `goal.*`, Typert `commands/execute` |
 | Approval and questions | Implemented with a backlog queue (a second request no longer overwrites the one already showing), "always allow this session," and defer/recall for questions | answerable mux frames and `/api/respond` |
 | Subagents | Catalog, nested history navigation, continuable prompt (text and image) and interrupt implemented. A subagent transcript is a dedicated overlay on the conversation pane (not a synthetic top-level session), with isolated tool/Todo/Goal/plan/queue projections and stale-response guards; one-shot transcripts remain read-only while continuable transcripts support prompt and interrupt | `subagent.list`, `subagent.history`, `subagent.prompt`, `subagent.interrupt` |
@@ -20,9 +20,9 @@ Last audited against the installed DSH Web Host API and the web bundle compositi
 | Models and credentials | Catalog/status/session selection, dynamic credential references, and revisioned custom endpoint authoring implemented; legacy route IDs remain compatible but are not a required product entry | `llm.models`, `credentials.describe`, `session.selectModel` |
 | Agent presets | Roster/select implemented | `agentPreset.list`, `agentPreset.select` |
 | Permission presets | Current-session menu reads the dynamic `permissions` projection and writes through `/permission`; Settings controls the revisioned default for future sessions. Read-only, workspace access and full access are supported, with an explicit Full Access confirmation | `permissions` projection, `commands/execute`, `settings.mutate` |
-| Agent platform | Global Agent Profiles, Composer `@Profile`, multi-runtime Batch execution, isolated worktrees, logs, stop/retry/discard, restart recovery and root-Agent integration are implemented in the right DetailsPanel | Typert `agentProfiles/*`, `agentBatches/*`, `agentRuns/*`, `agentContexts/*`, `agent-platform/batches` projection |
+| Agent platform | Global Agent Profiles, Composer `@Profile`, multi-runtime Batch execution, isolated worktrees, logs, stop/retry/discard, restart recovery and root-Agent integration are implemented as dedicated right-workbench tabs | Typert `agentProfiles/*`, `agentBatches/*`, `agentRuns/*`, `agentContexts/*`, `agent-platform/batches` projection |
 | Settings | Scrollable native inventory, permission and busy-Enter selectors, revisioned JSON editor, generic credential-reference writes, mutate, open-document, and inline revision-conflict recovery (discard-and-reload or keep-edits-and-retry) implemented | `settings.describe`, `settings.mutate` |
-| Workflow | Durable run-state, members grouped by phase, real `running/completed/failed/cancelled` status vocabulary (verified against the upstream wire types, not guessed) and native member drill-down implemented — see [workflow-phase-grouping-and-status](.agents/notes/implemented/feature/2026-08-14-workflow-phase-grouping-and-status.md) | `tool-workflow/*` events |
+| Workflow | Durable run-state, members grouped by phase, real `running/completed/failed/cancelled` status vocabulary (verified against the upstream wire types, not guessed) and native member drill-down implemented — see [workflow-phase-grouping-and-status](../.agents/notes/implemented/feature/2026-08-14-workflow-phase-grouping-and-status.md) | `tool-workflow/*` events |
 
 ## Native capability beyond web parity
 
@@ -34,7 +34,7 @@ capability is only possible because this is a native app:
   approval requests, agent questions, and top-level turn completion whenever
   the app isn't frontmost, with a Dock-bounce attention request and a
   click-to-activate path back into the app. See
-  [native-menu-bar-and-notifications](.agents/notes/implemented/feature/2026-08-14-native-menu-bar-and-notifications.md).
+  [native-menu-bar-and-notifications](../.agents/notes/implemented/feature/2026-08-14-native-menu-bar-and-notifications.md).
 
 - **Cross-session relay** (experimental, off by default): a Settings toggle
   mounts a host-plane cordis plugin (`macos/Runtime-extras/dsh-tool-session-relay/`)
@@ -43,26 +43,36 @@ capability is only possible because this is a native app:
   message another directly — something the Host's own RPC surface and the
   web client have no equivalent for (harness only ships ancestor-scoped
   subagent messaging). See
-  [cross-session-relay](.agents/notes/implemented/feature/2026-08-17-cross-session-relay.md).
+  [cross-session-relay](../.agents/notes/implemented/feature/2026-08-17-cross-session-relay.md).
 
 - **Unified local Agent platform**: reusable Profiles dispatch DSH,
   Claude Code, Codex, and ZCode members into one durable Batch with global
   concurrency control, hard analysis restrictions, isolated execution
   worktrees, initiator sandbox/model/tool/preset snapshots, a single
   root-session settlement, and natural-language selective integration.
-  The right DetailsPanel shows Profiles or the current root session's
+  The right workbench shows Profiles or the current root session's
   Batches, member logs, immutable execution environment, cleanup state and
   integration evidence. Platform-managed DSH children retain continuable
   history but cannot be prompted outside the tracked Run/Batch path. See
-  [unified-agent-platform](.agents/notes/implemented/feature/2026-08-17-unified-agent-platform.md).
+  [unified-agent-platform](../.agents/notes/implemented/feature/2026-08-17-unified-agent-platform.md).
+
+- **Session-scoped development workbench**: the resizable right dock keeps
+  multiple browser, Markdown, execution, Agent and tool-detail tabs per
+  top-level session. Browser tabs retain one stable `WKWebView`; Markdown
+  documents render natively, watch external file changes, and route local or
+  web links back through the workbench. Models can request a browser or
+  workspace-confined Markdown tab through dedicated tools; the native client
+  waits for a successful tool result before opening it. Browser content remains
+  user-operated and neither browser nor document contents are exposed back to
+  the Agent context.
 
 ## Remaining web-parity work
 
-- Tool presentation supports terminal, diff, read, search, web results, and generic/code-dispatch cards inline and in DetailsPanel, with bounded folding and lightweight source tokens. Remaining: richer syntax parsing and any Host card vocabularies added beyond the current supported set. Attachment images now have a zoomable lightbox and a session-scoped cross-message rail; multi-image content blocks remain constrained by the current one-attachment-per-native-message model.
-- Complete session-event folding with full trajectory virtualization (currently `LazyVStack`, on-screen-lazy but not measured/windowed). Compaction summaries now [persist into the scrollback](.agents/notes/implemented/feature/2026-08-14-workflow-phase-grouping-and-status.md) instead of only an ephemeral banner; retry notices remain ephemeral by design (frequent, transient — see that note's rationale).
-- Subagents: gained a [whole-tree ("descendants") view](.agents/notes/implemented/feature/2026-08-14-subagent-descendants-tree.md), walked client-side (depth/node-capped, with explicit truncation disclosure) since the client-facing `subagent.list` RPC's support for a server-side descendants scope is unverified. Child history currently loads the latest 100 messages; `subagent.history` pagination remains unexposed. Child queue/job snapshots currently rely on the Host mux's ordered delivery because those frames expose no comparable sequence watermark.
+- Tool presentation supports terminal, diff, read, search, web results, and generic/code-dispatch cards inline and in workbench tabs, with bounded folding and lightweight source tokens. Remaining: richer syntax parsing and any Host card vocabularies added beyond the current supported set. Attachment images now have a zoomable lightbox and a session-scoped cross-message rail; multi-image content blocks remain constrained by the current one-attachment-per-native-message model.
+- Event-level trajectory virtualization beyond the current bounded message window remains open. Compaction summaries now [persist into the scrollback](../.agents/notes/implemented/feature/2026-08-14-workflow-phase-grouping-and-status.md) instead of only an ephemeral banner; retry notices remain ephemeral by design (frequent, transient — see that note's rationale).
+- Subagents: gained a [whole-tree ("descendants") view](../.agents/notes/implemented/feature/2026-08-14-subagent-descendants-tree.md), walked client-side (depth/node-capped, with explicit truncation disclosure) since the client-facing `subagent.list` RPC's support for a server-side descendants scope is unverified. Child history currently loads the latest 100 messages; `subagent.history` pagination remains unexposed. Child queue/job snapshots currently rely on the Host mux's ordered delivery because those frames expose no comparable sequence watermark.
 - Add native accessibility/UI tests that execute a real App instance and verify Host event projections.
 
 ## Deliberate architecture
 
-The macOS app is SwiftUI/AppKit native. It starts the bundled DSH Host only as a local runtime, consumes its documented loopback RPC and WebSocket event protocol, and does not embed the Web UI in a WebView. Its RPC client implements the legacy dot-method `ApiProxy` surface (`session.*`, `workspace.*`, `subagent.*`, ...) plus a native Typert Gateway client (`/api/<namespace>/<method>`) covering `commands/*`, `messageFeedback/*`, `pluginInventory/*`, `agentProfiles/*`, `agentBatches/*`, `agentRuns/*`, and `agentContexts/*`; newer Gateway namespaces such as `dynamicCordisRunner` self-modification remain unimplemented.
+The macOS app is SwiftUI/AppKit native. It starts the bundled DSH Host only as a local runtime, consumes its documented loopback RPC and WebSocket event protocol, and does not embed the DSH Web UI as its application shell. WebKit is used only by the user-operated browser tabs in the native workbench. Its RPC client implements the legacy dot-method `ApiProxy` surface (`session.*`, `workspace.*`, `subagent.*`, ...) plus a native Typert Gateway client (`/api/<namespace>/<method>`) covering `commands/*`, `messageFeedback/*`, `pluginInventory/*`, `agentProfiles/*`, `agentBatches/*`, `agentRuns/*`, and `agentContexts/*`; newer Gateway namespaces such as `dynamicCordisRunner` self-modification remain unimplemented.

@@ -36,19 +36,17 @@ struct AgentPlatformSnapshotCheck {
     harness.agentBatches = [sampleBatch(profile: profile)]
     harness.selectedAgentBatchID = "batch-1"
 
-    harness.detailsPanelMode = .agents
     try render(
       "profiles-panel",
       size: CGSize(width: 360, height: 760),
       output: output,
-      content: AgentPlatformDetailsPanel().environmentObject(harness))
+      content: AgentPlatformProfilesView().padding(DSHSpace.s4).environmentObject(harness))
 
-    harness.detailsPanelMode = .execution
     try render(
       "execution-panel",
       size: CGSize(width: 360, height: 760),
       output: output,
-      content: AgentPlatformDetailsPanel().environmentObject(harness))
+      content: AgentPlatformExecutionView().padding(DSHSpace.s4).environmentObject(harness))
 
     try render(
       "profile-editor",

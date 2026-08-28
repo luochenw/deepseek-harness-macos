@@ -13,8 +13,11 @@
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.4.0</string>
   <key>CFBundleVersion</key><string>6</string>
-  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppTransportSecurity</key><dict>
+    <key>NSAllowsLocalNetworking</key><true/>
+  </dict>
   <key>NSMicrophoneUsageDescription</key><string>语音输入需要使用麦克风。</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>将语音转为文字以发送给 Agent。</string>
 </dict></plist>

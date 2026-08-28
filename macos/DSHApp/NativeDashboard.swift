@@ -186,9 +186,3 @@ private struct RetryNoticeCard: View {
       .dshCard(tint: DSHTheme.accentSoft, radius: DSHRadius.md)
   }
 }
-
-struct DetailsPanel: View {
-  var body: some View {
-    AgentPlatformDetailsPanel()
-  }
-}

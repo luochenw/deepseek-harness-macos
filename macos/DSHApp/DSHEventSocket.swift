@@ -97,6 +97,7 @@ extension HarnessController {
           self?.consumeMuxFrame(frame)
         }, onClosed: { [weak self] in
           self?.hostStatus = "Host 消息流已断开，刷新会话后可恢复"
+          self?.clearPendingModelWorkbenchRequests()
         })
         self.muxEvents?.start()
         self.hostStatus = "Host 已连接：\(url.absoluteString)"
@@ -122,6 +123,7 @@ extension HarnessController {
     case "session/event":
       guard let sessionID = frame["sessionId"] as? String,
             let event = frame["event"] as? [String: Any] else { return }
+      consumeModelWorkbenchEvent(sessionID: sessionID, event: event)
       // Turn boundaries route for EVERY session before the current-session
       // filter below: the sidebar's live dot reads `hostSessions[i].running`
       // and a background row's own flag/unread must move without the session
@@ -146,14 +148,15 @@ extension HarnessController {
           retireSubagentSteeringItem(messageID: messageID, sessionID: sessionID)
         }
       }
+      if voiceTaskSessions[sessionID] != nil {
+        handleVoiceTaskEvent(sessionID: sessionID, event: event)
+      }
       if isLoadingSubagentPresentation(sessionID: sessionID) {
         bufferSubagentEvent(sessionID: sessionID, event: event, view: frame["view"] as? [String: Any])
       } else if sessionID == activeSubagentAddress?.childSessionId || hasSubagentPresentation(sessionID: sessionID) {
         applyLiveSubagentEvent(sessionID: sessionID, event: event, view: frame["view"] as? [String: Any])
       } else if sessionID == hostCurrentSessionID {
         applyLiveEvent(event, view: frame["view"] as? [String: Any])
-      } else if voiceTaskSessions[sessionID] != nil {
-        handleVoiceTaskEvent(sessionID: sessionID, event: event)
       }
     case "session/projection":
       guard let sessionId = frame["sessionId"] as? String,
@@ -346,7 +349,6 @@ extension HarnessController {
     case "tool/call":
       let tool = ToolActivity(callId: data["callId"] as? String ?? UUID().uuidString, name: data["name"] as? String ?? "工具", summary: "正在运行", state: .running, output: "", presentation: ToolPresentation.from(view?["view"] as? [String: Any]))
       activeTools.append(tool)
-      selectedTool = tool
       // Inline transcript row (Claude Code style); the row itself renders
       // live state by looking up `activeTools` via toolCallId, so tool/result
       // below only needs to update the activity, not this message.
@@ -370,7 +372,6 @@ extension HarnessController {
         tool.summary = errorSummary
       }
       activeTools[toolIndex] = tool
-      selectedTool = tool
     case "tool-workflow/run-start":
       if let runId = data["runId"] as? String, let name = data["name"] as? String, let parentSessionId = hostCurrentSessionID { workflows.append(WorkflowRun(id: runId, parentSessionId: parentSessionId, name: name)) }
     case "tool-workflow/agent-start":

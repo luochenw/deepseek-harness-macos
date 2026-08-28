@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Native details renderer for the structured DSH tool presentation payload.
-/// The DetailsPanel adds card chrome; the transcript reuses the same content
-/// body in compact mode so both places stay faithful to the Host render intent.
+/// The workbench adds card chrome; the transcript reuses the same content body
+/// in compact mode so both places stay faithful to the Host render intent.
 struct NativeToolPresentationView: View {
   let tool: HarnessController.ToolActivity
 
@@ -240,13 +240,20 @@ private struct ToolPathView: View {
 }
 
 private struct ToolURLLabel: View {
+  @EnvironmentObject private var harness: HarnessController
   let url: String
 
   var body: some View {
     if let destination = DSHToolPresentationURL.webURL(url) {
-      Link(url, destination: destination)
-        .font(.caption.monospaced())
-        .lineLimit(2)
+      Button(action: { harness.newBrowserWorkbench(url: destination) }) {
+        HStack(alignment: .firstTextBaseline, spacing: DSHSpace.s1) {
+          Text(url).font(.caption.monospaced()).lineLimit(2).multilineTextAlignment(.leading)
+          Image(systemName: "sidebar.right").font(.caption2)
+        }
+      }
+      .buttonStyle(.plain)
+      .foregroundStyle(DSHTheme.accent)
+      .help("在工作台浏览器中打开")
     } else {
       Text(url)
         .font(.caption.monospaced())
@@ -601,6 +608,15 @@ private struct FilePathActions: View {
         .textSelection(.enabled)
         .lineLimit(1)
       Spacer(minLength: DSHSpace.s1)
+      if ["md", "markdown", "mdown", "mkd"].contains(URL(fileURLWithPath: path).pathExtension.lowercased()) {
+        Button { harness.openMarkdownWorkbench(path) } label: {
+          Image(systemName: "doc.richtext")
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .help("在工作台阅读 Markdown")
+        .accessibilityLabel("在工作台阅读 Markdown")
+      }
       Button("打开") { harness.openDeliveredFile(path) }
         .controlSize(.mini)
         .help("使用默认应用打开文件")

@@ -143,6 +143,7 @@ extension HarnessController {
   var canSubmitRunningDraft: Bool {
     let hasContent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draftImage != nil
     return displayedIsRunning && hasContent && !isViewingReadOnlySubagent
+      && composerAgentProfileID == nil
       && hostClient != nil && hostCurrentSessionID != nil
       && !runningSubmissionInFlight && !composerSubmissionInFlight
   }
@@ -174,7 +175,11 @@ extension HarnessController {
 
   @discardableResult
   func submitBusyComposer(accelerated: Bool) -> Bool {
-    guard displayedIsRunning, composerAgentProfileID == nil else { return false }
+    guard displayedIsRunning else { return false }
+    guard composerAgentProfileID == nil else {
+      status = "当前会话运行中，暂不能派发 Agent Batch"
+      return true
+    }
     guard !runningSubmissionInFlight, !composerSubmissionInFlight else { return true }
     let mode = DSHComposerSubmissionPolicy.mode(
       running: true,

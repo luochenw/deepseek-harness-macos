@@ -410,6 +410,16 @@ test("DSH execution cannot widen the initiating Agent tool surface", () => {
     { allow: ["read"] });
 });
 
+test("DSH analysis can retain the native workbench display tools", () => {
+  assert.deepEqual(
+    dshToolRestriction(
+      "analysis",
+      {},
+      ["read", "open_workbench_browser", "open_workbench_markdown", "bash"],
+      ["read", "open_workbench_browser", "open_workbench_markdown"]),
+    { allow: ["read", "open_workbench_browser", "open_workbench_markdown"] });
+});
+
 test("DSH model options inherit the initiator before Profile overrides", () => {
   assert.deepEqual(
     dshAgentOptions(

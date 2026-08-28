@@ -18,13 +18,8 @@ enum DSHAgentBatchSource: String, Codable {
   case composer, manual
 }
 
-enum DSHAgentDetailsMode: Hashable {
-  case execution, agents, tool
-}
-
 @MainActor
 final class DSHAgentPlatformState: ObservableObject {
-  @Published var detailsPanelMode: DSHAgentDetailsMode = .execution
   @Published var profiles: [DSHAgentProfile] = []
   @Published var runtimeStatuses: [DSHAgentRuntimeStatus] = []
   @Published var batches: [DSHAgentBatch] = []
@@ -384,10 +379,6 @@ extension DSHHostClient {
 }
 
 extension HarnessController {
-  var detailsPanelMode: DSHAgentDetailsMode {
-    get { agentPlatform.detailsPanelMode }
-    set { agentPlatform.detailsPanelMode = newValue }
-  }
   var agentProfiles: [DSHAgentProfile] {
     get { agentPlatform.profiles }
     set { agentPlatform.profiles = newValue }
@@ -508,28 +499,11 @@ extension HarnessController {
   }
 
   func toolDetail(_ tool: ToolActivity) {
-    selectedTool = tool
-    detailsPanelMode = .tool
-    showDetails = true
+    openToolWorkbench(tool)
   }
 
   func showAgentManagement() {
-    detailsPanelMode = .agents
-    showDetails = true
-    selectedAgentRunID = nil
-    refreshAgentProfiles()
-    refreshAgentRuntimeStatuses()
-  }
-
-  func toggleExecutionDetails() {
-    if showDetails && detailsPanelMode == .execution {
-      showDetails = false
-    } else {
-      detailsPanelMode = .execution
-      showDetails = true
-      selectedAgentRunID = nil
-      refreshAgentBatches()
-    }
+    openAgentsWorkbench()
   }
 
   func refreshAgentPlatform() {
@@ -568,19 +542,18 @@ extension HarnessController {
   }
 
   func refreshAgentBatches(rootSessionId: String? = nil) {
-    guard let hostClient else { return }
     guard let root = rootSessionId ?? hostCurrentSessionID else {
-      agentBatches = []
-      selectedAgentBatchID = nil
+      resetAgentSessionState()
       return
     }
+    guard let hostClient else { return }
     Task {
       do {
         let values = try await hostClient.agentBatches(rootSessionId: root)
         await MainActor.run { self.applyAgentBatches(values, rootSessionId: root) }
       } catch {
         await MainActor.run {
-          if self.hostCurrentSessionID == root { self.agentBatches = [] }
+          if self.hostCurrentSessionID == root { self.resetAgentSessionState() }
         }
       }
     }
@@ -598,6 +571,11 @@ extension HarnessController {
     guard rootSessionId == nil || rootSessionId == hostCurrentSessionID else { return }
     agentBatches = values.sorted { $0.createdAt > $1.createdAt }
     if let selected = selectedAgentBatchID, !values.contains(where: { $0.id == selected }) { selectedAgentBatchID = nil }
+    if let selected = selectedAgentRunID,
+       !values.lazy.flatMap(\.runs).contains(where: { $0.id == selected }) {
+      closeAgentRunLog()
+    }
+    resumePendingModelWorkbenchRequests()
   }
 
   func saveAgentProfile(_ draft: DSHAgentProfileDraft) {
@@ -725,8 +703,7 @@ extension HarnessController {
             ) {
               if let index = self.agentBatches.firstIndex(where: { $0.id == batch.id }) { self.agentBatches[index] = batch }
               else { self.agentBatches.insert(batch, at: 0) }
-              self.detailsPanelMode = .execution
-              self.showDetails = true
+              self.openExecutionWorkbench(refresh: false, resetRunSelection: false)
               self.selectedAgentBatchID = batch.id
             }
             self.status = "已派发 \(profile.name) · \(mode.label)"
@@ -814,6 +791,8 @@ extension HarnessController {
     selectedAgentRunID = nil
     selectedAgentRunLog = []
     selectedAgentWorkspace = nil
+    agentRunLogHasMore = false
+    agentIntegrationRequests = []
     agentBatches = []
   }
 
@@ -840,12 +819,11 @@ extension HarnessController {
   func loadAgentRunLog(_ run: DSHAgentRun, before: Int? = nil) {
     guard let hostClient else { return }
     if before == nil {
+      openExecutionWorkbench(refresh: false)
       selectedAgentRunID = run.id
       selectedAgentRunLog = []
       selectedAgentWorkspace = nil
       agentRunLogHasMore = false
-      detailsPanelMode = .execution
-      showDetails = true
     }
     Task {
       do {

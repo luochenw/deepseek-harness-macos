@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/dist/DeepSeek Harness.app"
 STAGE="$ROOT/dist/.DeepSeek-Harness-stage-$RANDOM-$RANDOM.app"
+MINIMUM_MACOS_VERSION="14.0"
+SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos${MINIMUM_MACOS_VERSION}}"
+BUILD_ARCH="${SWIFT_TARGET%%-*}"
 
 # Auto-detected from the build machine's own toolchain; override with
 # NODE_SOURCE / DSH_SOURCE env vars if yours live somewhere nonstandard.
@@ -16,10 +19,24 @@ DSH_SOURCE="${DSH_SOURCE:-$(npm root -g 2>/dev/null)/@deepseek-ai/dsh}"
 }
 [[ -f "$DSH_SOURCE/lib/bin.js" ]] || {
   echo "DSH runtime not found at: $DSH_SOURCE" >&2
-  echo "Install it with: npm install -g @deepseek-ai/dsh" >&2
+  echo "Install it with: npm install -g @deepseek-ai/dsh@0.1.1-rc.2" >&2
   echo "...or set DSH_SOURCE to point at an existing @deepseek-ai/dsh package directory." >&2
   exit 1
 }
+NODE_EXECUTABLE="$("$NODE_SOURCE" -p 'process.execPath')"
+NODE_VERSION="$("$NODE_SOURCE" -p 'process.versions.node')"
+[[ -x "$NODE_EXECUTABLE" ]] || {
+  echo "Resolved Node runtime is not executable: $NODE_EXECUTABLE" >&2
+  exit 1
+}
+NODE_ARCHS="$(lipo -archs "$NODE_EXECUTABLE" 2>/dev/null || true)"
+case " $NODE_ARCHS " in
+  *" $BUILD_ARCH "*) ;;
+  *)
+    echo "Resolved Node runtime lacks the build architecture $BUILD_ARCH: $NODE_EXECUTABLE ($NODE_ARCHS)" >&2
+    exit 1
+    ;;
+esac
 
 # Two sessions can legitimately build in the same checkout around the same
 # time (see CLAUDE.md's 多 Agent 并行) — without this lock, one run's cleanup
@@ -44,16 +61,45 @@ find "$ROOT/dist" -maxdepth 1 -name ".DeepSeek-Harness-stage-*.app" -exec rm -rf
 rm -rf "$APP.previous"
 
 rm -rf "$STAGE"
-mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/Runtime"
-swiftc -parse-as-library "$ROOT"/macos/DSHApp/*.swift -o "$STAGE/Contents/MacOS/DSH" -framework AppKit -framework SwiftUI
+mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/Runtime" "$STAGE/Contents/Resources/Licenses"
+swiftc -target "$SWIFT_TARGET" -parse-as-library "$ROOT"/macos/DSHApp/*.swift \
+  -o "$STAGE/Contents/MacOS/DSH" -framework AppKit -framework SwiftUI -framework WebKit
+APP_MINOS="$(xcrun vtool -show-build "$STAGE/Contents/MacOS/DSH" | awk '/minos / { print $2; exit }')"
+[[ "$APP_MINOS" == "$MINIMUM_MACOS_VERSION" ]] || {
+  echo "Built app minimum macOS version is $APP_MINOS, expected $MINIMUM_MACOS_VERSION." >&2
+  exit 1
+}
 cp "$ROOT/macos/DSHApp/Info.plist" "$STAGE/Contents/Info.plist"
 cp "$ROOT/macos/DSHApp/AppIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns"
-cp "$NODE_SOURCE" "$STAGE/Contents/MacOS/node"
+cp "$ROOT/LICENSE" "$STAGE/Contents/Resources/Licenses/DeepSeek-Harness-LICENSE"
+cp "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/Contents/Resources/Licenses/THIRD_PARTY_NOTICES.md"
+node_license=""
+for candidate in \
+  "${NODE_LICENSE_SOURCE:-}" \
+  "$(dirname "$NODE_EXECUTABLE")/../LICENSE" \
+  "$(dirname "$NODE_EXECUTABLE")/../../LICENSE"; do
+  if [[ -n "$candidate" && -f "$candidate" ]]; then
+    node_license="$candidate"
+    break
+  fi
+done
+if [[ -n "$node_license" ]]; then
+  cp "$node_license" "$STAGE/Contents/Resources/Licenses/Node.js-LICENSE"
+else
+  command -v curl >/dev/null || {
+    echo "Node.js license not found beside $NODE_EXECUTABLE and curl is unavailable." >&2
+    echo "Set NODE_LICENSE_SOURCE to the LICENSE file for Node.js $NODE_VERSION." >&2
+    exit 1
+  }
+  curl -fsSL --retry 3 \
+    "https://raw.githubusercontent.com/nodejs/node/v$NODE_VERSION/LICENSE" \
+    -o "$STAGE/Contents/Resources/Licenses/Node.js-LICENSE"
+fi
+cp "$NODE_EXECUTABLE" "$STAGE/Contents/MacOS/node"
 chmod 755 "$STAGE/Contents/MacOS/node"
 # GitHub's hosted Node can be dynamically linked against a sibling
 # `lib/libnode.*.dylib`; the app bundle cannot rely on that host path. Static
 # Node distributions have no matches, so this stays a no-op for local builds.
-NODE_EXECUTABLE="$("$NODE_SOURCE" -p 'process.execPath')"
 NODE_LIB_DIR="$(cd "$(dirname "$NODE_EXECUTABLE")/../lib" 2>/dev/null && pwd || true)"
 if [[ -n "$NODE_LIB_DIR" ]]; then
   shopt -s nullglob
@@ -68,14 +114,45 @@ if [[ -n "$NODE_LIB_DIR" ]]; then
 fi
 ditto "$DSH_SOURCE" "$STAGE/Contents/Resources/Runtime/dsh"
 
+# sharp ships a platform libvips binary whose npm package omits the upstream
+# license and notice files. Bundle the exact release texts plus the GNU
+# GPL/LGPL terms they reference. The checked-in copies cover the currently
+# supported local runtime; another package version is fetched from its tag.
+RUNTIME_DSH="$STAGE/Contents/Resources/Runtime/dsh"
+SHARP_LIBVIPS_MANIFEST="$(find "$RUNTIME_DSH/node_modules/@img" -maxdepth 2 -path '*/sharp-libvips-*/package.json' -print -quit 2>/dev/null || true)"
+if [[ -n "$SHARP_LIBVIPS_MANIFEST" ]]; then
+  SHARP_LIBVIPS_VERSION="$("$NODE_SOURCE" -e '
+    const fs = require("node:fs");
+    process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version);
+  ' "$SHARP_LIBVIPS_MANIFEST")"
+  if [[ "$SHARP_LIBVIPS_VERSION" == "1.3.2" ]]; then
+    cp "$ROOT/licenses/sharp-libvips-LICENSE" "$STAGE/Contents/Resources/Licenses/sharp-libvips-LICENSE"
+    cp "$ROOT/licenses/sharp-libvips-THIRD-PARTY-NOTICES.md" "$STAGE/Contents/Resources/Licenses/sharp-libvips-THIRD-PARTY-NOTICES.md"
+  else
+    command -v curl >/dev/null || {
+      echo "curl is required to fetch sharp-libvips $SHARP_LIBVIPS_VERSION license notices." >&2
+      exit 1
+    }
+    curl -fsSL --retry 3 \
+      "https://raw.githubusercontent.com/lovell/sharp-libvips/v$SHARP_LIBVIPS_VERSION/LICENSE" \
+      -o "$STAGE/Contents/Resources/Licenses/sharp-libvips-LICENSE"
+    curl -fsSL --retry 3 \
+      "https://raw.githubusercontent.com/lovell/sharp-libvips/v$SHARP_LIBVIPS_VERSION/THIRD-PARTY-NOTICES.md" \
+      -o "$STAGE/Contents/Resources/Licenses/sharp-libvips-THIRD-PARTY-NOTICES.md"
+  fi
+  curl -fsSL --retry 3 https://www.gnu.org/licenses/lgpl-3.0.txt \
+    -o "$STAGE/Contents/Resources/Licenses/LGPL-3.0.txt"
+  curl -fsSL --retry 3 https://www.gnu.org/licenses/gpl-3.0.txt \
+    -o "$STAGE/Contents/Resources/Licenses/GPL-3.0.txt"
+fi
+
 # In-house cordis plugins (macos/Runtime-extras/<pkg>/) ride along inside the
 # Runtime, one directory per package. They must also be declared in the
 # Runtime's own package.json dependencies — healProfilesModuleFallback only
 # symlinks packages inside that dependency closure into $DSH_HOME/profiles,
 # so an out-of-tree package absent from it fails plain-name resolution from
 # cordis.patch.yml even though the files are physically present.
-# See .agents/notes/proposed/feature/2026-08-17-cross-session-relay.md.
-RUNTIME_DSH="$STAGE/Contents/Resources/Runtime/dsh"
+# See .agents/notes/implemented/feature/2026-08-17-cross-session-relay.md.
 extra_dests=()
 shopt -s nullglob  # an empty (or missing) Runtime-extras/ must no-op, not fail the build on the literal glob
 for extra in "$ROOT"/macos/Runtime-extras/*/; do
@@ -101,10 +178,10 @@ for extra in "$ROOT"/macos/Runtime-extras/*/; do
 done
 shopt -u nullglob
 
-# The platform needs narrow embedded-Runtime extensions that upstream rc.6
-# and rc.7 do not expose yet: continuable child cwd override, exact managed
-# child disposal, and managed-followup protection. The same version-gated
-# patch mounts the Host plugin and registers its replayable projection event.
+# Native extensions need narrow, version-specific embedded-Runtime changes.
+# The fail-closed patch supports rc.6, rc.7, and rc.2, mounts the Agent
+# Platform plus model-facing workbench tools, and registers the platform's
+# replayable projection event.
 "$NODE_SOURCE" "$ROOT/scripts/patch-agent-platform-runtime.mjs" "$RUNTIME_DSH"
 
 cd "$STAGE/Contents/Resources"

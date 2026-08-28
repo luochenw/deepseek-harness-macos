@@ -15,8 +15,9 @@ struct VoiceInputButton: View {
   var speakReplies: Binding<Bool>?
   /// Final transcript plus how the session started: `viaWake == true` only
   /// for wake-word-initiated dictation — the caller auto-sends那条, while a
-  /// manual click just fills the composer.
-  var onCommit: (String, _ viaWake: Bool) -> Void
+  /// manual click just fills the composer. `route` carries the routing
+  /// snapshot (dialog = 进输入框 / background = 派发)，见 VoiceRoute。
+  var onCommit: (String, _ viaWake: Bool, _ route: VoiceRoute) -> Void
   /// Live partial transcript while listening — the composer streams this
   /// into the input box so speech is visible as it happens.
   var onPartial: ((String) -> Void)?
@@ -31,7 +32,7 @@ struct VoiceInputButton: View {
     return nil
   }
 
-  init(speakReplies: Binding<Bool>? = nil, onPartial: ((String) -> Void)? = nil, onCommit: @escaping (String, _ viaWake: Bool) -> Void) {
+  init(speakReplies: Binding<Bool>? = nil, onPartial: ((String) -> Void)? = nil, onCommit: @escaping (String, _ viaWake: Bool, _ route: VoiceRoute) -> Void) {
     self.speakReplies = speakReplies
     self.onPartial = onPartial
     self.onCommit = onCommit
@@ -111,11 +112,11 @@ struct VoiceInputButton: View {
     .onAppear {
       // Single, stable commit hook: the via-wake fact lives on the
       // controller (set by startListening(viaWake:)), not in view state.
-      voice.onFinalText = { text in onCommit(text, voice.sessionViaWake) }
+      voice.onFinalText = { text in onCommit(text, voice.sessionViaWake, voice.sessionRoute) }
       // Discarded utterances (cancel, no-speech timeout, or nothing left
       // after stripping command words) commit an empty string so the
       // composer restores whatever the live partials overwrote.
-      voice.onDiscarded = { onCommit("", voice.sessionViaWake) }
+      voice.onDiscarded = { onCommit("", voice.sessionViaWake, voice.sessionRoute) }
       syncWakeListener()
     }
     // Covers both the settings pane and the context menu writing the defaults.
@@ -148,10 +149,10 @@ struct VoiceInputButton: View {
       }
     }
     .onChange(of: voice.partialText) { _, partial in
-      // 唤醒 + 自动派发的听写不进输入框（任务去独立会话，输入框不该被
-      // 碰）；麦克风脉冲/悬浮圈涟漪已是"正在听"的反馈。手动听写、或
-      // 关掉自动派发的唤醒听写，照旧实时流入。
-      let dispatching = voice.sessionViaWake && VoiceSettings.wakeAutoSend
+      // 后台派发的听写不进输入框（任务去独立会话，输入框不该被碰）；
+      // 麦克风脉冲/悬浮圈涟漪已是"正在听"的反馈。对话框内的听写（手动
+      // 或前台唤醒）实时流入。
+      let dispatching = voice.sessionRoute == .background
       if isActive, !partial.isEmpty, !dispatching { onPartial?(partial) }
     }
   }

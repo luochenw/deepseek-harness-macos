@@ -63,7 +63,10 @@ struct ConversationHeader: View {
         // With content in the transcript the workspace context docks up here,
         // compact (blank conversations show it above the composer instead).
         if !harness.isNewConversation { WorkspaceChips(compact: true) }
-        Button(action: harness.toggleExecutionDetails) { Image(systemName: "sidebar.right") }.buttonStyle(.dshGhost)
+        Button(action: harness.toggleWorkbench) { Image(systemName: "sidebar.right") }
+          .buttonStyle(.dshGhost)
+          .help("显示或隐藏工作台")
+          .accessibilityLabel("显示或隐藏工作台")
       }
       if !harness.displayedAttachmentRailItems.isEmpty {
         AttachmentRail(items: harness.displayedAttachmentRailItems)
@@ -79,6 +82,11 @@ private struct ConversationBottomDistanceKey: PreferenceKey {
   static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
+private enum ConversationWindowEdgeIntent {
+  case earlier
+  case later
+}
+
 struct ConversationView: View {
   @EnvironmentObject var harness: HarnessController
   /// Follow-mode: auto-scroll tracks streaming output only while the user
@@ -88,15 +96,37 @@ struct ConversationView: View {
   @State private var pinnedToBottom = true
   @State private var bottomDistance: CGFloat = 0
   @State private var scrollMonitor: Any?
+  @State private var windowEdgeIntent: ConversationWindowEdgeIntent?
+  @State private var earlierEdgeVisible = false
+  @State private var laterEdgeVisible = false
+  @State private var pointerInsideTranscript = false
   var body: some View {
     GeometryReader { viewport in
     ScrollViewReader { proxy in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: DSHSpace.s4) {
-          if harness.historyHasMore && harness.subagentTranscript == nil {
+          if harness.displayedConversationWindowHasEarlier {
+            Button("载入上一段") {
+              windowEdgeIntent = nil
+              harness.expandDisplayedConversationEarlier(
+                anchorMessageID: harness.displayedWindowMessages.first?.id)
+            }
+              .buttonStyle(.dshSecondary)
+              .frame(maxWidth: .infinity)
+              .id("conversation-window-earlier-\(harness.displayedMessageWindow.lowerBound)")
+              .onAppear {
+                earlierEdgeVisible = true
+                guard windowEdgeIntent == .earlier else { return }
+                windowEdgeIntent = nil
+                harness.expandDisplayedConversationEarlier(
+                  anchorMessageID: harness.displayedWindowMessages.first?.id)
+              }
+              .onDisappear { earlierEdgeVisible = false }
+          } else if harness.historyHasMore && harness.subagentTranscript == nil {
             Button("载入更早消息", action: harness.loadOlderHistory).buttonStyle(.dshSecondary).frame(maxWidth: .infinity)
           }
-          let messages = harness.displayedSession?.messages ?? []
+          let allMessages = harness.displayedSession?.messages ?? []
+          let messages = harness.displayedWindowMessages
           if messages.isEmpty {
             ConversationEmptyState()
           } else {
@@ -107,7 +137,7 @@ struct ConversationView: View {
                   if let reasoning = message.reasoning {
                     // "live" = this thought is still streaming: last row of a
                     // running turn with no answer text yet.
-                    ReasoningBlock(text: reasoning, live: harness.displayedIsRunning && message.id == messages.last?.id && message.text.isEmpty)
+                    ReasoningBlock(text: reasoning, live: harness.displayedIsRunning && message.id == allMessages.last?.id && message.text.isEmpty)
                   }
                   MessageBubble(message: message)
                 }.id(message.id)
@@ -115,18 +145,37 @@ struct ConversationView: View {
                 ToolGroupRow(messages: group).id(group[0].id)
               }
             }
-            ForEach(harness.displayedSteeringItems) { item in
-              PendingSteeringBubble(item: item).id("steering-\(item.id)")
+            if harness.displayedConversationWindowHasLater {
+              Button("载入下一段") {
+                windowEdgeIntent = nil
+                harness.expandDisplayedConversationLater(
+                  anchorMessageID: harness.displayedWindowMessages.last?.id)
+              }
+                .buttonStyle(.dshSecondary)
+                .frame(maxWidth: .infinity)
+                .id("conversation-window-later-\(harness.displayedMessageWindow.upperBound)")
+                .onAppear {
+                  laterEdgeVisible = true
+                  guard windowEdgeIntent == .later else { return }
+                  windowEdgeIntent = nil
+                  harness.expandDisplayedConversationLater(
+                    anchorMessageID: harness.displayedWindowMessages.last?.id)
+                }
+                .onDisappear { laterEdgeVisible = false }
+            } else {
+              ForEach(harness.displayedSteeringItems) { item in
+                PendingSteeringBubble(item: item).id("steering-\(item.id)")
+              }
+              // The transcript tail row: the rolling-wave miniature animates
+              // for the whole running turn (it also fills the send→first-token
+              // gap), then freezes into the static icon once the turn settles.
+              // One row view with a parameter — NOT an if/else of two view
+              // types sharing this id: inside a LazyVStack that shape reuses
+              // the cached static row on branch swap, so the TimelineView
+              // never mounts and the icon sits frozen through the whole run
+              // (reproduced in isolation; see the transcript-tail Agent Note).
+              TranscriptTailIcon(running: harness.displayedIsRunning).id("transcript-tail")
             }
-            // The transcript tail row: the rolling-wave miniature animates
-            // for the whole running turn (it also fills the send→first-token
-            // gap), then freezes into the static icon once the turn settles.
-            // One row view with a parameter — NOT an if/else of two view
-            // types sharing this id: inside a LazyVStack that shape reuses
-            // the cached static row on branch swap, so the TimelineView
-            // never mounts and the icon sits frozen through the whole run
-            // (reproduced in isolation; see the transcript-tail Agent Note).
-            TranscriptTailIcon(running: harness.displayedIsRunning).id("transcript-tail")
           }
         }.frame(maxWidth: .infinity).padding(DSHSpace.s6)
           // Thin overlay scroller (appears while scrolling, no gutter) —
@@ -143,6 +192,7 @@ struct ConversationView: View {
           })
       }
       .coordinateSpace(name: "dshConversationScroll")
+      .onHover { pointerInsideTranscript = $0 }
       // Distance is bookkeeping only — it must never re-engage the pin by
       // itself. The old `pinned = distance < 80` lost a race during
       // streaming: every auto-scroll zeroed the distance and re-pinned
@@ -152,40 +202,104 @@ struct ConversationView: View {
       .onPreferenceChange(ConversationBottomDistanceKey.self) { distance in
         bottomDistance = distance
       }
-      .onChange(of: harness.displayedSession?.messages) { _, messages in
-        guard let last = messages?.last else { return }
+      .onChange(of: harness.displayedConversationMessageToken) { oldToken, token in
+        harness.updateDisplayedConversationWindow(
+          messageCount: token.count,
+          pinnedToBottom: pinnedToBottom)
+        guard let last = harness.displayedSession?.messages.last else { return }
         // Follow only while pinned — except the user's own send, which
         // always snaps down so the new turn starts in view. Anchor is the
         // tail row (running animation / end marker), not the last message —
         // it is the transcript's true bottom.
-        if last.role == .user { pinnedToBottom = true }
-        if pinnedToBottom { proxy.scrollTo("transcript-tail", anchor: .bottom) }
+        if last.role == .user, oldToken.lastID != token.lastID {
+          pinnedToBottom = true
+          harness.updateDisplayedConversationWindow(
+            messageCount: token.count,
+            pinnedToBottom: true)
+        }
+        if pinnedToBottom {
+          DispatchQueue.main.async {
+            proxy.scrollTo("transcript-tail", anchor: .bottom)
+          }
+        }
       }
       // Switching sessions (or opening a subagent transcript) resets the
       // pin — a freshly opened transcript always lands at its bottom.
-      .onChange(of: harness.displayedSession?.id) { _, _ in
+      .onChange(of: harness.displayedConversationContextKey) { _, contextKey in
         pinnedToBottom = true
-        if harness.displayedSession?.messages.isEmpty == false { proxy.scrollTo("transcript-tail", anchor: .bottom) }
+        windowEdgeIntent = nil
+        earlierEdgeVisible = false
+        laterEdgeVisible = false
+        harness.updateDisplayedConversationWindow(
+          messageCount: harness.displayedSession?.messages.count ?? 0,
+          pinnedToBottom: true)
+        DispatchQueue.main.async {
+          guard harness.displayedConversationContextKey == contextKey else { return }
+          if harness.displayedSession?.messages.isEmpty == false {
+            proxy.scrollTo("transcript-tail", anchor: .bottom)
+          }
+        }
       }
       // The run settling (or starting without a new message, e.g. a queued
       // drain) swaps the tail row in place — keep it in view while pinned.
       .onChange(of: harness.displayedIsRunning) { _, _ in
         if pinnedToBottom, harness.displayedSession?.messages.isEmpty == false {
-          proxy.scrollTo("transcript-tail", anchor: .bottom)
+          harness.updateDisplayedConversationWindow(
+            messageCount: harness.displayedSession?.messages.count ?? 0,
+            pinnedToBottom: true)
+          DispatchQueue.main.async {
+            proxy.scrollTo("transcript-tail", anchor: .bottom)
+          }
         }
       }
       .onChange(of: harness.displayedSteeringItems.map(\.id)) { _, _ in
-        if pinnedToBottom { proxy.scrollTo("transcript-tail", anchor: .bottom) }
+        if pinnedToBottom {
+          harness.updateDisplayedConversationWindow(
+            messageCount: harness.displayedSession?.messages.count ?? 0,
+            pinnedToBottom: true)
+          DispatchQueue.main.async {
+            proxy.scrollTo("transcript-tail", anchor: .bottom)
+          }
+        }
+      }
+      .onChange(of: windowEdgeIntent) { _, intent in
+        switch intent {
+        case .earlier where earlierEdgeVisible:
+          windowEdgeIntent = nil
+          harness.expandDisplayedConversationEarlier(
+            anchorMessageID: harness.displayedWindowMessages.first?.id)
+        case .later where laterEdgeVisible:
+          windowEdgeIntent = nil
+          harness.expandDisplayedConversationLater(
+            anchorMessageID: harness.displayedWindowMessages.last?.id)
+        default:
+          break
+        }
       }
       .onAppear {
+        harness.updateDisplayedConversationWindow(
+          messageCount: harness.displayedSession?.messages.count ?? 0,
+          pinnedToBottom: true)
+        DispatchQueue.main.async {
+          if harness.displayedSession?.messages.isEmpty == false {
+            proxy.scrollTo("transcript-tail", anchor: .bottom)
+          }
+        }
         guard scrollMonitor == nil else { return }
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+          guard pointerInsideTranscript else { return event }
           if event.scrollingDeltaY > 0 {
             // Scrolling up = reading history: break the pin immediately.
             pinnedToBottom = false
-          } else if event.scrollingDeltaY < 0, bottomDistance < 120 {
+            windowEdgeIntent = .earlier
+          } else if event.scrollingDeltaY < 0,
+                    bottomDistance < 120,
+                    !harness.displayedConversationWindowHasLater {
             // Scrolling down and (nearly) at the bottom: re-engage.
             pinnedToBottom = true
+            windowEdgeIntent = .later
+          } else if event.scrollingDeltaY < 0 {
+            windowEdgeIntent = .later
           }
           return event
         }
@@ -194,17 +308,36 @@ struct ConversationView: View {
         if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
         scrollMonitor = nil
       }
-      // One-tap return to the latest content, icon only — shown whenever
-      // follow mode is off.
-      .overlay(alignment: .bottomTrailing) {
+      .onChange(of: harness.conversationWindowRestoreRequest) { _, request in
+        guard let request,
+              harness.displayedWindowMessages.contains(where: { $0.id == request.messageID })
+        else { return }
+        DispatchQueue.main.async {
+          proxy.scrollTo(
+            request.messageID,
+            anchor: request.alignment == .top ? .top : .bottom)
+          harness.consumeConversationWindowRestoreAnchor(request.messageID)
+        }
+      }
+      // One-tap return to the latest content, icon only — a circle floating
+      // centered just above the composer, shown whenever follow mode is off
+      // (the user scrolled up to read history).
+      .overlay(alignment: .bottom) {
         if !pinnedToBottom {
           Button {
             pinnedToBottom = true
             if harness.displayedSession?.messages.isEmpty == false {
-              withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("transcript-tail", anchor: .bottom) }
+              harness.updateDisplayedConversationWindow(
+                messageCount: harness.displayedSession?.messages.count ?? 0,
+                pinnedToBottom: true)
+              DispatchQueue.main.async {
+                withAnimation(.easeOut(duration: 0.2)) {
+                  proxy.scrollTo("transcript-tail", anchor: .bottom)
+                }
+              }
             }
           } label: {
-            Image(systemName: "arrow.down")
+            Image(systemName: "arrow.down.to.line")
               .font(.system(size: 13, weight: .semibold))
               .foregroundStyle(DSHTheme.ink)
               .frame(width: 34, height: 34)
@@ -213,7 +346,7 @@ struct ConversationView: View {
               .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
           }
           .buttonStyle(.plain)
-          .padding(.trailing, DSHSpace.s5).padding(.bottom, DSHSpace.s4)
+          .padding(.bottom, DSHSpace.s4)
           .help("回到最新")
         }
       }
@@ -421,7 +554,15 @@ private struct ReasoningBlock: View {
   var live: Bool = false
   @State private var expanded = false
   private var latestLine: String {
-    text.split(separator: "\n", omittingEmptySubsequences: true).last.map(String.init) ?? ""
+    var end = text.endIndex
+    while end > text.startIndex, text[text.index(before: end)].isNewline {
+      end = text.index(before: end)
+    }
+    guard end > text.startIndex,
+          let newline = text[..<end].lastIndex(of: "\n") else {
+      return String(text[..<end])
+    }
+    return String(text[text.index(after: newline)..<end])
   }
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
@@ -496,7 +637,15 @@ private struct MessageBubble: View {
             Text("正在思考…").font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
           }
         } else {
-          MarkdownText(text: message.text).frame(maxWidth: 760, alignment: .leading)
+          if message.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
+            Text(message.text)
+              .font(.system(.body, design: .rounded))
+              .foregroundStyle(DSHTheme.ink)
+              .textSelection(.enabled)
+              .frame(maxWidth: 760, alignment: .leading)
+          } else {
+            MarkdownText(text: message.text).frame(maxWidth: 760, alignment: .leading)
+          }
         }
         if let attachment = message.attachment { AttachmentPreview(ref: attachment, sessionID: harness.displayedAttachmentSessionID) }
         // Hover-revealed, Claude Code-style: an always-on 👍👎 under every
@@ -563,7 +712,7 @@ struct ToolCallRow: View {
             Image(systemName: "sidebar.right")
           }
           .buttonStyle(.dshGhost)
-          .help("在右栏查看工具详情")
+          .help("在工作台查看工具详情")
         }
       }
       if !expanded, let detail {
