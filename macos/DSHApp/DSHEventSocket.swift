@@ -138,6 +138,14 @@ extension HarnessController {
           }
         }
       }
+      if event["type"] as? String == "user/message",
+         let data = event["data"] as? [String: Any],
+         let messageID = liveMessagePayload(data)["id"] as? String {
+        retireSteeringItem(messageID: messageID, sessionID: sessionID)
+        if hasSubagentPresentation(sessionID: sessionID) {
+          retireSubagentSteeringItem(messageID: messageID, sessionID: sessionID)
+        }
+      }
       if isLoadingSubagentPresentation(sessionID: sessionID) {
         bufferSubagentEvent(sessionID: sessionID, event: event, view: frame["view"] as? [String: Any])
       } else if sessionID == activeSubagentAddress?.childSessionId || hasSubagentPresentation(sessionID: sessionID) {
@@ -152,6 +160,10 @@ extension HarnessController {
             let key = frame["key"] as? String,
             let value = frame["value"],
             let seq = frame["seq"] as? Int else { return }
+      if key == "permissions",
+         let selection = DSHProjectionDecoder.decode(DSHPermissionSelection.self, from: value) {
+        rememberPermissionSelection(selection, sessionID: sessionId, seq: seq)
+      }
       if sessionId == hostCurrentSessionID {
         applyProjection(key: key, value: value)
       } else if hasSubagentPresentation(sessionID: sessionId) {
@@ -161,10 +173,20 @@ extension HarnessController {
       guard let sessionID = frame["sessionId"] as? String,
             let values = frame["items"] as? [[String: Any]] else { return }
       let items = DSHQueueItem.fromMux(values)
-      if sessionID == hostCurrentSessionID {
-        queueItems = items
-      } else if hasSubagentPresentation(sessionID: sessionID) {
+      rememberQueueSnapshot(items, sessionID: sessionID)
+      if hasSubagentPresentation(sessionID: sessionID) {
         replaceSubagentQueue(sessionID: sessionID, items: items)
+      }
+    case "session/subscribed":
+      guard let sessionID = frame["sessionId"] as? String,
+            let lastSeq = frame["lastSeq"] as? Int else { return }
+      let permissionReset = truncatePermissionSelection(sessionID: sessionID, lastSeq: lastSeq)
+      rememberQueueSnapshot([], sessionID: sessionID)
+      if hasSubagentPresentation(sessionID: sessionID) {
+        replaceSubagentQueue(sessionID: sessionID, items: [])
+      }
+      if permissionReset && sessionID == hostCurrentSessionID {
+        refreshHostSnapshots()
       }
     case "session/jobs":
       guard let sessionID = frame["sessionId"] as? String,

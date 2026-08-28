@@ -16,6 +16,8 @@ Agent 推理、工具、MCP、终端、文件系统与子代理仍由 DSH runtim
 ## 原生功能
 
 - SwiftUI 原生三栏界面、流式输出、运行/停止状态与键盘快捷键。
+- 输入框内置 Host 权限菜单：只读、工作区访问与完全访问；默认权限和当前会话权限分别管理，完全访问启用前会明确确认风险。
+- Agent 运行时输入框保持可用，可把补充内容“插话发送”到当前轮或“排队发送”到下一轮；通用设置可选择运行中按回车的默认行为。
 - NSOpenPanel 原生工作区入口；已选工作区持久化在 macOS 用户偏好中。
 - 本地任务从所选工作区启动，DSH 可执行终端、读取/修改文件、使用技能及配置好的本地工具。
 - 子代理会话是叠加在对话面板上的独立、实时流式视图（而非插入侧边栏的伪顶层会话），带只读/可续写的可视区分与面包屑导航。
@@ -56,8 +58,9 @@ open "dist/DeepSeek Harness.app"
 1. 打开 App 并选择工作区。此操作授予 DSH 在该目录内进行本地文件与终端操作的入口。
 2. 打开设置。原生设置页会从 Host 读取真实模型目录、配置清单与凭据状态。通过「自定义配置」接入任意兼容端点，填写显示名称、API 地址、协议、模型 ID 与 API Key，并通过 revisioned Host settings mutation 保存。
 3. API Key 通过 Host 的 write-only credential API 写入、轮换或清除；原生 App 不读取或显示保存后的 secret 值。已有历史路由会作为自定义配置继续可编辑，不再被当作用户必须拥有的提供方。
-4. 输入任务后点击运行。
-5. Command-W 选择工作区；Command-Shift-K 清空原生会话视图；Command-O 在 Finder 中打开当前工作区。
+4. 输入任务后点击运行。Agent 工作期间可继续输入，选择“插话发送”追加到当前轮，或“排队发送”等本轮结束后自动发送。
+5. 输入框底部的权限菜单切换当前会话权限；“设置 → 通用 → 新会话默认权限”只影响之后创建的会话。
+6. Command-W 选择工作区；Command-Shift-K 清空原生会话视图；Command-O 在 Finder 中打开当前工作区。
 
 ## 验证与原生测试
 
@@ -76,7 +79,7 @@ plutil -lint "dist/DeepSeek Harness.app/Contents/Info.plist"
 codesign --verify --deep --strict --verbose=2 "dist/DeepSeek Harness.app"
 ```
 
-`NativeContractCheck.swift` 是与生产类型一起编译的契约 fixture，覆盖 RPC envelope、文本 prompt、设置 JSON patch、队列 action 和附件引用。`--smoke` 不发送 prompt、不修改 workspace 或 credentials；它在临时 `DSH_HOME` 中验证 `host.describe`、session、workspace、settings、model 与 preset 的只读 API。`--smoke /path/to/App.app` 可验证非默认产物。
+`NativeContractCheck.swift` 是与生产类型一起编译的契约 fixture，覆盖 RPC envelope、文本 prompt、设置 JSON patch、队列 action 和附件引用。`--unit` 还会验证权限投影与 Queue/Steer 提交策略，权限/输入框专项检查会渲染真实 SwiftUI 快照。`--smoke` 不发送 LLM prompt，也不修改用户工作区或凭据；它在临时 `DSH_HOME` 中验证权限默认值、新会话继承、当前会话切换和设置持久化，以及已有 Host 检查。`--smoke /path/to/App.app` 可验证非默认产物。
 
 ## 参与贡献
 

@@ -201,6 +201,11 @@ private struct GeneralSettingsSection: View {
             ? "Shift+回车换行。关闭后：回车换行，⌘回车发送。"
             : "当前：回车换行，⌘回车发送。",
           isOn: $enterToSend)
+        BusyEnterSettingsRow()
+      }
+
+      DSHSettingsGroup(title: "权限") {
+        PermissionDefaultSettingsRow()
       }
 
       DSHSettingsGroup(title: "会话互通") {

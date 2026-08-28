@@ -5,17 +5,24 @@ struct QueueDockView: View {
   @State private var editing: DSHQueueItem?
   @State private var text = ""
   var body: some View {
-    if !harness.displayedQueueItems.isEmpty {
+    if !harness.displayedQueuedItems.isEmpty {
       VStack(alignment: .leading, spacing: DSHSpace.s2) {
         Label("排队消息", systemImage: "list.number").font(.caption.weight(.bold)).foregroundStyle(DSHTheme.ink)
-        ForEach(harness.displayedQueueItems) { item in
+        ForEach(harness.displayedQueuedItems) { item in
           HStack(spacing: DSHSpace.s2) {
-            DSHBadge(text: item.placement == "steering" ? "Steer" : "Queue", tone: item.placement == "steering" ? .warm : .neutral)
-            Text(item.text).font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(2)
+            DSHBadge(text: "Queue", tone: .neutral)
+            Text(item.displayText).font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(2)
             Spacer()
             if harness.canMutateDisplayedQueue {
-              Button(action: { text = item.text; editing = item }) { Image(systemName: "pencil") }.buttonStyle(.dshGhost)
-              Button(action: { harness.mutateQueue(item, action: .steer) }) { Image(systemName: "arrow.turn.down.right") }.buttonStyle(.dshGhost)
+              if item.isEditable {
+                Button(action: { text = item.text; editing = item }) { Image(systemName: "pencil") }
+                  .buttonStyle(.dshGhost)
+                  .help("编辑排队消息")
+              }
+              Button(action: { harness.mutateQueue(item, action: .steer) }) { Image(systemName: "arrow.turn.down.right") }
+                .buttonStyle(.dshGhost)
+                .disabled(!harness.displayedIsRunning)
+                .help(harness.displayedIsRunning ? "插话发送" : "仅运行中可插话发送")
               Button(action: { harness.mutateQueue(item, action: .remove) }) { Image(systemName: "trash") }.buttonStyle(.dshGhost)
             }
           }

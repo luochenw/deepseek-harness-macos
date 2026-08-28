@@ -238,6 +238,10 @@ extension HarnessController {
           self.historyHasMore = page.hasMore
           self.historyOldestSeq = page.events.map { $0.event.seq }.min()
           self.sessions[index].updatedAt = Date()
+          self.rememberPermissionSelection(
+            page.projections?.values.permissions,
+            sessionID: sessionId,
+            seq: page.projections?.asOfSeq ?? -1)
           self.status = "已载入 \(folded.messages.count) 条原生会话消息"
         }
       } catch {

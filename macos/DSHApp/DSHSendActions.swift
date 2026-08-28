@@ -14,20 +14,10 @@ extension HarnessController {
     let image = draftImage
     guard !text.isEmpty || image != nil else { return }
     guard !isViewingReadOnlySubagent else { return }
-    var content: [DSHPromptContent] = text.isEmpty ? [] : [.text(text)]
-    if let image, let bytes = try? Data(contentsOf: image.url) { content.append(.image(data: bytes.base64EncodedString(), mediaType: image.mediaType, name: image.url.lastPathComponent)) }
+    guard !composerSubmissionInFlight else { return }
 
-    if let hostClient, let address = activeSubagentAddress, address.mode == "continuable" {
-      guard !Self.isRootOnlySubagentSlashCommand(text) else {
-        status = "子代理不支持 /goal、/plan 等根会话命令"
-        return
-      }
-      draft = ""
-      draftImage = nil
-      Task {
-        do { try await hostClient.promptSubagent(parentSessionId: address.parentSessionId, childSessionId: address.childSessionId, content: content); await MainActor.run { self.status = "已发送子代理追问" } }
-        catch { await MainActor.run { self.appendSystem("子代理追问失败：\(error.localizedDescription)") } }
-      }
+    if let address = activeSubagentAddress, address.mode == "continuable" {
+      submitSubagentComposerDraft(address: address, successStatus: "已发送子代理追问")
       return
     }
     // Native command plane for the two lines the web client owns
@@ -36,10 +26,7 @@ extension HarnessController {
     // session.export download; `/model` is a client-plane popup upstream and
     // opens the composer's picker here. Bare lines only — with arguments the
     // web adapter wouldn't claim these either.
-    if image == nil {
-      if text == "/export" { draft = ""; exportCurrentSessionLog(); return }
-      if text == "/model" { draft = ""; showModelPicker = true; return }
-    }
+    if submitNativeComposerCommandIfNeeded(text: text, hasImage: image != nil) { return }
     // No workspace gate: `session.create` accepts a nil cwd (verified
     // against the live Host — the session runs on the Host's default
     // directory), so a plain conversation needs no folder. Picking one
@@ -90,12 +77,17 @@ extension HarnessController {
           if let execution = try await hostClient.executeCommand(sessionId: hostSessionID, line: text) {
             await MainActor.run {
               self.clearPendingLocalUserMessage(localSessionID: localSessionID, messageID: pendingMessageID)
-              if let output = execution.result.text, !output.isEmpty { self.appendSystem(execution.succeeded ? output : "命令失败：\(output)") }
-              else { self.status = execution.succeeded ? "命令已执行" : "命令执行失败" }
+              if let output = execution.result.text, !output.isEmpty {
+                self.appendSystem(execution.succeeded ? output : "命令失败：\(output)", to: localSessionID)
+              } else if self.selectedSessionID == localSessionID {
+                self.status = execution.succeeded ? "命令已执行" : "命令执行失败"
+              }
               // Command execution isn't a turn — no `turn/end` event will
               // arrive to reset this, unlike the `prompt(...)` fallback below.
-              self.isRunning = false
-              if let current = self.selectedSessionIndex { self.sessions[current].isRunning = false }
+              self.setSubmissionRunning(
+                false,
+                localSessionID: localSessionID,
+                hostSessionID: hostSessionID)
             }
           } else {
             try await hostClient.prompt(sessionId: hostSessionID, content: [.text(text)])
@@ -103,9 +95,11 @@ extension HarnessController {
         } catch {
           await MainActor.run {
             self.clearPendingLocalUserMessage(localSessionID: localSessionID, messageID: pendingMessageID)
-            self.isRunning = false
-            if let current = self.selectedSessionIndex { self.sessions[current].isRunning = false }
-            self.appendSystem("命令执行失败：\(error.localizedDescription)")
+            self.setSubmissionRunning(
+              false,
+              localSessionID: localSessionID,
+              hostSessionID: hostSessionID)
+            self.appendSystem("命令执行失败：\(error.localizedDescription)", to: localSessionID)
           }
         }
       }
@@ -146,15 +140,34 @@ extension HarnessController {
         var content: [DSHPromptContent] = outgoingText.isEmpty ? [] : [.text(outgoingText)]
         if let image, let bytes = try? Data(contentsOf: image.url) { content.append(.image(data: bytes.base64EncodedString(), mediaType: image.mediaType, name: image.url.lastPathComponent)) }
         try await hostClient.prompt(sessionId: hostSessionID, content: content)
-        await MainActor.run { self.status = "已交给持久 Host；等待事件流接入" }
+        await MainActor.run {
+          if self.selectedSessionID == localSessionID {
+            self.status = "已交给持久 Host；等待事件流接入"
+          }
+        }
       } catch {
         await MainActor.run {
           self.clearPendingLocalUserMessage(localSessionID: localSessionID, messageID: pendingMessageID)
-          self.isRunning = false
-          if let current = self.selectedSessionIndex { self.sessions[current].isRunning = false }
-          self.appendSystem("Host prompt 失败：\(error.localizedDescription)")
+          self.setSubmissionRunning(
+            false,
+            localSessionID: localSessionID,
+            hostSessionID: hostSessionID)
+          self.appendSystem("Host prompt 失败：\(error.localizedDescription)", to: localSessionID)
         }
       }
+    }
+  }
+
+  func setSubmissionRunning(
+    _ running: Bool,
+    localSessionID: UUID,
+    hostSessionID: String
+  ) {
+    if let index = sessions.firstIndex(where: { $0.id == localSessionID }) {
+      sessions[index].isRunning = running
+    }
+    if selectedSessionID == localSessionID && hostCurrentSessionID == hostSessionID {
+      isRunning = running
     }
   }
 

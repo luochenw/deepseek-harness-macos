@@ -53,7 +53,7 @@ struct Composer: View {
       // No status readout here — the transcript itself (waiting wave, tool
       // rows, system notes) already narrates what's happening; a second
       // ticker in the corner was noise. Plan/queue chips stay.
-      if harness.displayedPlanActive || !harness.displayedQueueItems.isEmpty {
+      if harness.displayedPlanActive || !harness.displayedQueuedItems.isEmpty {
         HStack {
           if harness.displayedPlanActive {
             if harness.canMutateDisplayedPlan {
@@ -62,8 +62,8 @@ struct Composer: View {
               DSHBadge(text: "子代理计划模式", tone: .neutral)
             }
           }
-          if !harness.displayedQueueItems.isEmpty {
-            DSHBadge(text: "已排队 \(harness.displayedQueueItems.count)", tone: .warm)
+          if !harness.displayedQueuedItems.isEmpty {
+            DSHBadge(text: "已排队 \(harness.displayedQueuedItems.count)", tone: .warm)
           }
           Spacer()
         }
@@ -126,6 +126,11 @@ struct Composer: View {
               if let entry = selectedPaletteEntry { harness.pickSlashEntry(entry); return .handled }
               // 回车发送可关（设置→通用）：关掉后回车换行，⌘回车发送。
               if !AppPrefs.enterToSend, !press.modifiers.contains(.command) { return .ignored }
+              if harness.submitBusyComposer(
+                accelerated: AppPrefs.enterToSend && press.modifiers.contains(.command)
+              ) {
+                return .handled
+              }
               guard harness.composerCanSubmit else { return .ignored }
               harness.submitComposer()
               return .handled
@@ -214,6 +219,7 @@ struct Composer: View {
           } label: { Image(systemName: "ellipsis.circle") }
             .menuStyle(.borderlessButton).fixedSize().foregroundStyle(DSHTheme.inkSoft).help("更多操作")
           Button(action: harness.pickImage) { Image(systemName: "paperclip") }.buttonStyle(.borderless).foregroundStyle(DSHTheme.inkSoft).help("添加图片")
+          PermissionMenu()
           // Dictation streams live into the input box (partials replace from
           // the pre-dictation base). Two command classes on the final text:
           // 定稿类（结束/发送）ends capture early (handled in VoiceController);
@@ -258,10 +264,16 @@ struct Composer: View {
           } else if harness.displayedIsRunning {
             Button(action: harness.stop) { Image(systemName: "stop.fill").font(.system(size: 13)) }
               .buttonStyle(.dshSecondary).help("停止")
+            if harness.activeSubagentAddress == nil {
+              Button(action: harness.steerDraft) { Image(systemName: "arrow.turn.down.right").font(.system(size: 13, weight: .semibold)) }
+                .buttonStyle(.dshPrimary)
+                .disabled(!harness.canSubmitRunningDraft)
+                .help("插话发送：追加到当前轮")
+            }
             Button(action: harness.queueDraft) { Image(systemName: "tray.and.arrow.down") }
               .buttonStyle(.dshSecondary)
-              .disabled(harness.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-              .help("排队：本轮结束后自动发送")
+              .disabled(!harness.canSubmitRunningDraft)
+              .help("排队发送：本轮结束后自动发送")
           } else {
             Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
               .buttonStyle(.dshPrimary).disabled(!harness.composerCanSubmit)

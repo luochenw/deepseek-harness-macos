@@ -14,7 +14,7 @@ struct NativeDSHContractCheck {
     DSHRPCEnvelope(
       rpcId: "native-contract-fixture",
       method: "session.prompt",
-      payload: DSHPromptPayload(sessionId: "session-fixture", mode: "queue", content: [.text("hello")])
+      payload: DSHPromptPayload(sessionId: "session-fixture", mode: .queue, content: [.text("hello")])
     )
   }
 

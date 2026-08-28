@@ -73,6 +73,7 @@ bash "$ROOT/scripts/test-agent-platform-ui.sh"
 bash "$ROOT/scripts/test-attachment-rail-ui.sh"
 bash "$ROOT/scripts/test-tool-presentation-ui.sh"
 bash "$ROOT/scripts/test-subagent-context-ui.sh"
+bash "$ROOT/scripts/test-permission-composer-ui.sh"
 echo "native-contract: OK"
 
 if [[ "$MODE" == "smoke" ]]; then

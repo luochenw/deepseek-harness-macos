@@ -119,6 +119,12 @@ extension HarnessController {
         await MainActor.run {
           self.hostSessions = visibleSessions
           self.hostWorkspaces = snapshot.items
+          for summary in visibleSessions {
+            self.rememberPermissionSelection(
+              summary.projections?.values.permissions,
+              sessionID: summary.sessionId,
+              seq: summary.projections?.asOfSeq ?? -1)
+          }
           self.hostStatus = "Host 已同步 \(visibleSessions.count) 个会话 / \(snapshot.items.count) 个工作区"
         }
       } catch {

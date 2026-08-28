@@ -6,7 +6,7 @@ import Foundation
 @main
 struct DSHTestsMain {
   static func main() {
-    let allTests = dshVoiceTests + dshWorkspaceTests + dshHostProtocolTests + dshAgentPlatformTests + dshAttachmentTests + dshToolPresentationTests + dshToolResultTests + dshSubagentProjectionTests + dshProjectionsTests
+    let allTests = dshVoiceTests + dshWorkspaceTests + dshHostProtocolTests + dshAgentPlatformTests + dshAttachmentTests + dshToolPresentationTests + dshToolResultTests + dshSubagentProjectionTests + dshProjectionsTests + dshPermissionAndSubmissionTests
     let ok = runAll(allTests)
     exit(ok ? 0 : 1)
   }

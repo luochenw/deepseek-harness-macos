@@ -133,6 +133,11 @@ struct DSHCommandExecuteArgs: Encodable {
   let agentId: String
   let line: String
 }
+struct DSHCommandExecuteArgsWithImages: Encodable {
+  let agentId: String
+  let line: String
+  let images: [DSHPromptContent]
+}
 
 extension DSHHostClient {
   /// List the effective slash commands for one session's agent.
@@ -145,7 +150,20 @@ extension DSHHostClient {
   /// (the Host answers `undefined`, so the caller should fall back to
   /// treating the line as an ordinary prompt).
   func executeCommand(sessionId: String, line: String) async throws -> DSHCommandExecution? {
-    try await invokeOptional(ns: "commands", method: "execute", args: DSHCommandExecuteArgs(agentId: sessionId, line: line), as: DSHCommandExecution.self)
+    do {
+      return try await invokeOptional(
+        ns: "commands",
+        method: "execute",
+        args: DSHCommandExecuteArgsWithImages(agentId: sessionId, line: line, images: []),
+        as: DSHCommandExecution.self)
+    } catch let error as DSHTypertGatewayError
+      where error.message?.contains("unexpected \"images\"") == true {
+      return try await invokeOptional(
+        ns: "commands",
+        method: "execute",
+        args: DSHCommandExecuteArgs(agentId: sessionId, line: line),
+        as: DSHCommandExecution.self)
+    }
   }
 }
 

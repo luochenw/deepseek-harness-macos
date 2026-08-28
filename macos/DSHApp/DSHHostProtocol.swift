@@ -92,6 +92,27 @@ struct DSHSessionProjectionValues: Decodable {
   let tokenUsage: DSHTokenUsage?
   let contextPressure: DSHContextPressure?
   let sessionStats: DSHSessionStats?
+  let permissions: DSHPermissionSelection?
+
+  init(
+    title: String?,
+    todos: [DSHTodoItem]?,
+    plan: DSHPlanState?,
+    goal: DSHGoalProjection?,
+    tokenUsage: DSHTokenUsage?,
+    contextPressure: DSHContextPressure?,
+    sessionStats: DSHSessionStats?,
+    permissions: DSHPermissionSelection? = nil
+  ) {
+    self.title = title
+    self.todos = todos
+    self.plan = plan
+    self.goal = goal
+    self.tokenUsage = tokenUsage
+    self.contextPressure = contextPressure
+    self.sessionStats = sessionStats
+    self.permissions = permissions
+  }
 }
 
 struct DSHGoalProjection: Decodable {
@@ -145,9 +166,14 @@ struct DSHPromptContent: Encodable {
   static func image(data: String, mediaType: String, name: String) -> Self { Self(type: "image", text: nil, mediaType: mediaType, data: data, name: name) }
 }
 
+enum DSHPromptMode: String, Encodable, CaseIterable, Identifiable {
+  case queue, steer
+  var id: String { rawValue }
+}
+
 struct DSHPromptPayload: Encodable {
   let sessionId: String
-  let mode: String
+  let mode: DSHPromptMode
   let content: [DSHPromptContent]
 }
 
@@ -258,7 +284,7 @@ actor DSHHostClient {
     try await call("session.create", payload: DSHCreateSessionPayload(cwd: cwd, agentPreset: agentPreset), as: DSHCreatedSession.self)
   }
 
-  func prompt(sessionId: String, content: [DSHPromptContent], mode: String = "queue") async throws {
+  func prompt(sessionId: String, content: [DSHPromptContent], mode: DSHPromptMode = .queue) async throws {
     _ = try await call("session.prompt", payload: DSHPromptPayload(sessionId: sessionId, mode: mode, content: content), as: DSHPromptAccepted.self)
   }
 
@@ -266,7 +292,7 @@ actor DSHHostClient {
     try await call("session.attachment", payload: DSHAttachmentPayload(sessionId: sessionId, attachmentId: attachmentId), as: DSHAttachmentResult.self)
   }
 
-  func prompt(sessionId: String, text: String, mode: String = "queue") async throws {
+  func prompt(sessionId: String, text: String, mode: DSHPromptMode = .queue) async throws {
     try await prompt(sessionId: sessionId, content: [.text(text)], mode: mode)
   }
 

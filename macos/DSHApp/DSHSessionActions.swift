@@ -158,7 +158,11 @@ extension HarnessController {
     tokenUsage = summary.projections?.values.tokenUsage
     contextPressure = summary.projections?.values.contextPressure
     sessionStats = summary.projections?.values.sessionStats
-    queueItems = []  // repopulated by this session's own queue push
+    rememberPermissionSelection(
+      summary.projections?.values.permissions,
+      sessionID: summary.sessionId,
+      seq: summary.projections?.asOfSeq ?? -1)
+    restoreRootQueue(sessionID: summary.sessionId)
     runNotice = nil
     retryNotice = nil
     loadSubagents(parentSessionId: summary.sessionId)

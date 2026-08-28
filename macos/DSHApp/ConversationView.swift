@@ -115,6 +115,9 @@ struct ConversationView: View {
                 ToolGroupRow(messages: group).id(group[0].id)
               }
             }
+            ForEach(harness.displayedSteeringItems) { item in
+              PendingSteeringBubble(item: item).id("steering-\(item.id)")
+            }
             // The transcript tail row: the rolling-wave miniature animates
             // for the whole running turn (it also fills the send→first-token
             // gap), then freezes into the static icon once the turn settles.
@@ -170,6 +173,9 @@ struct ConversationView: View {
         if pinnedToBottom, harness.displayedSession?.messages.isEmpty == false {
           proxy.scrollTo("transcript-tail", anchor: .bottom)
         }
+      }
+      .onChange(of: harness.displayedSteeringItems.map(\.id)) { _, _ in
+        if pinnedToBottom { proxy.scrollTo("transcript-tail", anchor: .bottom) }
       }
       .onAppear {
         guard scrollMonitor == nil else { return }
@@ -244,6 +250,28 @@ struct ConversationView: View {
       items.append(.message(message))
     }
     return items
+  }
+}
+
+private struct PendingSteeringBubble: View {
+  let item: DSHQueueItem
+  var body: some View {
+    HStack {
+      Spacer(minLength: 180)
+      HStack(alignment: .top, spacing: DSHSpace.s2) {
+        Image(systemName: "arrow.turn.down.right")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(DSHTheme.accent)
+          .padding(.top, 3)
+        Text(item.displayText)
+          .textSelection(.enabled)
+          .font(.system(.body, design: .rounded))
+          .foregroundStyle(DSHTheme.ink)
+      }
+      .padding(.horizontal, DSHSpace.s4).padding(.vertical, DSHSpace.s3)
+      .dshCard(tint: DSHTheme.accentSoft, radius: DSHRadius.lg)
+      .frame(maxWidth: 640, alignment: .trailing)
+    }
   }
 }
 

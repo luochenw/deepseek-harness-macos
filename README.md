@@ -16,6 +16,8 @@ Agent reasoning, tools, MCP, terminal, filesystem, and subagents are still provi
 ## Native features
 
 - Native three-pane SwiftUI interface, streaming transcript, run/stop state, keyboard shortcuts.
+- A Host-backed permission menu in the composer for Read Only, Workspace Access, and Full Access. Defaults and current-session access are managed separately, and Full Access requires an explicit risk confirmation.
+- The composer stays writable while an Agent is running: additions can steer the current turn or queue the next turn, with a configurable busy-Enter preference.
 - Native `NSOpenPanel` workspace entry; the chosen workspace persists in macOS user defaults.
 - Local tasks run from the selected workspace — DSH can execute a terminal, read/write files, use skills, and use configured local tools.
 - Subagent transcripts are a dedicated, live-streaming overlay on the conversation pane (not a synthetic top-level session), with a visible read-only/continuable distinction and breadcrumb navigation.
@@ -56,8 +58,9 @@ The result is `dist/DeepSeek Harness.app`, roughly 340–570MB depending on the 
 1. Open the app and choose a workspace. This grants DSH local file and terminal access inside that directory.
 2. Open Settings. The native page reads the real model catalog, configuration inventory, and credential status from the Host. Add a **Custom Configuration** for any compatible endpoint, then set its name, base URL, API protocol, model IDs, and API key through revisioned Host settings mutations.
 3. API keys are saved, rotated, or cleared through the Host's write-only credential API; the native app never reads back or displays a saved secret value. Existing legacy routes remain editable as custom configurations rather than being treated as a required provider.
-4. Type a task and run.
-5. ⌘W chooses a workspace; ⌘⇧K clears the native conversation view; ⌘O opens the current workspace in Finder.
+4. Type a task and run. While the Agent is working, use **Steer** to add context to the current turn or **Queue** to send it after the turn finishes.
+5. Use the permission menu at the bottom of the composer for the current session. **Settings → General → Default permission for new sessions** affects only sessions created later.
+6. ⌘W chooses a workspace; ⌘⇧K clears the native conversation view; ⌘O opens the current workspace in Finder.
 
 ## Verification and native tests
 
@@ -76,7 +79,7 @@ plutil -lint "dist/DeepSeek Harness.app/Contents/Info.plist"
 codesign --verify --deep --strict --verbose=2 "dist/DeepSeek Harness.app"
 ```
 
-`NativeContractCheck.swift` is a compile-time fixture built alongside production types, covering the RPC envelope, text prompts, settings JSON patches, queue actions, and attachment references. `--smoke` never sends a prompt or mutates a workspace/credential — it verifies `host.describe`, session, workspace, settings, model, and preset read-only APIs against a temporary `DSH_HOME`. `--smoke /path/to/App.app` checks a non-default build.
+`NativeContractCheck.swift` is a compile-time fixture built alongside production types, covering the RPC envelope, text prompts, settings JSON patches, queue actions, and attachment references. `--unit` also exercises permission projections and Queue/Steer submission policy, while the permission/composer snapshot renders the real SwiftUI controls. `--smoke` never sends an LLM prompt or mutates the user's workspace/credentials; in a temporary `DSH_HOME` it verifies permission defaults, new-session inheritance, current-session switching, and settings persistence alongside the existing Host checks. `--smoke /path/to/App.app` checks a non-default build.
 
 ## Contributing
 

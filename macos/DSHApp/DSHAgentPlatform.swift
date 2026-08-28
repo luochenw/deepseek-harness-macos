@@ -479,7 +479,8 @@ extension HarnessController {
 
   var composerCanSubmit: Bool {
     let hasTask = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    guard composerAgentProfileID != nil else { return canSend }
+    guard !composerSubmissionInFlight else { return false }
+    guard composerAgentProfileID != nil else { return canSend && !runningSubmissionInFlight }
     return hasTask && selectedComposerAgentProfile != nil && workspace != nil
       && !agentBatchStarting && !displayedIsRunning && !isViewingReadOnlySubagent
   }

@@ -98,6 +98,14 @@ extension HarnessController {
     return subagentPresentationState.contexts[sessionID]?.queueItems ?? []
   }
 
+  var displayedQueuedItems: [DSHQueueItem] {
+    displayedQueueItems.filter(\.isQueued)
+  }
+
+  var displayedSteeringItems: [DSHQueueItem] {
+    displayedQueueItems.filter(\.isSteering)
+  }
+
   /// The root session's Typert roster is not a child-session catalog.
   /// Continuable children accept literal prompts but must not expose root
   /// commands such as /goal or /plan through the shared composer palette.
@@ -156,7 +164,9 @@ extension HarnessController {
     state.loadGeneration += 1
     state.requestedAddress = address
     if state.contexts[address.childSessionId] == nil {
-      state.contexts[address.childSessionId] = DSHSubagentPresentationContext()
+      var context = DSHSubagentPresentationContext()
+      context.queueItems = cachedQueueSnapshot(sessionID: address.childSessionId)
+      state.contexts[address.childSessionId] = context
     }
     return state.loadGeneration
   }
@@ -414,6 +424,15 @@ extension HarnessController {
   func replaceSubagentQueue(sessionID: String, items: [DSHQueueItem]) {
     guard var context = subagentPresentationState.contexts[sessionID] else { return }
     context.queueItems = items
+    subagentPresentationState.contexts[sessionID] = context
+    subagentPresentationState.notify()
+  }
+
+  func retireSubagentSteeringItem(messageID: String, sessionID: String) {
+    guard var context = subagentPresentationState.contexts[sessionID],
+          let index = context.queueItems.firstIndex(where: { $0.isSteering && $0.messageID == messageID })
+    else { return }
+    context.queueItems.remove(at: index)
     subagentPresentationState.contexts[sessionID] = context
     subagentPresentationState.notify()
   }

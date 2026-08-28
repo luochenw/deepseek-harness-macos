@@ -68,6 +68,24 @@ assert_rpc session.create '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.r
 # round trip a Settings UI edit takes, not just that the RPC call is accepted.
 assert_rpc settings.update '{"ns":"ui-theme","patch":{"preference":"dark"},"expectedRevision":0}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||d.result.value?.value?.preference!=="dark"||d.result.value?.revision!==1) process.exit(1)'
 assert_rpc settings.describe '{}' 'const d=JSON.parse(process.env.RESPONSE); const ns=(d.result?.value?.namespaces||[]).find(n=>n.ns==="ui-theme"); if(d.result?.ok!==true||ns?.value?.preference!=="dark"||ns?.revision!==1) process.exit(1)'
+
+# Permission and busy-composer settings are Host-owned. Verify the native
+# selectors' exact write paths, then prove a future session inherits the
+# default and a current session can switch through the command registry.
+assert_rpc settings.mutate '{"ns":"permission","ops":[{"op":"set","path":["defaultPreset"],"value":"read-only"}],"expectedRevision":0}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||d.result.value?.value?.defaultPreset!=="read-only"||d.result.value?.revision!==1) process.exit(1)'
+assert_rpc settings.mutate '{"ns":"ui-conversation","ops":[{"op":"set","path":["busyEnter"],"value":"steer"}],"expectedRevision":0}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||d.result.value?.value?.busyEnter!=="steer"||d.result.value?.revision!==1) process.exit(1)'
+PERMISSION_SESSION_RESPONSE="$(call session.create '{}')"
+PERMISSION_SESSION_ID="$(RESPONSE="$PERMISSION_SESSION_RESPONSE" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const id=d.result?.value?.sessionId; if(d.result?.ok!==true||typeof id!=="string") process.exit(1); process.stdout.write(id)')"
+PERMISSION_LIST="$(call session.list '{}')"
+RESPONSE="$PERMISSION_LIST" PERMISSION_SESSION_ID="$PERMISSION_SESSION_ID" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const s=d.result?.value?.items?.find(x=>x.sessionId===process.env.PERMISSION_SESSION_ID); if(d.result?.ok!==true||s?.projections?.values?.permissions?.currentValue!=="read-only") process.exit(1)'
+if [[ "$DSH_VERSION" == "0.1.1-rc.2" ]]; then
+  PERMISSION_COMMAND_ARGS="{\"agentId\":\"$PERMISSION_SESSION_ID\",\"line\":\"/permission workspace-write\",\"images\":[]}"
+else
+  PERMISSION_COMMAND_ARGS="{\"agentId\":\"$PERMISSION_SESSION_ID\",\"line\":\"/permission workspace-write\"}"
+fi
+assert_gateway commands/execute "$PERMISSION_COMMAND_ARGS" 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||d.result.value?.result?.kind!=="success") process.exit(1)'
+PERMISSION_LIST="$(call session.list '{}')"
+RESPONSE="$PERMISSION_LIST" PERMISSION_SESSION_ID="$PERMISSION_SESSION_ID" "$NODE" -e 'const d=JSON.parse(process.env.RESPONSE); const s=d.result?.value?.items?.find(x=>x.sessionId===process.env.PERMISSION_SESSION_ID); if(d.result?.ok!==true||s?.projections?.values?.permissions?.currentValue!=="workspace-write") process.exit(1)'
 assert_gateway agentProfiles/list '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.items)) process.exit(1)'
 assert_gateway agentProfiles/runtimeStatus '{}' 'const d=JSON.parse(process.env.RESPONSE); if(d.result?.ok!==true||!Array.isArray(d.result.value?.items)||!d.result.value.items.some((x)=>x.runtime==="dsh"&&x.available===true)) process.exit(1)'
 PROFILE_RESPONSE="$(call agentProfiles/save '{"args":{"profile":{"name":"Smoke Agent","mention":"smoke-agent","defaultMode":"analysis","allowModelDispatch":false,"integrationPolicy":"manual","adapters":[{"id":"dsh","runtime":"dsh","enabled":true}]}}}')"
