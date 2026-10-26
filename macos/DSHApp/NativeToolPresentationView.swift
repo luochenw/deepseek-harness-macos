@@ -19,12 +19,15 @@ struct NativeToolPresentationView: View {
 }
 
 struct ToolPresentationContent: View {
+  @EnvironmentObject private var harness: HarnessController
   let tool: HarnessController.ToolActivity
   let compact: Bool
 
   var body: some View {
     if let presentation = tool.presentation {
       switch presentation.card {
+      case "code":
+        code(presentation)
       case "terminal":
         terminal(presentation)
       case "diff":
@@ -35,6 +38,8 @@ struct ToolPresentationContent: View {
         search(presentation)
       case "web":
         web(presentation)
+      case "image":
+        image(presentation)
       default:
         ToolOutputBlock(text: presentation.output ?? tool.output)
       }
@@ -44,6 +49,35 @@ struct ToolPresentationContent: View {
         .foregroundStyle(DSHTheme.inkFaint)
     } else {
       ToolOutputBlock(text: tool.output)
+    }
+  }
+
+  @ViewBuilder private func code(_ view: HarnessController.ToolPresentation) -> some View {
+    VStack(alignment: .leading, spacing: DSHSpace.s3) {
+      if let description = view.description, !description.isEmpty {
+        VStack(alignment: .leading, spacing: DSHSpace.s1) {
+          Text("执行代码")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(DSHTheme.inkSoft)
+          ToolOutputBlock(text: description)
+        }
+      }
+      if !tool.children.isEmpty {
+        VStack(alignment: .leading, spacing: DSHSpace.s2) {
+          Text("内部工具调用")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(DSHTheme.inkSoft)
+          ForEach(tool.children) { child in
+            ToolSubcallRow(child: child)
+          }
+        }
+      }
+      VStack(alignment: .leading, spacing: DSHSpace.s1) {
+        Text("最终输出")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(DSHTheme.inkSoft)
+        ToolOutputBlock(text: view.output ?? tool.output)
+      }
     }
   }
 
@@ -141,6 +175,29 @@ struct ToolPresentationContent: View {
       if view.truncated { DSHBadge(text: "结果已截断", tone: .warm) }
     }
   }
+
+  @ViewBuilder private func image(_ view: HarnessController.ToolPresentation) -> some View {
+    VStack(alignment: .leading, spacing: DSHSpace.s2) {
+      if let path = view.path {
+        ToolPathView(path: path, compact: compact)
+      }
+      if tool.imageAttachments.isEmpty {
+        if tool.state == .running {
+          Text("正在读取图片…")
+            .font(DSHType.caption)
+            .foregroundStyle(DSHTheme.inkFaint)
+        } else {
+          ToolOutputBlock(text: view.output ?? tool.output)
+        }
+      } else {
+        ForEach(tool.imageAttachments, id: \.attachmentId) { attachment in
+          AttachmentPreview(
+            ref: attachment,
+            sessionID: harness.displayedAttachmentSessionID)
+        }
+      }
+    }
+  }
 }
 
 private enum ToolPresentationChrome {
@@ -155,6 +212,7 @@ private enum ToolPresentationChrome {
     case "read": return view.title ?? view.path ?? "读取文件"
     case "diff": return view.title ?? "文件更改"
     case "web": return view.title ?? (view.webKind == "fetch" ? "网页抓取" : "网页搜索")
+    case "image": return view.title ?? view.path ?? "查看图片"
     case "terminal": return view.title ?? "终端"
     default: return view.title ?? tool.name
     }
@@ -162,11 +220,13 @@ private enum ToolPresentationChrome {
 
   static func icon(for tool: HarnessController.ToolActivity) -> String {
     switch tool.presentation?.card {
+    case "code": "chevron.left.forwardslash.chevron.right"
     case "terminal": "terminal"
     case "diff": "arrow.left.arrow.right"
     case "read": "doc.text"
     case "search": "magnifyingglass"
     case "web": "globe"
+    case "image": "photo"
     default: "wrench.and.screwdriver"
     }
   }
@@ -181,6 +241,71 @@ private enum ToolPresentationChrome {
     if view?.signal != nil { return Status(text: label, tone: .warm) }
     if let exitCode = view?.exitCode { return Status(text: label, tone: exitCode == 0 ? .accent : .coral) }
     return Status(text: label, tone: .warm)
+  }
+}
+
+private struct ToolSubcallRow: View {
+  @EnvironmentObject private var harness: HarnessController
+  let child: DSHToolChildActivity
+  @State private var showsArguments = false
+
+  private var status: String {
+    switch child.state {
+    case .running: "运行中"
+    case .succeeded: "完成"
+    case .failed: "失败"
+    }
+  }
+
+  private var color: Color {
+    switch child.state {
+    case .running: DSHTheme.warm
+    case .succeeded: DSHTheme.accent
+    case .failed: DSHTheme.coral
+    }
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: DSHSpace.s1) {
+      HStack(alignment: .firstTextBaseline, spacing: DSHSpace.s2) {
+        Circle().fill(color).frame(width: 6, height: 6)
+        Text(child.name)
+          .font(.system(.caption, design: .monospaced).weight(.semibold))
+          .foregroundStyle(DSHTheme.ink)
+        Text(child.title)
+          .font(.system(.caption, design: .monospaced))
+          .foregroundStyle(DSHTheme.inkSoft)
+          .lineLimit(4)
+          .textSelection(.enabled)
+        Spacer(minLength: 0)
+        Text(status)
+          .font(.system(size: 10.5, design: .monospaced))
+          .foregroundStyle(color)
+        if !child.arguments.isEmpty {
+          Button(action: { showsArguments.toggle() }) {
+            Image(systemName: showsArguments ? "chevron.down" : "chevron.right")
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(DSHTheme.inkFaint)
+          .help("查看完整参数")
+        }
+      }
+      if showsArguments {
+        ToolOutputBlock(text: child.arguments)
+          .padding(.leading, 14)
+      }
+      if !child.imageAttachments.isEmpty {
+        ForEach(child.imageAttachments, id: \.attachmentId) { attachment in
+          AttachmentPreview(
+            ref: attachment,
+            sessionID: harness.displayedAttachmentSessionID)
+        }
+        .padding(.leading, 14)
+      } else if !child.output.isEmpty {
+        ToolOutputBlock(text: child.output)
+          .padding(.leading, 14)
+      }
+    }
   }
 }
 
@@ -263,7 +388,7 @@ private struct ToolURLLabel: View {
   }
 }
 
-private struct ToolOutputBlock: View {
+struct ToolOutputBlock: View {
   let text: String
   @State private var expanded = false
 

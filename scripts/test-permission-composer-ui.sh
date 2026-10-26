@@ -29,6 +29,39 @@ grep -q 'Button(action: harness.queueDraft)' "$COMPOSER" || {
   echo "permission-composer-ui: running composer has no queue action" >&2
   exit 1
 }
+grep -q 'harness.activeSubagentAddress != nil || !visibleQueuedItems.isEmpty' "$COMPOSER" || {
+  echo "permission-composer-ui: root queue action is not gated by existing queued messages" >&2
+  exit 1
+}
+grep -q 'QueueDockView(items: visibleQueuedItems)' "$COMPOSER" \
+  && grep -q 'DSHQueueChrome.settleDelayMilliseconds' "$COMPOSER" || {
+  echo "permission-composer-ui: queue chrome is not stabilized against transient snapshots" >&2
+  exit 1
+}
+grep -q 'DraftImageStrip(' "$COMPOSER" || {
+  echo "permission-composer-ui: composer does not render draft image thumbnails" >&2
+  exit 1
+}
+grep -q 'DraftImagePasteMonitor(isEnabled: editorFocused)' "$COMPOSER" || {
+  echo "permission-composer-ui: composer does not intercept image paste while focused" >&2
+  exit 1
+}
+grep -q 'onPasteCommand(of: \[.image, .fileURL\])' "$COMPOSER" || {
+  echo "permission-composer-ui: composer does not route image paste" >&2
+  exit 1
+}
+grep -q 'harness.showModelPicker.toggle()' "$COMPOSER" || {
+  echo "permission-composer-ui: model label does not open the stable picker panel" >&2
+  exit 1
+}
+if grep -q 'Menu("推理强度")' "$COMPOSER"; then
+  echo "permission-composer-ui: reasoning effort still uses a transient nested menu" >&2
+  exit 1
+fi
+grep -q 'DraftImageLightbox(image:' "$COMPOSER" || {
+  echo "permission-composer-ui: draft images have no enlarged preview" >&2
+  exit 1
+}
 grep -q 'BusyEnterSettingsRow()' "$SETTINGS" || {
   echo "permission-composer-ui: busy Enter setting is missing" >&2
   exit 1

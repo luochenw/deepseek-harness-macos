@@ -11,8 +11,8 @@ extension HarnessController {
 
   func send() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    let image = draftImage
-    guard !text.isEmpty || image != nil else { return }
+    let images = draftImages
+    guard !text.isEmpty || !images.isEmpty else { return }
     guard !isViewingReadOnlySubagent else { return }
     guard !composerSubmissionInFlight else { return }
 
@@ -26,7 +26,7 @@ extension HarnessController {
     // session.export download; `/model` is a client-plane popup upstream and
     // opens the composer's picker here. Bare lines only — with arguments the
     // web adapter wouldn't claim these either.
-    if submitNativeComposerCommandIfNeeded(text: text, hasImage: image != nil) { return }
+    if submitNativeComposerCommandIfNeeded(text: text, hasImage: !images.isEmpty) { return }
     // No workspace gate: `session.create` accepts a nil cwd (verified
     // against the live Host — the session runs on the Host's default
     // directory), so a plain conversation needs no folder. Picking one
@@ -59,7 +59,7 @@ extension HarnessController {
 
     // Slash commands dispatch through the Typert command registry with a
     // typed result; an unresolvable line falls back to a normal prompt.
-    if text.hasPrefix("/"), image == nil {
+    if text.hasPrefix("/"), images.isEmpty {
       draft = ""
       var localMessage = Message(role: .user, text: text)
       localMessage.hostMessageId = DSHTranscriptMessageMarker.pendingLocalUserHostMessageID
@@ -107,9 +107,17 @@ extension HarnessController {
       return
     }
 
+    let imageContent: [DSHPromptContent]
+    do {
+      imageContent = try imagePromptContents(images)
+    } catch {
+      status = "读取图片失败：\(error.localizedDescription)"
+      return
+    }
+    let submittedImageIDs = Set(images.map(\.id))
     draft = ""
-    draftImage = nil
-    let preview = image == nil ? text : "\(text)\n[图片附件：\(image!.url.lastPathComponent)]"
+    draftImages.removeAll { submittedImageIDs.contains($0.id) }
+    let preview = Self.draftPreviewText(text, images: images)
     // First prompt of a session carries the imported-folder context: the
     // session's Agent only knows its cwd, but every file tool accepts
     // absolute paths — naming the other registered folders is what actually
@@ -138,9 +146,9 @@ extension HarnessController {
     status = "持久 Host 正在处理"
     Task {
       do {
-        var content: [DSHPromptContent] = outgoingText.isEmpty ? [] : [.text(outgoingText)]
-        if let image, let bytes = try? Data(contentsOf: image.url) { content.append(.image(data: bytes.base64EncodedString(), mediaType: image.mediaType, name: image.url.lastPathComponent)) }
-        try await hostClient.prompt(sessionId: hostSessionID, content: content)
+        var outgoingContent: [DSHPromptContent] = outgoingText.isEmpty ? [] : [.text(outgoingText)]
+        outgoingContent.append(contentsOf: imageContent)
+        try await hostClient.prompt(sessionId: hostSessionID, content: outgoingContent)
         await MainActor.run {
           if self.selectedSessionID == localSessionID,
              self.hostCurrentSessionID == hostSessionID {
@@ -189,9 +197,21 @@ extension HarnessController {
       }
       return
     case .root(let sessionID):
+      let localSessionID = selectedSessionID
       Task {
-        do { try await hostClient.cancel(sessionId: sessionID); await MainActor.run { self.status = "已请求取消持久会话" } }
-        catch { await MainActor.run { self.status = "取消失败：\(error.localizedDescription)" } }
+        do {
+          try await hostClient.cancel(sessionId: sessionID)
+          await MainActor.run { self.status = "已请求取消持久会话" }
+        } catch {
+          await MainActor.run { self.status = "取消失败：\(error.localizedDescription)" }
+        }
+        if let localSessionID {
+          await MainActor.run {
+            self.reconcileRootSessionAfterStop(
+              sessionID: sessionID,
+              localSessionID: localSessionID)
+          }
+        }
       }
     case .none:
       return

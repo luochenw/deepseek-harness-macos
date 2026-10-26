@@ -1,6 +1,56 @@
 import Foundation
 
 extension HarnessController {
+  /// Snapshot and list responses are the recovery boundary for missed turn
+  /// boundaries. Keep the row, sidebar summary, and displayed root flag in
+  /// lockstep so a reconnect cannot leave the composer stuck on Stop.
+  func reconcileRootSessionRunningState(
+    sessionID: String,
+    localSessionID: UUID,
+    running: Bool
+  ) {
+    if let hostIndex = hostSessions.firstIndex(where: { $0.sessionId == sessionID }) {
+      hostSessions[hostIndex].running = running
+    }
+    guard let sessionIndex = sessions.firstIndex(where: { $0.id == localSessionID }) else {
+      return
+    }
+    sessions[sessionIndex].isRunning = running
+    guard hostCurrentSessionID == sessionID,
+          selectedSessionID == localSessionID
+    else { return }
+    isRunning = running
+  }
+
+  /// `session/cancel` accepts the request even for an idle Agent. Since an
+  /// idle Agent emits no new `turn/end`, use a short bounded list reconciliation
+  /// to release a stale local running flag.
+  func reconcileRootSessionAfterStop(sessionID: String, localSessionID: UUID) {
+    guard let hostClient else { return }
+    Task {
+      let delays: [UInt64] = [0, 150_000_000, 350_000_000, 750_000_000, 1_500_000_000]
+      for delay in delays {
+        if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+        guard !Task.isCancelled else { return }
+        guard let summaries = try? await hostClient.sessions(),
+              let summary = summaries.first(where: { $0.sessionId == sessionID })
+        else { continue }
+        guard !summary.running else { continue }
+        await MainActor.run {
+          self.reconcileRootSessionRunningState(
+            sessionID: sessionID,
+            localSessionID: localSessionID,
+            running: false)
+          if self.hostCurrentSessionID == sessionID,
+             self.selectedSessionID == localSessionID {
+            self.status = "本轮已停止"
+          }
+        }
+        return
+      }
+    }
+  }
+
   func resetRootSessionPresentationState() {
     activeTools = []
     subagents = []
@@ -9,8 +59,6 @@ extension HarnessController {
     selectedWorkflowRunID = nil
     hostCommands = []
     messageFeedback = [:]
-    historyHasMore = false
-    historyOldestSeq = nil
     todos = []
     hostPlanActive = false
     goal = nil
@@ -68,7 +116,7 @@ extension HarnessController {
   func attachHostSessionToPlaceholder(localSessionID: UUID, onComplete: ((String?) -> Void)? = nil) {
     guard let hostClient else { onComplete?(nil); return }
     let cwd = workspace?.path
-    let presetId = pendingHostPresetID ?? (preset == .creator ? "cordis" : preset.rawValue)
+    let presetId = pendingHostPresetID.map(Self.canonicalHostPresetID) ?? preset.hostPresetID
     let (chosenProvider, chosenModel) = (provider, model)
     let chosenEffort = advertisedEffort(provider: provider, model: model, requested: reasoningEffort)
     Task {
@@ -82,6 +130,9 @@ extension HarnessController {
           self.migrateWorkbenchContext(localSessionID: localSessionID, hostSessionID: created.sessionId)
           if self.selectedSessionID == localSessionID {
             self.hostCurrentSessionID = created.sessionId
+            self.startRootSessionFollow(
+              sessionID: created.sessionId,
+              localSessionID: localSessionID)
           }
           self.refreshHostSnapshots()
         }

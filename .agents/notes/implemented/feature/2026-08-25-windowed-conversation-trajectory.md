@@ -2,6 +2,8 @@
 
 Status: implemented — 长会话按上下文维护 240 条消息的滑动渲染窗口
 
+Superseded by: [Load the complete session transcript automatically](../simplification/2026-10-22-load-complete-session-history.md).
+
 ## Problem
 
 `ConversationView` 目前将当前会话的全部 `messages` 传给

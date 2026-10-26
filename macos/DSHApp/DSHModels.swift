@@ -10,7 +10,13 @@ struct DSHModelReasoningEffort: Decodable, Identifiable { let id: String; let na
 struct DSHModelReasoning: Decodable { let efforts: [DSHModelReasoningEffort]; let defaultEffort: String? }
 struct DSHModelCatalogModel: Decodable, Identifiable { let id: String; let name: String; var description: String?; var reasoning: DSHModelReasoning? }
 struct DSHModelGroup: Decodable, Identifiable { let id: String; let name: String; let models: [DSHModelCatalogModel] }
-struct DSHModelCatalog: Decodable { let groups: [DSHModelGroup] }
+struct DSHModelCatalog: Decodable {
+  struct Failure: Decodable { let id: String; let name: String; let message: String }
+  let `default`: DSHSelectedModel
+  let routableProviders: [String]
+  let groups: [DSHModelGroup]
+  let failures: [Failure]
+}
 struct DSHCredentialView: Decodable { let configured: Bool; let source: String?; let writable: Bool }
 struct DSHCredentialCatalog: Decodable { let credentials: [String: DSHCredentialView] }
 struct DSHCredentialRefsPayload: Encodable { let refs: [String] }
@@ -26,11 +32,14 @@ extension DSHModelGroup {
 /// adapter registry, no endpoint needed); `baseURL`/`api`/`apiKey` describe a
 /// route the adapter does not know yet. Nil fields are omitted from the wire.
 struct DSHDiscoverModelsPayload: Encodable {
-  let settingsNs: String
   let provider: String?
   let baseURL: String?
   let api: String?
   let apiKey: String?
+}
+struct DSHDiscoverModelsArgs: Encodable {
+  let settingsNs: String
+  let request: DSHDiscoverModelsPayload
 }
 struct DSHDiscoveredModel: Decodable, Identifiable { let id: String; let name: String?; let contextWindow: Int?; let maxTokens: Int? }
 struct DSHDiscoveredModelList: Decodable { let models: [DSHDiscoveredModel] }
@@ -38,10 +47,11 @@ struct DSHDiscoveredModelList: Decodable { let models: [DSHDiscoveredModel] }
 extension DSHHostClient {
   func discoverModels(settingsNs: String, provider: String? = nil, baseURL: String? = nil, api: String? = nil, apiKey: String? = nil) async throws -> [DSHDiscoveredModel] {
     try await call(
-      "llm.discoverModels",
-      payload: DSHDiscoverModelsPayload(settingsNs: settingsNs, provider: provider, baseURL: baseURL, api: api, apiKey: apiKey),
-      as: DSHDiscoveredModelList.self,
-    ).models
+      "llm/discoverModels",
+      args: DSHDiscoverModelsArgs(
+        settingsNs: settingsNs,
+        request: DSHDiscoverModelsPayload(provider: provider, baseURL: baseURL, api: api, apiKey: apiKey)),
+      as: [DSHDiscoveredModel].self)
   }
 }
 

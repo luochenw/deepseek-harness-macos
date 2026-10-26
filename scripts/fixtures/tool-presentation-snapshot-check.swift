@@ -29,6 +29,11 @@ struct ToolPresentationSnapshotCheck {
 
     let tools = fixtures()
     harness.activeTools = tools
+    for attachment in tools.flatMap(\.imageAttachments) {
+      harness.attachmentStore.cache(
+        imageFixture(),
+        for: attachment.attachmentId)
+    }
     for tool in tools {
       try render(
         "tool-\(tool.callId)",
@@ -69,6 +74,39 @@ struct ToolPresentationSnapshotCheck {
           }
         }
         .padding(DSHSpace.s4)
+      }
+      .environmentObject(harness))
+
+    try render(
+      "tool-inline-collapsed-stack",
+      size: CGSize(width: 620, height: 420),
+      output: output,
+      content: ScrollView {
+        VStack(alignment: .leading, spacing: DSHSpace.s3) {
+          ForEach(tools) { tool in
+            ToolCallRow(
+              message: HarnessController.Message(role: .tool, text: tool.name, toolCallId: tool.callId))
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }
+        .padding(DSHSpace.s4)
+      }
+      .environmentObject(harness))
+
+    try render(
+      "tool-inline-group-stack",
+      size: CGSize(width: 620, height: 520),
+      output: output,
+      content: ScrollView {
+        ToolGroupRow(
+          messages: tools.map {
+            HarnessController.Message(
+              role: .tool,
+              text: $0.name,
+              toolCallId: $0.callId)
+          },
+          initiallyExpanded: true)
+          .padding(DSHSpace.s4)
       }
       .environmentObject(harness))
   }
@@ -125,14 +163,23 @@ struct ToolPresentationSnapshotCheck {
       throw ToolPresentationSnapshotFailure.invalid("\(name): invalid image scale")
     }
 
-    let stepX = max(1, bitmap.pixelsWide / 48)
-    let stepY = max(1, bitmap.pixelsHigh / 48)
+    // Text strokes are sparse compared with the canvas. Sampling only 48×48
+    // points can miss them entirely in a compact, low-chroma panel.
+    let stepX = max(1, bitmap.pixelsWide / 160)
+    let stepY = max(1, bitmap.pixelsHigh / 160)
     var visible = 0
     var colors = Set<UInt32>()
+    var luminanceCounts = [Int](repeating: 0, count: 101)
     for y in stride(from: 0, to: bitmap.pixelsHigh, by: stepY) {
       for x in stride(from: 0, to: bitmap.pixelsWide, by: stepX) {
         guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
         if color.alphaComponent > 0.05 { visible += 1 }
+        let luminance = Int((
+          color.redComponent * 0.2126
+            + color.greenComponent * 0.7152
+            + color.blueComponent * 0.0722
+        ) * 100)
+        luminanceCounts[max(0, min(100, luminance))] += 1
         let red = UInt32((color.redComponent * 31).rounded())
         let green = UInt32((color.greenComponent * 31).rounded())
         let blue = UInt32((color.blueComponent * 31).rounded())
@@ -140,9 +187,17 @@ struct ToolPresentationSnapshotCheck {
         colors.insert((red << 15) | (green << 10) | (blue << 5) | alpha)
       }
     }
-    guard visible > 500, colors.count > 12 else {
+    let dominantLuminance = luminanceCounts.indices.max {
+      luminanceCounts[$0] < luminanceCounts[$1]
+    } ?? 0
+    let contrasting = luminanceCounts.enumerated().reduce(0) { count, entry in
+      abs(entry.offset - dominantLuminance) > 8 ? count + entry.element : count
+    }
+    // The design system uses a deliberately narrow, low-chroma palette, so
+    // color count alone can flag a readable monochrome snapshot as blank.
+    guard visible > 500, colors.count > 12 || contrasting > 80 else {
       throw ToolPresentationSnapshotFailure.invalid(
-        "\(name): output appears blank (visible \(visible), colors \(colors.count))")
+        "\(name): output appears blank (visible \(visible), colors \(colors.count), contrasting \(contrasting))")
     }
   }
 
@@ -159,6 +214,17 @@ struct ToolPresentationSnapshotCheck {
           exitCode: 0,
           cwd: "/workspace/src",
           description: "查找待处理标记")),
+      tool(
+        id: "running-terminal",
+        name: "bash",
+        output: "",
+        presentation: presentation(
+          card: "terminal",
+          title: "sleep 5",
+          output: "",
+          cwd: "/workspace",
+          description: "等待构建完成"),
+        state: .running),
       tool(
         id: "diff",
         name: "edit",
@@ -217,6 +283,23 @@ struct ToolPresentationSnapshotCheck {
               publishedAt: "2026-08-\(String(format: "%02d", $0))")
           })),
       tool(
+        id: "image",
+        name: "read_image",
+        output: "",
+        presentation: presentation(
+          card: "image",
+          title: "/tmp/screenshot.png",
+          path: "/tmp/screenshot.png"),
+        imageAttachments: [
+          DSHAttachmentRef(
+            attachmentId: "image-fixture",
+            mediaType: "image/png",
+            bytes: 4096,
+            width: 800,
+            height: 600,
+            name: "screenshot.png"),
+        ]),
+      tool(
         id: "generic",
         name: "code_dispatch",
         output: (1...20).map { "dispatch output \($0)" }.joined(separator: "\n"),
@@ -224,6 +307,39 @@ struct ToolPresentationSnapshotCheck {
           card: "generic",
           title: "代码派发",
           output: (1...20).map { "dispatch output \($0)" }.joined(separator: "\n"))),
+      tool(
+        id: "run-code",
+        name: "run_code",
+        output: "workspace: /workspace\nvalidated: true",
+        presentation: presentation(
+          card: "code",
+          title: "Inspect workspace and validate files",
+          output: "workspace: /workspace\nvalidated: true",
+          description: """
+          const path = await tools.bash({
+            command: "pwd",
+            description: "Print working directory"
+          });
+          const files = await tools.glob({ pattern: "macos/DSHApp/*.swift" });
+          console.log(path.stdout.text, files.paths.length);
+          """,
+          lang: "typescript"),
+        children: [
+          .init(
+            callId: "run-code:code:1",
+            name: "bash",
+            title: "{}",
+            arguments: "{\n  \"command\": \"pwd\"\n}",
+            state: .succeeded,
+            output: "/workspace"),
+          .init(
+            callId: "run-code:code:2",
+            name: "glob",
+            title: "macos/DSHApp/*.swift",
+            arguments: "{\n  \"pattern\": \"macos/DSHApp/*.swift\"\n}",
+            state: .succeeded,
+            output: "84 files"),
+        ]),
     ]
   }
 
@@ -231,15 +347,31 @@ struct ToolPresentationSnapshotCheck {
     id: String,
     name: String,
     output: String,
-    presentation: HarnessController.ToolPresentation
+    presentation: HarnessController.ToolPresentation,
+    state: HarnessController.ToolActivity.State = .succeeded,
+    imageAttachments: [DSHAttachmentRef] = [],
+    children: [DSHToolChildActivity] = []
   ) -> HarnessController.ToolActivity {
     HarnessController.ToolActivity(
       callId: id,
       name: name,
-      summary: "已完成",
-      state: .succeeded,
+      summary: state == .running ? "正在运行" : "已完成",
+      state: state,
       output: output,
-      presentation: presentation)
+      imageAttachments: imageAttachments,
+      presentation: presentation,
+      children: children)
+  }
+
+  private static func imageFixture() -> NSImage {
+    let image = NSImage(size: NSSize(width: 320, height: 200))
+    image.lockFocus()
+    NSColor(srgbRed: 0.16, green: 0.42, blue: 0.72, alpha: 1).setFill()
+    NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 320, height: 200), xRadius: 16, yRadius: 16).fill()
+    NSColor.white.withAlphaComponent(0.82).setFill()
+    NSBezierPath(ovalIn: NSRect(x: 112, y: 56, width: 96, height: 88)).fill()
+    image.unlockFocus()
+    return image
   }
 
   private static func presentation(

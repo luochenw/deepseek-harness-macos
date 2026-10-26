@@ -78,6 +78,52 @@ private func testToolPresentationURL_allowsOnlyAbsoluteHTTPURLs() throws {
   try expect(DSHToolPresentationURL.webURL("/relative/path") == nil)
 }
 
+private func testReadImagePresentation_usesFilePathAsInstruction() throws {
+  let presentation = HarnessController.ToolPresentation.fromToolCall(
+    name: "read_image",
+    arguments: #"{"file_path":"/tmp/screenshot.png"}"#)
+  let tool = HarnessController.ToolActivity(
+    callId: "image-call",
+    name: "read_image",
+    summary: "工具调用",
+    state: .succeeded,
+    output: "",
+    arguments: #"{"file_path":"/tmp/screenshot.png"}"#,
+    presentation: presentation)
+
+  try expectEqual(presentation?.card, "image")
+  try expectEqual(presentation?.path, "/tmp/screenshot.png")
+  try expectEqual(DSHToolGroupStatus.instructionTitle(for: tool), "/tmp/screenshot.png")
+}
+
+private func testToolResultDecoder_extractsImageAttachments() throws {
+  let data: [String: Any] = [
+    "message": [
+      "source": ["kind": "tool", "callId": "image-call"],
+      "toolCallId": "image-call",
+      "content": [[
+        "type": "image",
+        "attachment": [
+          "attachmentId": "image-1",
+          "mediaType": "image/png",
+          "bytes": 1234,
+          "width": 800,
+          "height": 600,
+          "name": "screenshot.png",
+        ],
+      ]],
+    ],
+  ]
+
+  let decoded = DSHToolResultDecoder.live(from: data)
+
+  try expectEqual(decoded?.callId, "image-call")
+  try expectEqual(decoded?.imageAttachments.count, 1)
+  try expectEqual(decoded?.imageAttachments.first?.attachmentId, "image-1")
+  try expectEqual(decoded?.imageAttachments.first?.mediaType, "image/png")
+  try expectEqual(decoded?.imageAttachments.first?.width, 800)
+}
+
 private func testSourceTokenizer_carriesBlockCommentAcrossLines() throws {
   let tokens = DSHSourceTokenizer.tokens(
     in: ["let value = 1 /* starts", "still comment", "ends */ let next = 2"],
@@ -117,6 +163,8 @@ let dshToolPresentationTests: [NamedTest] = [
   ("Terminal status preserves successful exit code", testTerminalStatus_preservesSuccessfulExitCode),
   ("Tool presentation layout preserves details file actions", testToolPresentationLayout_preservesDetailsFileActions),
   ("Tool presentation URL allows only absolute HTTP URLs", testToolPresentationURL_allowsOnlyAbsoluteHTTPURLs),
+  ("Read image presentation uses the file path instruction", testReadImagePresentation_usesFilePathAsInstruction),
+  ("Tool result decoder extracts image attachments", testToolResultDecoder_extractsImageAttachments),
   ("Source tokenizer carries block comments across lines", testSourceTokenizer_carriesBlockCommentAcrossLines),
   ("Source tokenizer carries strings across lines", testSourceTokenizer_carriesStringAcrossLines),
   ("Source tokenizer carries Swift triple-quoted strings across lines", testSourceTokenizer_carriesSwiftTripleQuotedStringAcrossLines),

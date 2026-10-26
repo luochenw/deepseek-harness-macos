@@ -77,10 +77,64 @@ private func testWorkspaceContext_excludesOnlyActiveWorkspace() throws {
   try expectEqual(extras.map(\.workspaceId), ["two"])
 }
 
+private func testConversationWorkspace_prefersAttachedSessionCwd() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    harness.workspace = URL(fileURLWithPath: "/tmp/future-workspace", isDirectory: true)
+    harness.hostCurrentSessionID = "session-old"
+    harness.hostSessions = [
+      DSHSessionSummary(
+        sessionId: "session-old",
+        updatedAt: 1,
+        running: false,
+        blank: false,
+        cwd: "/tmp/session-workspace",
+        agentPreset: "ptc",
+        parentSessionId: nil,
+        origin: nil,
+        projections: nil),
+    ]
+
+    try expectEqual(harness.conversationWorkspaceURL?.path, "/tmp/session-workspace")
+    try expectEqual(harness.conversationWorkspacePathLabel, "/tmp/session-workspace")
+    try expect(!harness.canChooseWorkspaceForFutureSession)
+
+    harness.hostCurrentSessionID = nil
+    try expectEqual(harness.conversationWorkspaceURL?.path, "/tmp/future-workspace")
+    try expect(harness.canChooseWorkspaceForFutureSession)
+  }
+}
+
+private func testConversationWorkspace_nilAttachedCwdMeansHostDefault() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    harness.workspace = URL(fileURLWithPath: "/tmp/future-workspace", isDirectory: true)
+    harness.hostCurrentSessionID = "session-host-default"
+    harness.hostSessions = [
+      DSHSessionSummary(
+        sessionId: "session-host-default",
+        updatedAt: 1,
+        running: false,
+        blank: false,
+        cwd: nil,
+        agentPreset: nil,
+        parentSessionId: nil,
+        origin: nil,
+        projections: nil),
+    ]
+
+    try expect(harness.conversationWorkspaceURL == nil)
+    try expectEqual(harness.conversationWorkspacePathLabel, "Host 默认目录")
+    try expect(!harness.canChooseWorkspaceForFutureSession)
+  }
+}
+
 let dshWorkspaceTests: [NamedTest] = [
   ("Workspace preference uses default on first launch", testWorkspacePreference_usesDefaultForFirstLaunch),
   ("Workspace preference persists explicit no-workspace selection", testWorkspacePreference_persistsExplicitNoWorkspace),
   ("Workspace preference clears no-workspace when a directory is selected", testWorkspacePreference_selectingDirectoryClearsNoWorkspace),
   ("Workspace context omits folders without an active workspace", testWorkspaceContext_omitsRegisteredFoldersWithoutActiveWorkspace),
   ("Workspace context excludes only the active workspace", testWorkspaceContext_excludesOnlyActiveWorkspace),
+  ("Conversation workspace prefers the attached session cwd", testConversationWorkspace_prefersAttachedSessionCwd),
+  ("Conversation workspace treats nil attached cwd as Host default", testConversationWorkspace_nilAttachedCwdMeansHostDefault),
 ]

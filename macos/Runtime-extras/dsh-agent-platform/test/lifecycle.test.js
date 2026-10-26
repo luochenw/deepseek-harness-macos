@@ -50,7 +50,7 @@ test("DSH drains an exact managed child through the live parent", async () => {
   const child = { id: "child-1" };
   await disposeManagedChild({
     subagents: {
-      drainContinuableChildren: async (value, childIds) => {
+      drainChildren: async (value, childIds) => {
         calls.push(["drain", value.id, childIds]);
       },
     },
@@ -64,7 +64,7 @@ test("DSH drains an exact managed child through the live parent", async () => {
 test("DSH treats an already-cold managed child as disposed", async () => {
   const calls = [];
   await disposeManagedChild({
-    subagents: { drainContinuableChildren: async () => { calls.push("drain"); } },
+    subagents: { drainChildren: async () => { calls.push("drain"); } },
     agents: { get: () => undefined },
     childSessionId: "child-1",
     parentSessionId: "parent-1",
@@ -74,7 +74,7 @@ test("DSH treats an already-cold managed child as disposed", async () => {
 
 test("DSH keeps a live-child close intent pending when its parent is not live", async () => {
   await assert.rejects(() => disposeManagedChild({
-    subagents: { drainContinuableChildren: async () => {} },
+    subagents: { drainChildren: async () => {} },
     agents: { get: (id) => id === "child-1" ? { id } : undefined },
     childSessionId: "child-1",
     parentSessionId: "parent-1",

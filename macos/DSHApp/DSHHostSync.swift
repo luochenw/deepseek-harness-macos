@@ -1,5 +1,103 @@
 import Foundation
 
+enum DSHHostReconnectPolicy {
+  static let maximumAttempts = 5
+  static func delayNanoseconds(attempt: Int) -> UInt64 {
+    UInt64(max(1, attempt)) * 750_000_000
+  }
+}
+
+@MainActor
+private final class DSHHostReconnectState {
+  weak var controller: HarnessController?
+  var task: Task<Void, Never>?
+  var attempts = 0
+
+  init(controller: HarnessController) {
+    self.controller = controller
+  }
+
+  func cancel() {
+    task?.cancel()
+    task = nil
+  }
+}
+
+@MainActor
+private final class DSHHostReconnectRegistry {
+  static let shared = DSHHostReconnectRegistry()
+  private var states: [ObjectIdentifier: DSHHostReconnectState] = [:]
+
+  func state(for controller: HarnessController) -> DSHHostReconnectState {
+    states = states.filter { $0.value.controller != nil }
+    let key = ObjectIdentifier(controller)
+    if let state = states[key], let owner = state.controller, owner === controller {
+      return state
+    }
+    let state = DSHHostReconnectState(controller: controller)
+    states[key] = state
+    return state
+  }
+}
+
+extension HarnessController.Preset {
+  var hostPresetID: String {
+    switch self {
+    case .standard: "standard"
+    case .code: "ptc"
+    case .minimal: "minimal"
+    case .creator: "cordis"
+    }
+  }
+}
+
+extension HarnessController {
+  private var hostReconnectState: DSHHostReconnectState {
+    DSHHostReconnectRegistry.shared.state(for: self)
+  }
+
+  func handleHostStreamClosed() {
+    hostStatus = "Host 消息流已断开，正在自动重连"
+    clearPendingModelWorkbenchRequests()
+    scheduleHostReconnect()
+  }
+
+  func hostStreamDidBecomeReady() {
+    let state = hostReconnectState
+    state.attempts = 0
+    state.cancel()
+  }
+
+  private func scheduleHostReconnect() {
+    let state = hostReconnectState
+    guard state.task == nil,
+          state.attempts < DSHHostReconnectPolicy.maximumAttempts else {
+      if state.attempts >= DSHHostReconnectPolicy.maximumAttempts {
+        hostStatus = "Host 自动重连失败，请手动重新连接"
+      }
+      return
+    }
+    state.attempts += 1
+    let attempt = state.attempts
+    state.task = Task { [weak self] in
+      try? await Task.sleep(
+        nanoseconds: DSHHostReconnectPolicy.delayNanoseconds(attempt: attempt))
+      guard !Task.isCancelled else { return }
+      state.task = nil
+      guard state.controller === self else { return }
+      self?.restartHostStreams()
+    }
+  }
+
+  nonisolated static func canonicalHostPresetID(_ value: String) -> String {
+    switch value {
+    case "code": "ptc"
+    case "creator": "cordis"
+    default: value
+    }
+  }
+}
+
 extension HarnessController {
   func refreshPresets() {
     guard let hostClient else { return }
@@ -7,6 +105,7 @@ extension HarnessController {
   }
 
   func selectCurrentPreset(_ preset: String) {
+    let preset = Self.canonicalHostPresetID(preset)
     // Lazy sessions: before the first message there is no Host session to
     // select on — remember the choice instead of silently dropping it (点了
     // 没反应 = "无法切换模式"), and apply it when the session is created.
@@ -85,23 +184,34 @@ extension HarnessController {
   }
 
   func reconnectHostStreams() {
+    let state = hostReconnectState
+    state.cancel()
+    state.attempts = 0
+    restartHostStreams()
+  }
+
+  private func restartHostStreams() {
     guard let client = hostClient else {
       startPersistentHost()
       return
     }
+    cancelRootSessionFollow()
     hostEvents?.stop()
-    muxEvents?.stop()
-    hostEvents = DSHEventSocket(baseURL: client.baseURL, path: "api/events.host", handler: { [weak self] frame in self?.consumeHostFrame(frame) }, onClosed: { [weak self] in self?.hostStatus = "Host 事件流已断开" })
-    muxEvents = DSHEventSocket(baseURL: client.baseURL, path: "api/events.mux", handler: { [weak self] frame in self?.consumeMuxFrame(frame) }, onClosed: { [weak self] in
-      self?.hostStatus = "Host 消息流已断开"
-      self?.clearPendingModelWorkbenchRequests()
+    hostEvents = DSHEventSocket(client: client, onClosed: { [weak self] in
+      self?.handleHostStreamClosed()
     })
     hostEvents?.start()
-    muxEvents?.start()
+    openRemoteEventStream()
+    openSessionControl()
+    openWorkspaceFollow()
+    if let sessionID = hostCurrentSessionID, let localSessionID = selectedSessionID {
+      startRootSessionFollow(sessionID: sessionID, localSessionID: localSessionID)
+    }
     hostStatus = "Host 事件流已重新连接"
     refreshHostSnapshots()
     refreshModelConfiguration()
     refreshSettings()
+    refreshPermissionCatalog()
     refreshAgentPlatform()
   }
 
@@ -109,9 +219,8 @@ extension HarnessController {
     guard let hostClient else { return }
     Task {
       do {
-        async let sessions = hostClient.sessions()
-        async let workspaces = hostClient.workspaceSnapshot()
-        let (nextSessions, snapshot) = try await (sessions, workspaces)
+        let nextSessions = try await hostClient.sessions()
+        let snapshot = await MainActor.run { self.hostWorkspaceSnapshot }
         // session.list returns every persisted session — per workspace.d.ts,
         // "archived sessions stay in their workspace's sessionIds account;
         // grouping surfaces hide them". Subtracting the registry's archive
@@ -127,6 +236,18 @@ extension HarnessController {
           }
           self.hostSessions = visibleSessions
           self.hostWorkspaces = snapshot.items
+          if let sessionID = self.hostCurrentSessionID,
+             let localSessionID = self.selectedSessionID,
+             let summary = visibleSessions.first(where: { $0.sessionId == sessionID }),
+             !summary.running {
+            // A list refresh is the explicit recovery action after a missed
+            // turn boundary. Only an idle result clears here; a running row
+            // stays authoritative until its terminal event or follow snapshot.
+            self.reconcileRootSessionRunningState(
+              sessionID: sessionID,
+              localSessionID: localSessionID,
+              running: false)
+          }
           self.resumePendingModelWorkbenchRequests()
           for summary in visibleSessions {
             self.rememberPermissionSelection(

@@ -152,6 +152,7 @@ gh release create v<version> \
 |------|------|
 | 类型检查（无需构建） | `./scripts/test-macos-native.sh` |
 | 构建 | `./scripts/build-macos-app.sh` |
+| Swift-only 原地刷新已安装 App | `./scripts/refresh-macos-app.sh` |
 | 构建后冒烟测试 | `./scripts/test-macos-native.sh --smoke` |
 | 自查代码 | `git diff` / `/code-review` |
 | 提交 | `git commit`（等用户发话） |

@@ -30,7 +30,7 @@ export async function disposeManagedChild({
   if (agents.get(childSessionId) === undefined) return;
   const parent = agents.get(parentSessionId);
   if (parent === undefined) throw new Error(`DSH parent "${parentSessionId}" is not live`);
-  await subagents.drainContinuableChildren(parent, [childSessionId]);
+  await subagents.drainChildren(parent, [childSessionId]);
 }
 
 export function shouldCloseContextOnAdoption(run) {

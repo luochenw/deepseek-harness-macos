@@ -13,7 +13,8 @@ struct ContentView: View {
     }
     // 果冻海：窗口底是一整片海水渐变，上面的侧栏/卡片全是半透明薄层，
     // 让海水透出来 — 见 2026-08-17-jelly-sea-theme.md
-    .background(DSHTheme.canvasGradient)
+    .background(DSHTheme.canvas)
+    .onAppear { DSHTaskEscapeMonitorCoordinator.shared.attach(harness) }
     // 设置编辑器/自定义配置抽屉只从设置页打开，挂在 SettingsView 自己
     // 身上（sheet 套 sheet）——挂这里会跟设置 sheet 抢同一个挂载点，
     // 设置开着时编辑抽屉永远弹不出来。

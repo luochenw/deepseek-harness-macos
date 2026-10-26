@@ -474,6 +474,171 @@ private func testHistoryFold_preservesConsecutiveAssistantAttachments() throws {
   }
 }
 
+private func attachmentDraftFile(_ url: URL) -> HarnessController.DraftImage {
+  HarnessController.DraftImage(url: url, mediaType: "image/png")
+}
+
+private func testDraftAttachments_deduplicateAndEnforceMaximum() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("dsh-draft-cap-\(UUID().uuidString)", isDirectory: true)
+    let first = attachmentDraftFile(directory.appendingPathComponent("first.png"))
+
+    harness.appendDraftImages([first, first])
+    try expectEqual(harness.draftImages.map(\.id), [first.id])
+    try expectEqual(harness.status, "已添加 1 张图片，忽略 1 张重复图片")
+
+    let more = (0..<21).map {
+      attachmentDraftFile(directory.appendingPathComponent("image-\($0).png"))
+    }
+    harness.appendDraftImages(more)
+    try expectEqual(harness.draftImages.count, HarnessController.maximumDraftImageCount)
+    try expectEqual(harness.draftImages.last?.url.lastPathComponent, "image-18.png")
+    try expect(harness.status.contains("已达 20 张上限"))
+  }
+}
+
+private func testDraftAttachments_removeOnlyNamedImage() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("dsh-draft-remove-\(UUID().uuidString)", isDirectory: true)
+    let first = attachmentDraftFile(directory.appendingPathComponent("first.png"))
+    let second = attachmentDraftFile(directory.appendingPathComponent("second.png"))
+    harness.draftImages = [first, second]
+
+    harness.removeDraftImage(first.id)
+
+    try expectEqual(harness.draftImages.map(\.id), [second.id])
+  }
+}
+
+private func testDraftAttachments_pasteMultipleImageFiles() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("dsh-draft-paste-files-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let urls = ["first.png", "second.png"].map(directory.appendingPathComponent)
+    let png = try attachmentPNGData()
+    for url in urls { try png.write(to: url) }
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("dsh-test-\(UUID().uuidString)"))
+    defer { pasteboard.releaseGlobally() }
+    pasteboard.clearContents()
+    try expect(pasteboard.writeObjects(urls.map { $0 as NSURL }))
+
+    try expect(harness.pasteImageFromPasteboard(pasteboard))
+
+    try expectEqual(
+      harness.draftImages.map(\.url.lastPathComponent),
+      ["first.png", "second.png"])
+  }
+}
+
+private func testDraftAttachments_pasteBitmapAsPNG() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let tiff = try attachmentTIFFData()
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("dsh-test-\(UUID().uuidString)"))
+    defer { pasteboard.releaseGlobally() }
+    pasteboard.clearContents()
+    try expect(pasteboard.setData(tiff, forType: .tiff))
+
+    try expect(harness.pasteImageFromPasteboard(pasteboard))
+
+    guard let pasted = harness.draftImages.first else {
+      throw TestFailure.message("Expected a pasted image")
+    }
+    try expectEqual(pasted.mediaType, "image/png")
+    try expect(pasted.url.lastPathComponent.hasPrefix("Pasted-"))
+    try expect(NSImage(contentsOf: pasted.url) != nil)
+  }
+}
+
+private func testDraftAttachments_encodePromptImagesInSelectionOrder() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("dsh-draft-prompt-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let payloads = [Data([1, 2, 3]), Data([4, 5])]
+    let images = try payloads.enumerated().map { index, payload -> HarnessController.DraftImage in
+      let url = directory.appendingPathComponent("image-\(index).png")
+      try payload.write(to: url)
+      return attachmentDraftFile(url)
+    }
+
+    let content = try harness.imagePromptContents(images)
+
+    try expectEqual(content.map(\.type), ["image", "image"])
+    try expectEqual(content.map(\.name), ["image-0.png", "image-1.png"])
+    try expectEqual(
+      content.map { $0.data.flatMap { Data(base64Encoded: $0) } },
+      payloads)
+  }
+}
+
+private func testDraftAttachments_previewNamesEveryImage() throws {
+  try MainActor.assumeIsolated {
+    let directory = URL(fileURLWithPath: "/tmp/attachments")
+    let images = [
+      attachmentDraftFile(directory.appendingPathComponent("first.png")),
+      attachmentDraftFile(directory.appendingPathComponent("second.png")),
+    ]
+
+    try expectEqual(
+      HarnessController.draftPreviewText("请比较", images: images),
+      "请比较\n[图片附件：first.png、second.png]")
+    try expectEqual(
+      HarnessController.draftPreviewText("", images: images),
+      "[图片附件：first.png、second.png]")
+  }
+}
+
+private func testAcceptedDraft_removesSubmittedImagesButKeepsNewOnes() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let directory = URL(fileURLWithPath: "/tmp/attachments")
+    let submitted = attachmentDraftFile(directory.appendingPathComponent("submitted.png"))
+    let addedLater = attachmentDraftFile(directory.appendingPathComponent("later.png"))
+    harness.draftImages = [submitted, addedLater]
+
+    harness.clearAcceptedComposerDraft(
+      originalText: "",
+      originalImageIDs: [submitted.id])
+
+    try expectEqual(harness.draftImages.map(\.id), [addedLater.id])
+  }
+}
+
+private func attachmentPNGData() throws -> Data {
+  guard let data = Data(base64Encoded:
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlKAAAAAASUVORK5CYII="
+  ) else {
+    throw TestFailure.message("Could not decode PNG fixture")
+  }
+  return data
+}
+
+private func attachmentTIFFData() throws -> Data {
+  guard let bitmap = NSBitmapImageRep(
+    bitmapDataPlanes: nil,
+    pixelsWide: 2,
+    pixelsHigh: 2,
+    bitsPerSample: 8,
+    samplesPerPixel: 4,
+    hasAlpha: true,
+    isPlanar: false,
+    colorSpaceName: .deviceRGB,
+    bytesPerRow: 0,
+    bitsPerPixel: 0
+  ), let data = bitmap.representation(using: .tiff, properties: [:]) else {
+    throw TestFailure.message("Could not construct TIFF fixture")
+  }
+  return data
+}
+
 private func liveImageMessage(id: String?, text: String, attachmentID: String) -> [String: Any] {
   var message: [String: Any] = [
     "source": ["kind": "user"],
@@ -513,4 +678,11 @@ let dshAttachmentTests: [NamedTest] = [
   ("Live subagent event preserves consecutive assistant attachments", testLiveSubagentEvent_preservesConsecutiveAssistantAttachments),
   ("History fold preserves consecutive assistant attachments", testHistoryFold_preservesConsecutiveAssistantAttachments),
   ("History fold settles a streaming assistant placeholder", testHistoryFold_settlesStreamingAssistantPlaceholder),
+  ("Draft attachments deduplicate and enforce maximum", testDraftAttachments_deduplicateAndEnforceMaximum),
+  ("Draft attachments remove only the named image", testDraftAttachments_removeOnlyNamedImage),
+  ("Draft attachments paste multiple image files", testDraftAttachments_pasteMultipleImageFiles),
+  ("Draft attachments paste bitmap as PNG", testDraftAttachments_pasteBitmapAsPNG),
+  ("Draft attachments encode prompt images in selection order", testDraftAttachments_encodePromptImagesInSelectionOrder),
+  ("Draft attachments preview names every image", testDraftAttachments_previewNamesEveryImage),
+  ("Accepted draft removes submitted images but keeps new ones", testAcceptedDraft_removesSubmittedImagesButKeepsNewOnes),
 ]

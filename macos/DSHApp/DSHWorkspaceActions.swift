@@ -43,10 +43,34 @@ enum DSHWorkspaceContext {
 struct DSHWorkspaceCreatePayload: Encodable { let path: String }
 struct DSHWorkspaceCreateResult: Decodable { let workspace: DSHWorkspaceView; let created: Bool }
 struct DSHWorkspaceRenamePayload: Encodable { let workspaceId: String; let title: String }
+struct DSHWorkspaceValue: Decodable { let workspace: DSHWorkspaceView }
 struct DSHWorkspaceDeletePayload: Encodable { let workspaceId: String }
 struct DSHWorkspaceDeleteResult: Decodable { let deleted: Bool }
 
 extension HarnessController {
+  /// Directory owned by the displayed Host session. A Host session's cwd is
+  /// immutable, so an attached summary with nil cwd means the Host default
+  /// directory, not the Composer's next-session workspace.
+  var conversationWorkspaceURL: URL? {
+    guard let sessionID = hostCurrentSessionID else { return workspace }
+    if let summary = hostSessions.first(where: { $0.sessionId == sessionID }) {
+      guard let cwd = summary.cwd else { return nil }
+      return URL(fileURLWithPath: cwd, isDirectory: true).standardizedFileURL
+    }
+    if let localPath = selectedSession?.workspaceName, localPath.hasPrefix("/") {
+      return URL(fileURLWithPath: localPath, isDirectory: true).standardizedFileURL
+    }
+    return nil
+  }
+
+  var conversationWorkspacePathLabel: String {
+    conversationWorkspaceURL?.path ?? "Host 默认目录"
+  }
+
+  var canChooseWorkspaceForFutureSession: Bool {
+    hostCurrentSessionID == nil
+  }
+
   func restoreWorkspaceSelection() {
     let defaultURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
       .appendingPathComponent("DeepSeek Harness", isDirectory: true)
@@ -110,7 +134,11 @@ extension HarnessController {
         await MainActor.run {
           self.workspace = url.standardizedFileURL
           DSHWorkspacePreference.persist(url)
-          self.status = result.created ? "工作区已添加" : "工作区已选择"
+          if self.hostCurrentSessionID == nil {
+            self.status = result.created ? "工作区已添加" : "工作区已选择"
+          } else {
+            self.appendSystem("已选择 \(url.path) 作为新会话工作区；当前会话固定目录是 \(self.conversationWorkspacePathLabel)，不会随选择改变。")
+          }
           self.refreshHostSnapshots()
         }
       } catch {
@@ -131,7 +159,6 @@ extension HarnessController {
     panel.directoryURL = workspace
     guard panel.runModal() == .OK, let selected = panel.url else { return }
     registerWorkspace(selected.standardizedFileURL)
-    if let index = selectedSessionIndex { sessions[index].workspaceName = selected.lastPathComponent }
   }
 
   /// Match the Host/Web path contract: absolute paths pass through, while file-tool
@@ -144,11 +171,11 @@ extension HarnessController {
   }
 
   func openDeliveredFile(_ path: String) {
-    openHostPath(Self.resolveWorkspacePath(path, workspace: workspace))
+    openHostPath(Self.resolveWorkspacePath(path, workspace: conversationWorkspaceURL))
   }
 
   func revealDeliveredFile(_ path: String) {
-    let resolved = Self.resolveWorkspacePath(path, workspace: workspace)
+    let resolved = Self.resolveWorkspacePath(path, workspace: conversationWorkspaceURL)
     let directory = URL(fileURLWithPath: resolved).deletingLastPathComponent().path
     openHostPath(directory)
   }
@@ -166,7 +193,7 @@ extension HarnessController {
   }
 
   func openWorkspace() {
-    guard let workspace else { chooseWorkspace(); return }
-    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path)
+    guard let url = conversationWorkspaceURL else { chooseWorkspace(); return }
+    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: url.path)
   }
 }

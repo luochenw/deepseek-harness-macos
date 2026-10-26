@@ -22,7 +22,7 @@ struct VoiceInputButton: View {
   /// into the input box so speech is visible as it happens.
   var onPartial: ((String) -> Void)?
   @StateObject private var voice = VoiceController()
-  @StateObject private var wake = WakeWordListener()
+  @ObservedObject private var wake = WakeWordListener.shared
   @State private var pulsing = false
   @State private var showDeniedHelp = false
   @State private var showDictationSetup = false
@@ -46,11 +46,11 @@ struct VoiceInputButton: View {
         ZStack {
           if isActive {
             Circle()
-              .stroke(Color.accentColor.opacity(0.55), lineWidth: 2)
+              .stroke(DSHTheme.accent.opacity(0.55), lineWidth: 2)
               .scaleEffect(pulsing ? 1.7 : 0.9)
               .opacity(pulsing ? 0 : 1)
           }
-          Circle().fill(isActive ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12))
+          Circle().fill(isActive ? DSHTheme.accent.opacity(0.18) : Color.secondary.opacity(0.12))
           Image(systemName: iconName).font(.system(size: 13, weight: .medium)).foregroundStyle(iconColor)
         }
         .frame(width: 30, height: 30)
@@ -69,9 +69,9 @@ struct VoiceInputButton: View {
       .onChange(of: isActive) { _, active in VoiceWakeSignal.shared.listening = active }
       .help(helpText)
       // Denied/failed states get a visible, actionable explainer — a silent
-      // grey button reads as "voice is broken". Note: an ad-hoc-signed app
-      // loses its microphone/speech TCC grants on every reinstall, so users
-      // may need to re-authorize after updates.
+      // grey button reads as "voice is broken". TCC identifies the app by its
+      // signing requirement, so the first launch after a signing-identity
+      // change can still require one fresh approval.
       .popover(isPresented: $showDeniedHelp, arrowEdge: .top) {
         DeniedHelpPopover(message: deniedMessage) { showDeniedHelp = false; toggle() }
       }
@@ -167,7 +167,7 @@ struct VoiceInputButton: View {
 
   private var iconColor: Color {
     switch voice.state {
-    case .listening, .transcribing: .accentColor
+    case .listening, .transcribing: DSHTheme.accent
     case .denied: .orange
     default: .secondary
     }
@@ -236,7 +236,7 @@ private struct DeniedHelpPopover: View {
     VStack(alignment: .leading, spacing: 10) {
       Label("语音暂不可用", systemImage: "mic.slash").font(.headline)
       Text(message ?? "请授权麦克风与语音识别后重试。").font(.caption)
-      Text("提示：每次重新安装 app 后，系统会重新询问授权；如果没有弹出询问，请在系统设置中手动开启。").font(.caption2).foregroundStyle(.secondary)
+      Text("提示：系统按 App 的代码签名保存授权。开发签名变化后首次使用可能再确认一次；同一次启动中的重复请求会合并。").font(.caption2).foregroundStyle(.secondary)
       HStack {
         Button("打开「麦克风」设置") { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") { NSWorkspace.shared.open(url) } }
         Button("打开「语音识别」设置") { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition") { NSWorkspace.shared.open(url) } }

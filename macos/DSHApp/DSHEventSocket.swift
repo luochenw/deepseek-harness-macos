@@ -1,56 +1,280 @@
 import Foundation
 
+struct DSHEventResultArgs: Encodable {
+  struct Outcome: Encodable {
+    let kind: String
+    let value: DSHJSONPatchValue?
+  }
 
-/// Native WebSocket receiver for DSH Host event streams. It consumes the same
-/// typed server-request envelopes the browser UI consumes, without rendering
-/// any browser surface.
+  let clientId: String
+  let eventId: String
+  let outcome: Outcome
+}
+
+enum DSHSessionFollowOpeningPolicy {
+  /// The live opening only needs to establish the durable cursor and current
+  /// tail. Complete history is fetched over ordinary HTTP session/page calls.
+  static let maxMessages = 1
+  static let minMessages = 1
+  static let minTurns = 1
+
+  static func payload(address: [String: Any]) -> [String: Any] {
+    [
+      "args": [
+        "request": [
+          "address": address,
+          "maxMessages": maxMessages,
+          "turnWindow": [
+            "minMessages": minMessages,
+            "minTurns": minTurns,
+          ],
+          "assistantStream": true,
+        ],
+      ],
+    ]
+  }
+}
+
+
+/// One authenticated `/api/remote.mux` WebSocket carrying every 0.2 logical
+/// stream: `$events`, `session/control`, and root/subagent `session/follow`.
+@MainActor
 final class DSHEventSocket {
-  private let task: URLSessionWebSocketTask
+  private struct Stream {
+    let onItem: ([String: Any]) -> Void
+    let onEnd: () -> Void
+    let onError: (String) -> Void
+  }
+
+  private let client: DSHHostClient
+  private let session: URLSession
+  private var task: URLSessionWebSocketTask?
   private var stopped = false
-  private let handler: ([String: Any]) -> Void
+  private var streams: [String: Stream] = [:]
+  private var pendingOpens: [[String: Any]] = []
+  private var eventClientID: String?
   private let onClosed: (() -> Void)?
 
-  init(baseURL: URL, path: String, handler: @escaping ([String: Any]) -> Void, onClosed: (() -> Void)? = nil) {
-    var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-    components.scheme = components.scheme == "https" ? "wss" : "ws"
-    self.task = URLSession.shared.webSocketTask(with: components.url!)
-    self.handler = handler
+  init(client: DSHHostClient, onClosed: (() -> Void)? = nil) {
+    self.client = client
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.httpShouldSetCookies = false
+    configuration.httpCookieStorage = nil
+    self.session = URLSession(configuration: configuration)
     self.onClosed = onClosed
   }
 
   func start() {
-    task.resume()
-    receive()
+    guard task == nil, !stopped else { return }
+    Task {
+      do {
+        let request = try await client.webSocketRequest(path: "api/remote.mux")
+        guard !stopped else { return }
+        let task = self.session.webSocketTask(with: request)
+        self.task = task
+        task.resume()
+        for frame in pendingOpens { send(frame) }
+        pendingOpens = []
+        receive()
+      } catch {
+        close()
+      }
+    }
   }
 
-  func stop() {
+  nonisolated func stop() {
+    Task { @MainActor [self] in self.stopStream() }
+  }
+
+  private func stopStream() {
     stopped = true
-    task.cancel(with: .goingAway, reason: nil)
+    task?.cancel(with: .goingAway, reason: nil)
+    task = nil
+    session.invalidateAndCancel()
+    streams = [:]
+    pendingOpens = []
+    eventClientID = nil
+  }
+
+  @discardableResult
+  func open(
+    endpoint: String,
+    payload: [String: Any],
+    onItem: @escaping ([String: Any]) -> Void,
+    onEnd: @escaping () -> Void,
+    onError: @escaping (String) -> Void,
+  ) -> String {
+    let streamID = UUID().uuidString
+    streams[streamID] = Stream(onItem: onItem, onEnd: onEnd, onError: onError)
+    let frame: [String: Any] = [
+      "type": "open",
+      "streamId": streamID,
+      "endpoint": endpoint,
+      "payload": payload,
+    ]
+    if task == nil { pendingOpens.append(frame) } else { send(frame) }
+    return streamID
+  }
+
+  func cancel(_ streamID: String?) {
+    guard let streamID else { return }
+    streams[streamID] = nil
+    send(["type": "cancel", "streamId": streamID])
   }
 
   private func receive() {
-    task.receive { [weak self] result in
-      guard let self, !self.stopped else { return }
-      switch result {
-      case .success(let message):
-        let data: Data?
-        switch message {
-        case .string(let text): data = text.data(using: .utf8)
-        case .data(let bytes): data = bytes
-        @unknown default: data = nil
+    task?.receive { [weak self] result in
+      Task { @MainActor in
+        guard let self, !self.stopped else { return }
+        switch result {
+        case .success(let message):
+          self.handle(message)
+          self.receive()
+        case .failure:
+          self.close()
         }
-        if let data,
-           let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           envelope["type"] as? String == "server-request",
-           var payload = envelope["payload"] as? [String: Any] {
-          payload["_rpcId"] = envelope["rpcId"]
-          DispatchQueue.main.async { self.handler(payload) }
-        }
-        self.receive()
-      case .failure:
-        DispatchQueue.main.async { self.onClosed?() }
       }
     }
+  }
+
+  private func handle(_ message: URLSessionWebSocketTask.Message) {
+    let data: Data?
+    switch message {
+    case .string(let text): data = text.data(using: .utf8)
+    case .data(let bytes): data = bytes
+    @unknown default: data = nil
+    }
+    guard let data,
+          let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let type = frame["type"] as? String,
+          let streamID = frame["streamId"] as? String,
+          let stream = streams[streamID]
+    else { return }
+    switch type {
+    case "item":
+      if let value = frame["value"] as? [String: Any] { stream.onItem(value) }
+    case "end":
+      streams[streamID] = nil
+      stream.onEnd()
+    case "error":
+      streams[streamID] = nil
+      let error = frame["error"] as? [String: Any]
+      let code = error?["code"] as? String ?? "remote-stream"
+      let message = error?["message"] as? String ?? "Remote stream failed"
+      stream.onError("\(code): \(message)")
+    default:
+      break
+    }
+  }
+
+  private func send(_ object: [String: Any]) {
+    guard let task,
+          JSONSerialization.isValidJSONObject(object),
+          let data = try? JSONSerialization.data(withJSONObject: object),
+          let text = String(data: data, encoding: .utf8)
+    else { return }
+    task.send(.string(text)) { [weak self] error in
+      guard error != nil else { return }
+      Task { @MainActor in self?.close() }
+    }
+  }
+
+  private func close() {
+    guard !stopped else { return }
+    stopped = true
+    task?.cancel(with: .goingAway, reason: nil)
+    task = nil
+    session.invalidateAndCancel()
+    streams = [:]
+    pendingOpens = []
+    onClosed?()
+  }
+}
+
+extension DSHEventSocket {
+  func openSessionFollow(
+    sessionID: String,
+    onItem: @escaping ([String: Any]) -> Void,
+    onEnd: @escaping () -> Void,
+    onError: @escaping (String) -> Void,
+  ) -> String {
+    openFollow(
+      address: ["kind": "session", "sessionId": sessionID],
+      onItem: onItem,
+      onEnd: onEnd,
+      onError: onError)
+  }
+
+  func openFollow(
+    address: [String: Any],
+    onItem: @escaping ([String: Any]) -> Void,
+    onEnd: @escaping () -> Void,
+    onError: @escaping (String) -> Void,
+  ) -> String {
+    open(
+      endpoint: "session/follow",
+      payload: DSHSessionFollowOpeningPolicy.payload(address: address),
+      onItem: onItem,
+      onEnd: onEnd,
+      onError: onError)
+  }
+
+  func openSessionControl(
+    onItem: @escaping ([String: Any]) -> Void,
+    onEnd: @escaping () -> Void,
+    onError: @escaping (String) -> Void,
+  ) -> String {
+    open(
+      endpoint: "session/control",
+      payload: ["args": [:]],
+      onItem: onItem,
+      onEnd: onEnd,
+      onError: onError)
+  }
+
+  func openJobList(
+    sessionID: String,
+    onItem: @escaping ([String: Any]) -> Void,
+    onEnd: @escaping () -> Void,
+    onError: @escaping (String) -> Void,
+  ) -> String {
+    open(
+      endpoint: "job/list",
+      payload: ["args": ["request": ["sessionId": sessionID]]],
+      onItem: onItem,
+      onEnd: onEnd,
+      onError: onError)
+  }
+
+  func openRemoteEvents(
+    onItem: @escaping ([String: Any]) -> Void,
+    onEnd: @escaping () -> Void,
+    onError: @escaping (String) -> Void,
+  ) -> String {
+    open(
+      endpoint: "$events",
+      payload: ["args": [:]],
+      onItem: { [weak self] value in
+        if value["type"] as? String == "ready" {
+          self?.eventClientID = value["clientId"] as? String
+        }
+        onItem(value)
+      },
+      onEnd: onEnd,
+      onError: onError)
+  }
+
+  func eventResult(eventID: String, value: Any) async throws {
+    guard let eventClientID,
+          let encoded = DSHJSONPatchValue(value)
+    else { throw URLError(.userAuthenticationRequired) }
+    _ = try await client.callOptional(
+      "$events/result",
+      args: DSHEventResultArgs(
+        clientId: eventClientID,
+        eventId: eventID,
+        outcome: .init(kind: "result", value: encoded)),
+      as: DSHJSONValue.self)
   }
 }
 
@@ -85,26 +309,22 @@ extension HarnessController {
     runtime.start { [weak self] result in
       guard let self else { return }
       switch result {
-      case .success(let url):
-        self.hostClient = DSHHostClient(baseURL: url)
-        self.hostEvents = DSHEventSocket(baseURL: url, path: "api/events.host", handler: { [weak self] frame in
-          self?.consumeHostFrame(frame)
-        }, onClosed: { [weak self] in
-          self?.hostStatus = "Host 事件流已断开，正在等待重新连接"
+      case .success(let connection):
+        let client = DSHHostClient(connection: connection)
+        self.hostClient = client
+        self.hostEvents = DSHEventSocket(client: client, onClosed: { [weak self] in
+          self?.handleHostStreamClosed()
         })
         self.hostEvents?.start()
-        self.muxEvents = DSHEventSocket(baseURL: url, path: "api/events.mux", handler: { [weak self] frame in
-          self?.consumeMuxFrame(frame)
-        }, onClosed: { [weak self] in
-          self?.hostStatus = "Host 消息流已断开，刷新会话后可恢复"
-          self?.clearPendingModelWorkbenchRequests()
-        })
-        self.muxEvents?.start()
-        self.hostStatus = "Host 已连接：\(url.absoluteString)"
+        self.openRemoteEventStream()
+        self.openSessionControl()
+        self.openWorkspaceFollow()
+        self.hostStatus = "Host 已连接：\(client.baseURL.absoluteString)"
         self.refreshHostSnapshots()
         self.refreshModelConfiguration()
         self.refreshSettings()
         self.refreshPresets()
+        self.refreshPermissionCatalog()
         self.refreshAgentPlatform()
         // No session auto-creation on connect: the app sits on the default
         // page until the first send lazily creates one (⌘N also just
@@ -113,6 +333,151 @@ extension HarnessController {
         self.hostStatus = "Host 启动失败：\(error.localizedDescription)"
       }
     }
+  }
+
+  func openRemoteEventStream() {
+    _ = hostEvents?.openRemoteEvents(
+      onItem: { [weak self] value in self?.consumeRemoteEventFrame(value) },
+      onEnd: { [weak self] in self?.hostStatus = "Host 应用事件流已结束" },
+      onError: { [weak self] message in self?.hostStatus = "Host 应用事件流失败：\(message)" })
+  }
+
+  private func consumeRemoteEventFrame(_ frame: [String: Any]) {
+    guard let type = frame["type"] as? String else { return }
+    switch type {
+    case "ready":
+      hostStreamDidBecomeReady()
+      hostStatus = "Host 事件流已就绪"
+    case "emit":
+      guard let event = frame["event"] as? String,
+            let args = frame["args"] as? [Any]
+      else { return }
+      consumeRemoteEmit(event: event, args: args)
+    case "waterfall":
+      consumeRemoteWaterfall(frame)
+    case "cancel":
+      guard let eventID = frame["eventId"] as? String else { return }
+      queuedApprovals.removeAll { $0.rpcId == eventID }
+      queuedQuestions.removeAll { $0.rpcId == eventID }
+      if pendingApproval?.rpcId == eventID {
+        pendingApproval = queuedApprovals.isEmpty ? nil : queuedApprovals.removeFirst()
+      }
+      if pendingQuestion?.rpcId == eventID {
+        pendingQuestion = queuedQuestions.isEmpty ? nil : queuedQuestions.removeFirst()
+      }
+      refreshAttentionBadge()
+    default:
+      break
+    }
+  }
+
+  private func consumeRemoteEmit(event: String, args: [Any]) {
+    switch event {
+    case "api-session/status":
+      guard args.count >= 2, let sessionID = args[0] as? String, let running = args[1] as? Bool else { return }
+      applyRemoteSessionStatus(sessionID: sessionID, running: running)
+    case "api-session/activity":
+      guard args.count >= 2, let sessionID = args[0] as? String else { return }
+      if let updatedAt = number(args[1]),
+         let index = hostSessions.firstIndex(where: { $0.sessionId == sessionID }) {
+        hostSessions[index].updatedAt = updatedAt
+      }
+      if let index = sessions.firstIndex(where: { $0.hostSessionId == sessionID }) {
+        sessions[index].updatedAt = Date()
+      }
+    case "api-session/added":
+      if let value = args.first,
+         let data = try? JSONSerialization.data(withJSONObject: value),
+         let summary = try? JSONDecoder().decode(DSHSessionSummary.self, from: data) {
+        if let index = hostSessions.firstIndex(where: { $0.sessionId == summary.sessionId }) {
+          hostSessions[index] = summary
+        } else {
+          hostSessions.append(summary)
+        }
+      } else {
+        refreshHostSnapshots()
+      }
+    case "api-session/removed":
+      guard let sessionID = args.first as? String else { return }
+      hostSessions.removeAll { $0.sessionId == sessionID }
+    case "api-session/error":
+      if args.count >= 2, let message = args[1] as? String { appendSystem("DSH Host 错误：\(message)") }
+    case "settings/document-updated":
+      refreshSettings()
+      refreshModelConfiguration()
+    case "llm/adapters-updated":
+      refreshModelConfiguration()
+      refreshSessionModels()
+    case "agent-platform/profiles-updated":
+      refreshAgentPlatform()
+    case "agent-preset/selected":
+      refreshHostSnapshots()
+    default:
+      break
+    }
+  }
+
+  func applyRemoteSessionStatus(sessionID: String, running: Bool) {
+    if let index = hostSessions.firstIndex(where: { $0.sessionId == sessionID }) {
+      hostSessions[index].running = running
+    }
+    if let index = sessions.firstIndex(where: { $0.hostSessionId == sessionID }) {
+      reconcileRootSessionRunningState(
+        sessionID: sessionID,
+        localSessionID: sessions[index].id,
+        running: running)
+      if !running && sessionID != hostCurrentSessionID {
+        sessions[index].hasUnread = true
+      }
+    }
+  }
+
+  private func consumeRemoteWaterfall(_ frame: [String: Any]) {
+    guard let event = frame["event"] as? String,
+          let eventID = frame["eventId"] as? String,
+          let request = frame["request"] as? [String: Any]
+    else { return }
+    let sessionID = (frame["agentId"] as? String)
+      ?? (request["agentId"] as? String)
+      ?? (request["sessionId"] as? String)
+      ?? ""
+    switch event {
+    case "approval/request":
+      let toolName = request["toolName"] as? String ?? "工具"
+      if alwaysAllowedTools.contains(Self.alwaysAllowKey(sessionId: sessionID, toolName: toolName)) {
+        Task { try? await hostEvents?.eventResult(eventID: eventID, value: "allowed-once") }
+        return
+      }
+      let approval = PendingApproval(
+        id: eventID,
+        rpcId: eventID,
+        sessionId: sessionID,
+        toolName: toolName,
+        reason: request["reason"] as? String)
+      if pendingApproval == nil { pendingApproval = approval } else { queuedApprovals.append(approval) }
+      nativeAlerts.notifyApprovalNeeded(toolName: toolName)
+    case "user-questions/request":
+      guard let rawQuestions = request["questions"] as? [[String: Any]] else { return }
+      let items = rawQuestions.compactMap { value -> PendingQuestion.Item? in
+        guard let id = value["id"] as? String,
+              let question = value["question"] as? String
+        else { return nil }
+        let options = (value["options"] as? [[String: Any]] ?? []).compactMap { $0["label"] as? String }
+        return PendingQuestion.Item(id: id, question: question, options: options)
+      }
+      let question = PendingQuestion(id: eventID, rpcId: eventID, sessionId: sessionID, items: items)
+      if pendingQuestion == nil { pendingQuestion = question } else { queuedQuestions.append(question) }
+      nativeAlerts.notifyQuestionNeeded()
+    default:
+      Task { try? await hostEvents?.eventResult(eventID: eventID, value: NSNull()) }
+    }
+  }
+
+  private func number(_ value: Any) -> Double? {
+    if let value = value as? Double { return value }
+    if let value = value as? Int { return Double(value) }
+    if let value = value as? NSNumber { return value.doubleValue }
+    return nil
   }
 
   func consumeMuxFrame(_ input: [String: Any]) {
@@ -209,9 +574,7 @@ extension HarnessController {
       for job in jobs {
         guard let id = job["id"] as? String else { continue }
         let status = (job["status"] as? String ?? "running").lowercased()
-        let state: ToolActivity.State =
-          status == "failed" ? .failed :
-          ["running", "pending", "in-progress", "in_progress"].contains(status) ? .running : .succeeded
+        let state = DSHToolJobState.resolve(status)
         if let index = activeTools.lastIndex(where: { $0.callId == id }) {
           activeTools[index].state = state
           if let detail = job["detail"] as? String { activeTools[index].summary = detail }
@@ -225,8 +588,8 @@ extension HarnessController {
     case "approval/requested":
       guard let rpcId = frame["_rpcId"] as? String, let sessionId = frame["sessionId"] as? String, let approvalId = frame["approvalId"] as? String else { return }
       let toolName = frame["toolName"] as? String ?? "工具"
-      if alwaysAllowedTools.contains(Self.alwaysAllowKey(sessionId: sessionId, toolName: toolName)), let hostClient {
-        Task { try? await hostClient.respond(rpcId: rpcId, value: DSHApprovalAnswer(sessionId: sessionId, approvalId: approvalId, outcome: "allowed-once")) }
+      if alwaysAllowedTools.contains(Self.alwaysAllowKey(sessionId: sessionId, toolName: toolName)) {
+        Task { try? await hostEvents?.eventResult(eventID: rpcId, value: "allowed-once") }
         return
       }
       let approval = PendingApproval(id: approvalId, rpcId: rpcId, sessionId: sessionId, toolName: toolName, reason: frame["reason"] as? String)
@@ -267,55 +630,47 @@ extension HarnessController {
   private func applyLiveEvent(_ event: [String: Any], view: [String: Any]? = nil) {
     guard let kind = event["type"] as? String, let data = event["data"] as? [String: Any], let index = selectedSessionIndex else { return }
     switch kind {
-    case "assistant/chunk":
+    case "assistant/chunk", "text-chunks", "reasoning-chunks":
       // Anchor on whether the *last* message is already this turn's
       // assistant reply, not "the last assistant message anywhere" — with
       // no placeholder seeding a fresh bubble on send() (see send()'s
       // comment), the previous turn's assistant message would otherwise
       // still be the most recent assistant-role entry and silently absorb
       // the new turn's first delta.
-      if let chunk = data["chunk"] as? [String: Any], chunk["type"] as? String == "text-delta", let delta = chunk["textDelta"] as? String {
-        if sessions[index].messages.last?.role == .assistant,
-           sessions[index].messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
-          sessions[index].messages[sessions[index].messages.count - 1].text += delta
-        } else {
-          var message = Message(role: .assistant, text: delta)
-          message.hostMessageId = DSHTranscriptMessageMarker.streamingAssistantHostMessageID
-          sessions[index].messages.append(message)
-        }
-      }
-      // Thinking streams as reasoning-delta chunks (field name is `text`, not
-      // `textDelta` — pi-ai adapter shape). Folding them into the message's
-      // reasoning field live means thinking lands in the collapsed ✻ block
-      // as it happens instead of being dropped until the final message.
-      if let chunk = data["chunk"] as? [String: Any], chunk["type"] as? String == "reasoning-delta", let delta = chunk["text"] as? String {
-        if sessions[index].messages.last?.role == .assistant,
-           sessions[index].messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
-          let last = sessions[index].messages.count - 1
-          sessions[index].messages[last].reasoning = (sessions[index].messages[last].reasoning ?? "") + delta
-        } else {
-          var message = Message(role: .assistant, text: "")
-          message.reasoning = delta
-          message.hostMessageId = DSHTranscriptMessageMarker.streamingAssistantHostMessageID
-          sessions[index].messages.append(message)
-        }
+      guard let delta = DSHAssistantStreamProjection.live(eventType: kind, data: data) else { break }
+      if sessions[index].messages.last?.role == .assistant,
+         sessions[index].messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
+        let last = sessions[index].messages.count - 1
+        DSHAssistantStreamProjection.append(delta, to: &sessions[index].messages[last])
+      } else {
+        sessions[index].messages.append(DSHAssistantStreamProjection.createMessage(from: delta))
       }
     case "assistant/message":
       let payload = liveMessagePayload(data)
-      if let text = liveMessageText(payload) {
-        var message = Message(role: .assistant, text: text, attachment: DSHAttachmentRef.fromLiveMessage(payload))
-        message.hostMessageId = payload["id"] as? String
-        // A trailing assistant message without a durable Host id is the
-        // stream-only placeholder created by assistant/chunk. Settle that
-        // placeholder in place; never overwrite an already-settled adjacent
-        // assistant message, which may carry a different image attachment.
-        if sessions[index].messages.last?.role == .assistant,
-           sessions[index].messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
-          message.reasoning = sessions[index].messages[sessions[index].messages.count - 1].reasoning
-          sessions[index].messages[sessions[index].messages.count - 1] = message
-        } else {
-          sessions[index].messages.append(message)
+      let text = liveMessageText(payload) ?? ""
+      let reasoning = liveMessageReasoning(payload)
+      let attachment = DSHAttachmentRef.fromLiveMessage(payload)
+      // A trailing assistant message without a durable Host id is the
+      // stream-only placeholder created by assistant/chunk. Settle it in
+      // place even when the model emitted only reasoning/tool blocks and no
+      // answer text; otherwise the row remains "streaming" after the step.
+      if sessions[index].messages.last?.role == .assistant,
+         sessions[index].messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID,
+         let count = sessions[index].messages.indices.last {
+        if !text.isEmpty { sessions[index].messages[count].text = text }
+        if let reasoning { sessions[index].messages[count].reasoning = reasoning }
+        if let attachment { sessions[index].messages[count].attachment = attachment }
+        if let messageID = payload["id"] as? String {
+          sessions[index].messages[count].hostMessageId = messageID
         }
+      } else if !text.isEmpty || reasoning != nil || attachment != nil {
+        var message = Message(
+          role: .assistant,
+          text: text,
+          attachment: attachment,
+          reasoning: reasoning)
+        message.hostMessageId = payload["id"] as? String
+        sessions[index].messages.append(message)
       }
     case "user/message":
       let payload = liveMessagePayload(data)
@@ -347,7 +702,17 @@ extension HarnessController {
         }
       }
     case "tool/call":
-      let tool = ToolActivity(callId: data["callId"] as? String ?? UUID().uuidString, name: data["name"] as? String ?? "工具", summary: "正在运行", state: .running, output: "", presentation: ToolPresentation.from(view?["view"] as? [String: Any]))
+      let name = data["name"] as? String ?? "工具"
+      let presentation = ToolPresentation.from(view?["view"] as? [String: Any])
+        ?? ToolPresentation.fromToolCall(name: name, arguments: data["arguments"])
+      let tool = ToolActivity(
+        callId: data["callId"] as? String ?? UUID().uuidString,
+        name: name,
+        summary: "正在运行",
+        state: .running,
+        output: "",
+        arguments: DSHToolArguments.live(data["arguments"]),
+        presentation: presentation)
       activeTools.append(tool)
       // Inline transcript row (Claude Code style); the row itself renders
       // live state by looking up `activeTools` via toolCallId, so tool/result
@@ -368,10 +733,28 @@ extension HarnessController {
         ?? result.output.nonEmpty
         ?? result.errorSummary
         ?? "工具已完成"
+      if !result.imageAttachments.isEmpty {
+        tool.imageAttachments = result.imageAttachments
+      }
       if let errorSummary = result.errorSummary, !errorSummary.isEmpty {
         tool.summary = errorSummary
       }
       activeTools[toolIndex] = tool
+    case "tool/ptc-dispatch-start", "tool/code-dispatch-start":
+      guard let subcall = DSHSubcallDecoder.live(from: data),
+            let index = activeTools.lastIndex(where: { $0.callId == subcall.rootCallId })
+      else { return }
+      activeTools[index].startChild(subcall)
+    case "tool/ptc-dispatch", "tool/code-dispatch":
+      guard let subcall = DSHSubcallDecoder.live(from: data),
+            let index = activeTools.lastIndex(where: { $0.callId == subcall.rootCallId })
+      else { return }
+      activeTools[index].finishChild(
+        subcall,
+        output: DSHSubcallDecoder.output(from: data["content"]),
+        failed: data["isError"] as? Bool == true,
+        imageAttachments: DSHAttachmentRef.fromLiveContent(
+          data["content"] as? [[String: Any]] ?? []))
     case "tool-workflow/run-start":
       if let runId = data["runId"] as? String, let name = data["name"] as? String, let parentSessionId = hostCurrentSessionID { workflows.append(WorkflowRun(id: runId, parentSessionId: parentSessionId, name: name)) }
     case "tool-workflow/agent-start":
@@ -407,13 +790,15 @@ extension HarnessController {
       // the settled (static) tail while streaming.
       isRunning = true
       sessions[index].isRunning = true
+      sessions[index].turnStartedAt = DSHTurnTiming.date(
+        from: DSHTurnTiming.milliseconds(from: event))
       runNotice = nil
     case "turn/end":
       let kind = (data["reason"] as? [String: Any])?["kind"] as? String
       switch kind {
       case "max-tokens": runNotice = "本轮达到最大输出 token 限制"
       case "error": runNotice = "本轮执行失败"
-      case "aborted": runNotice = "本轮已中断"
+      case "aborted", "interrupted": runNotice = "本轮已中断"
       default: break
       }
       // Host turns end async; nothing previously reset these for the Host
@@ -429,6 +814,17 @@ extension HarnessController {
       for toolIndex in activeTools.indices where activeTools[toolIndex].state == .running {
         activeTools[toolIndex].state = .succeeded
       }
+      if let start = sessions[index].turnStartedAt {
+        let endMilliseconds = DSHTurnTiming.milliseconds(from: event)
+        let duration = DSHTurnTiming.duration(
+          from: start,
+          to: endMilliseconds) ?? 0
+        sessions[index].messages.append(Message(
+          role: .system,
+          text: "本轮用时 \(DSHTurnTiming.label(duration))",
+          timestamp: DSHTurnTiming.date(from: endMilliseconds) ?? Date()))
+      }
+      sessions[index].turnStartedAt = nil
       nativeAlerts.notifyTurnFinished(summary: sessions[index].title)
     case "compaction/start":
       runNotice = "正在压缩历史上下文…"
@@ -457,34 +853,44 @@ extension HarnessController {
     guard let kind = event["type"] as? String, let data = event["data"] as? [String: Any] else { return }
     let isDisplayed = activeSubagentAddress?.childSessionId == sessionID
     switch kind {
-    case "assistant/chunk":
-      guard isDisplayed else { return }
-      if let chunk = data["chunk"] as? [String: Any], chunk["type"] as? String == "text-delta", let delta = chunk["textDelta"] as? String {
-        if subagentTranscript?.messages.last?.role == .assistant,
-           subagentTranscript?.messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID,
-           let count = subagentTranscript?.messages.count {
-          subagentTranscript?.messages[count - 1].text += delta
-        } else {
-          var message = Message(role: .assistant, text: delta)
-          message.hostMessageId = DSHTranscriptMessageMarker.streamingAssistantHostMessageID
-          subagentTranscript?.messages.append(message)
-        }
+    case "assistant/chunk", "text-chunks", "reasoning-chunks":
+      guard isDisplayed,
+            let delta = DSHAssistantStreamProjection.live(eventType: kind, data: data),
+            var transcript = subagentTranscript
+      else { return }
+      if transcript.messages.last?.role == .assistant,
+         transcript.messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
+        DSHAssistantStreamProjection.append(delta, to: &transcript.messages[transcript.messages.count - 1])
+      } else {
+        transcript.messages.append(DSHAssistantStreamProjection.createMessage(from: delta))
       }
+      subagentTranscript = transcript
     case "assistant/message":
       guard isDisplayed else { return }
       let payload = liveMessagePayload(data)
-      if let text = liveMessageText(payload) {
-        if subagentTranscript?.messages.last?.role == .assistant,
-           subagentTranscript?.messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID,
-           let count = subagentTranscript?.messages.count {
-          subagentTranscript?.messages[count - 1].text = text
-          subagentTranscript?.messages[count - 1].attachment = DSHAttachmentRef.fromLiveMessage(payload)
-          subagentTranscript?.messages[count - 1].hostMessageId = payload["id"] as? String
-        } else {
-          var message = Message(role: .assistant, text: text, attachment: DSHAttachmentRef.fromLiveMessage(payload))
+      let text = liveMessageText(payload) ?? ""
+      let reasoning = liveMessageReasoning(payload)
+      let attachment = DSHAttachmentRef.fromLiveMessage(payload)
+      if var transcript = subagentTranscript {
+        if transcript.messages.last?.role == .assistant,
+           transcript.messages.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID,
+           let count = transcript.messages.indices.last {
+          if !text.isEmpty { transcript.messages[count].text = text }
+          if let reasoning { transcript.messages[count].reasoning = reasoning }
+          if let attachment { transcript.messages[count].attachment = attachment }
+          if let messageID = payload["id"] as? String {
+            transcript.messages[count].hostMessageId = messageID
+          }
+        } else if !text.isEmpty || reasoning != nil || attachment != nil {
+          var message = Message(
+            role: .assistant,
+            text: text,
+            attachment: attachment,
+            reasoning: reasoning)
           message.hostMessageId = payload["id"] as? String
-          subagentTranscript?.messages.append(message)
+          transcript.messages.append(message)
         }
+        subagentTranscript = transcript
       }
     case "user/message":
       guard isDisplayed else { return }
@@ -493,13 +899,17 @@ extension HarnessController {
         subagentTranscript?.messages.append(Message(role: .user, text: text, attachment: DSHAttachmentRef.fromLiveMessage(payload)))
       }
     case "tool/call":
+      let name = data["name"] as? String ?? "工具"
+      let presentation = ToolPresentation.from(view?["view"] as? [String: Any])
+        ?? ToolPresentation.fromToolCall(name: name, arguments: data["arguments"])
       let tool = ToolActivity(
         callId: data["callId"] as? String ?? UUID().uuidString,
-        name: data["name"] as? String ?? "工具",
+        name: name,
         summary: "正在运行",
         state: .running,
         output: "",
-        presentation: ToolPresentation.from(view?["view"] as? [String: Any]))
+        arguments: DSHToolArguments.live(data["arguments"]),
+        presentation: presentation)
       appendSubagentTool(
         sessionID: sessionID,
         tool: tool,
@@ -523,9 +933,33 @@ extension HarnessController {
           ?? result.output.nonEmpty
           ?? result.errorSummary
           ?? "工具已完成"
+        if !result.imageAttachments.isEmpty {
+          tool.imageAttachments = result.imageAttachments
+        }
         if let errorSummary = result.errorSummary, !errorSummary.isEmpty {
           tool.summary = errorSummary
         }
+      }
+    case "tool/ptc-dispatch-start", "tool/code-dispatch-start":
+      guard let subcall = DSHSubcallDecoder.live(from: data) else { return }
+      _ = updateSubagentTool(
+        sessionID: sessionID,
+        callID: subcall.rootCallId,
+        seq: event["seq"] as? Int ?? -1) { tool in
+        tool.startChild(subcall)
+      }
+    case "tool/ptc-dispatch", "tool/code-dispatch":
+      guard let subcall = DSHSubcallDecoder.live(from: data) else { return }
+      _ = updateSubagentTool(
+        sessionID: sessionID,
+        callID: subcall.rootCallId,
+        seq: event["seq"] as? Int ?? -1) { tool in
+        tool.finishChild(
+          subcall,
+          output: DSHSubcallDecoder.output(from: data["content"]),
+          failed: data["isError"] as? Bool == true,
+          imageAttachments: DSHAttachmentRef.fromLiveContent(
+            data["content"] as? [[String: Any]] ?? []))
       }
     case "todo/write":
       if let rawTodos = data["todos"] as? [[String: Any]],
@@ -533,10 +967,26 @@ extension HarnessController {
         replaceSubagentTodos(sessionID: sessionID, value: rawTodos, seq: seq)
       }
     case "turn/start":
-      if isDisplayed { subagentTranscript?.isRunning = true }
+      if isDisplayed {
+        subagentTranscript?.isRunning = true
+        subagentTranscript?.turnStartedAt = DSHTurnTiming.date(
+          from: DSHTurnTiming.milliseconds(from: event))
+      }
     case "turn/end":
       settleSubagentTools(sessionID: sessionID, seq: event["seq"] as? Int ?? -1)
-      if isDisplayed { subagentTranscript?.isRunning = false }
+      if isDisplayed, var transcript = subagentTranscript {
+        transcript.isRunning = false
+        if let start = transcript.turnStartedAt {
+          let endMilliseconds = DSHTurnTiming.milliseconds(from: event)
+          let duration = DSHTurnTiming.duration(from: start, to: endMilliseconds) ?? 0
+          transcript.messages.append(Message(
+            role: .system,
+            text: "本轮用时 \(DSHTurnTiming.label(duration))",
+            timestamp: DSHTurnTiming.date(from: endMilliseconds) ?? Date()))
+        }
+        transcript.turnStartedAt = nil
+        subagentTranscript = transcript
+      }
     default:
       break
     }
@@ -564,7 +1014,21 @@ extension HarnessController {
 
   private func liveMessageText(_ value: Any?) -> String? {
     guard let message = value as? [String: Any], let content = message["content"] as? [[String: Any]] else { return nil }
-    return content.compactMap { $0["text"] as? String }.joined()
+    return content.compactMap { block -> String? in
+      guard block["type"] as? String == "text" else { return nil }
+      return block["text"] as? String
+    }.joined()
+  }
+
+  private func liveMessageReasoning(_ value: Any?) -> String? {
+    guard let message = value as? [String: Any],
+          let content = message["content"] as? [[String: Any]]
+    else { return nil }
+    let reasoning = content.compactMap { block -> String? in
+      guard block["type"] as? String == "reasoning" else { return nil }
+      return block["text"] as? String
+    }.joined()
+    return reasoning.isEmpty ? nil : reasoning
   }
 
   func consumeHostFrame(_ frame: [String: Any]) {

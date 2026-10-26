@@ -16,6 +16,10 @@ enum AppPrefs {
   static let notifyAttentionKey = "dsh.alerts.notifyAttention"
   static var notifyAttention: Bool { boolDefaultingTrue(notifyAttentionKey) }
 
+  /// Composer 顶部的当前会话用量速览；完整拆分始终可在设置 → 用量查看。
+  static let showComposerUsageKey = "dsh.composer.showModelUsage"
+  static var showComposerUsage: Bool { boolDefaultingTrue(showComposerUsageKey) }
+
   private static func boolDefaultingTrue(_ key: String) -> Bool {
     UserDefaults.standard.object(forKey: key) == nil
       ? true : UserDefaults.standard.bool(forKey: key)

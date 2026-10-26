@@ -8,6 +8,7 @@ WIRE="$ROOT/macos/DSHApp/DSHAgentPlatform.swift"
 COMPOSER="$ROOT/macos/DSHApp/ComposerView.swift"
 CONVERSATION="$ROOT/macos/DSHApp/ConversationView.swift"
 SIDEBAR="$ROOT/macos/DSHApp/SidebarView.swift"
+SIDEBAR_GROUP="$ROOT/macos/DSHApp/SidebarSessionGroupView.swift"
 POLICY="$ROOT/macos/DSHApp/DSHAgentPlatformPolicy.swift"
 POLICY_FIXTURE="$ROOT/scripts/fixtures/agent-platform-policy-check.swift"
 SNAPSHOT_FIXTURE="$ROOT/scripts/fixtures/agent-platform-snapshot-check.swift"
@@ -23,8 +24,10 @@ grep -q 'AgentProfileEditorSheet' "$VIEW" || { echo "agent-platform-ui: profile 
 grep -q 'AgentManualRunSheet' "$VIEW" || { echo "agent-platform-ui: manual run sheet is missing" >&2; exit 1; }
 grep -q 'AgentProfilePalette' "$VIEW" || { echo "agent-platform-ui: composer @ palette is missing" >&2; exit 1; }
 grep -q 'showAgentManagement' "$SIDEBAR" || { echo "agent-platform-ui: sidebar Agent entry is missing" >&2; exit 1; }
+grep -q 'SidebarSessionGroupView(' "$SIDEBAR" || { echo "agent-platform-ui: sidebar project groups are not using the foldable group view" >&2; exit 1; }
+grep -q 'defaultVisibleCount = 5' "$SIDEBAR_GROUP" || { echo "agent-platform-ui: sidebar projects do not default to five sessions" >&2; exit 1; }
 grep -q 'harness.submitComposer' "$COMPOSER" || { echo "agent-platform-ui: composer send path is not connected" >&2; exit 1; }
-grep -q 'harness.toolDetail(activity)' "$CONVERSATION" || { echo "agent-platform-ui: transcript tool details are not reachable from the right panel" >&2; exit 1; }
+grep -Eq 'harness\.toolDetail\((activity|selected)\)' "$CONVERSATION" || { echo "agent-platform-ui: transcript tool details are not reachable from the right panel" >&2; exit 1; }
 grep -q 'agent-platform/batches' "$ROOT/macos/DSHApp/DSHProjections.swift" || { echo "agent-platform-ui: batch projection is missing" >&2; exit 1; }
 grep -q 'ns: "agentProfiles", method: "list"' "$WIRE" || { echo "agent-platform-ui: profile gateway call is missing" >&2; exit 1; }
 grep -q 'ns: "agentProfiles", method: "runtimeStatus"' "$WIRE" || { echo "agent-platform-ui: runtime status gateway call is missing" >&2; exit 1; }

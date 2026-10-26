@@ -2,7 +2,7 @@ import Foundation
 
 
 struct DSHGoalRef: Codable { let id: String; let revision: Int }
-struct DSHGoalActionPayload: Encodable { let sessionId: String; let ref: DSHGoalRef }
+struct DSHGoalActionPayload: Encodable { let agentId: String; let ref: DSHGoalRef }
 struct DSHGoalActionResult: Decodable { let ref: DSHGoalRef }
 
 /// goal.create / goal.edit payloads, mirroring `GoalsApi` in
@@ -11,16 +11,29 @@ struct DSHGoalActionResult: Decodable { let ref: DSHGoalRef }
 /// `{ sessionId, ref, objective?, maxGoalRounds? }`. Both acknowledge with
 /// the new CAS ref only — the committed goal reaches the client through the
 /// `goal` session projection, so responses never feed local state.
-struct DSHGoalCreatePayload: Encodable { let sessionId: String; let objective: String; let maxGoalRounds: Int? }
-struct DSHGoalEditPayload: Encodable { let sessionId: String; let ref: DSHGoalRef; let objective: String?; let maxGoalRounds: Int? }
+struct DSHGoalCreatePayload: Encodable { let objective: String; let maxGoalRounds: Int? }
+struct DSHGoalCreateArgs: Encodable { let agentId: String; let request: DSHGoalCreatePayload }
+struct DSHGoalEditPayload: Encodable { let objective: String?; let maxGoalRounds: Int? }
+struct DSHGoalEditArgs: Encodable { let agentId: String; let ref: DSHGoalRef; let request: DSHGoalEditPayload }
 
 extension DSHHostClient {
   func createGoal(sessionId: String, objective: String, maxGoalRounds: Int? = nil) async throws -> DSHGoalRef {
-    try await call("goal.create", payload: DSHGoalCreatePayload(sessionId: sessionId, objective: objective, maxGoalRounds: maxGoalRounds), as: DSHGoalActionResult.self).ref
+    try await call(
+      "goals/create",
+      args: DSHGoalCreateArgs(
+        agentId: sessionId,
+        request: DSHGoalCreatePayload(objective: objective, maxGoalRounds: maxGoalRounds)),
+      as: DSHGoalActionResult.self).ref
   }
 
   func editGoal(sessionId: String, ref: DSHGoalRef, objective: String? = nil, maxGoalRounds: Int? = nil) async throws -> DSHGoalRef {
-    try await call("goal.edit", payload: DSHGoalEditPayload(sessionId: sessionId, ref: ref, objective: objective, maxGoalRounds: maxGoalRounds), as: DSHGoalActionResult.self).ref
+    try await call(
+      "goals/edit",
+      args: DSHGoalEditArgs(
+        agentId: sessionId,
+        ref: ref,
+        request: DSHGoalEditPayload(objective: objective, maxGoalRounds: maxGoalRounds)),
+      as: DSHGoalRef.self)
   }
 }
 
@@ -105,7 +118,6 @@ extension HarnessController {
   static func alwaysAllowKey(sessionId: String, toolName: String) -> String { "\(sessionId)::\(toolName)" }
 
   func answerApproval(_ approval: PendingApproval, allowed: Bool, alwaysThisSession: Bool = false) {
-    guard let hostClient else { return }
     // Validate against the specific item the sheet was showing, not just
     // whatever is currently `pendingApproval` — a queued backlog item can
     // promote into that slot between the sheet rendering and the click
@@ -116,7 +128,7 @@ extension HarnessController {
     if allowed && alwaysThisSession { alwaysAllowedTools.insert(Self.alwaysAllowKey(sessionId: approval.sessionId, toolName: approval.toolName)) }
     Task {
       do {
-        try await hostClient.respond(rpcId: approval.rpcId, value: DSHApprovalAnswer(sessionId: approval.sessionId, approvalId: approval.id, outcome: allowed ? "allowed-once" : "rejected"))
+        try await hostEvents?.eventResult(eventID: approval.rpcId, value: allowed ? "allowed-once" : "rejected")
         await MainActor.run { self.appendSystem(allowed ? "已允许 \(approval.toolName) 执行一次。" : "已拒绝 \(approval.toolName)。") }
       } catch { await MainActor.run { self.appendSystem("审批响应失败：\(error.localizedDescription)") } }
     }
@@ -139,7 +151,6 @@ extension HarnessController {
   }
 
   func answerQuestionBatch(_ question: PendingQuestion, selections: [String: String], custom: [String: String]) {
-    guard let hostClient else { return }
     if pendingQuestion?.id == question.id { pendingQuestion = queuedQuestions.isEmpty ? nil : queuedQuestions.removeFirst() }
     else { queuedQuestions.removeAll { $0.id == question.id } }
     refreshAttentionBadge()
@@ -152,7 +163,14 @@ extension HarnessController {
     }
     Task {
       do {
-        try await hostClient.respond(rpcId: question.rpcId, value: DSHQuestionAnswer(sessionId: question.sessionId, answer: answers))
+        let value: [String: Any] = [
+          "answers": answers.map { item -> [String: Any] in
+            var row: [String: Any] = ["id": item.id, "selected": item.selected]
+            if let custom = item.custom { row["custom"] = custom }
+            return row
+          },
+        ]
+        try await hostEvents?.eventResult(eventID: question.rpcId, value: value)
         await MainActor.run { self.appendSystem("已提交 Agent 问题回答。") }
       } catch {
         await MainActor.run { self.appendSystem("问题回答失败") }

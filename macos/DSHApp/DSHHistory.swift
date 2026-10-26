@@ -14,7 +14,12 @@ indirect enum DSHJSONValue: Decodable {
   }
   var object: [String: DSHJSONValue]? { if case let .object(value) = self { value } else { nil } }
   var string: String? { if case let .string(value) = self { value } else { nil } }
+  var bool: Bool? { if case let .bool(value) = self { value } else { nil } }
   var array: [DSHJSONValue]? { if case let .array(value) = self { value } else { nil } }
+  var integer: Int? {
+    guard case let .number(value) = self else { return nil }
+    return Int(exactly: value)
+  }
 }
 
 struct DSHRawEvent: Decodable {
@@ -32,10 +37,50 @@ struct DSHHistoryPage: Decodable {
 }
 struct DSHHistoryPayload: Encodable { let sessionId: String; let beforeSeq: Int?; let maxMessages: Int }
 
+enum DSHHistoryPagination {
+  static let pageSize = 500
+
+  static func oldestSeq(in records: [DSHHistoryEntry]) -> Int? {
+    records.map(\.event.seq).min()
+  }
+
+  static func advances(currentOldest: Int, pageOldest: Int?) -> Bool {
+    guard let pageOldest else { return false }
+    return pageOldest < currentOldest
+  }
+}
+
+enum DSHHistoryLoadingPolicy {
+  static let watchdogNanoseconds: UInt64 = 15_000_000_000
+}
+
+enum DSHHistoryPageMerge {
+  static func prepend(
+    _ olderMessages: [HarnessController.Message],
+    to currentMessages: [HarnessController.Message]
+  ) -> [HarnessController.Message] {
+    guard !olderMessages.isEmpty else { return currentMessages }
+    let currentIDs = Set(currentMessages.map(\.id))
+    return olderMessages.filter { !currentIDs.contains($0.id) } + currentMessages
+  }
+}
+
+enum DSHHistoryLoadError: LocalizedError {
+  case cursorDidNotAdvance
+
+  var errorDescription: String? {
+    switch self {
+    case .cursorDidNotAdvance:
+      return "Host 返回了更多历史，但分页游标没有前进"
+    }
+  }
+}
+
 struct DSHFoldedHistory {
   let messages: [HarnessController.Message]
   let tools: [HarnessController.ToolActivity]
   let toolSequences: [String: Int]
+  let activeTurnStartedAt: Date?
 }
 
 private struct DSHRootHistoryRequest: Equatable {
@@ -230,75 +275,223 @@ extension HarnessController {
   }
 
   func loadHistory(sessionId: String, localSessionID: UUID) {
+    if let index = sessions.firstIndex(where: { $0.id == localSessionID }) {
+      sessions[index].isLoadingHistory = true
+    }
+    startRootSessionFollow(sessionID: sessionId, localSessionID: localSessionID)
+    scheduleHistoryPageFallback(sessionId: sessionId, localSessionID: localSessionID)
+  }
+
+  private func scheduleHistoryLoadingWatchdog(
+    sessionID: String,
+    localSessionID: UUID,
+    generation: Int
+  ) {
+    Task {
+      try? await Task.sleep(nanoseconds: DSHHistoryLoadingPolicy.watchdogNanoseconds)
+      self.expireHistoryLoadingIfNeeded(
+        sessionID: sessionID,
+        localSessionID: localSessionID,
+        generation: generation)
+    }
+  }
+
+  @discardableResult
+  func expireHistoryLoadingIfNeeded(
+    sessionID: String,
+    localSessionID: UUID,
+    generation: Int
+  ) -> Bool {
+    guard acceptsRootHistoryRequest(
+      sessionID: sessionID,
+      localSessionID: localSessionID,
+      generation: generation),
+      let index = sessions.firstIndex(where: { $0.id == localSessionID }),
+      sessions[index].isLoadingHistory
+    else { return false }
+    sessions[index].isLoadingHistory = false
+    status = "会话历史仍在后台补齐，当前内容已可继续使用"
+    return true
+  }
+
+  private func scheduleHistoryPageFallback(sessionId: String, localSessionID: UUID) {
     guard let hostClient else { return }
+    guard let throughSeq = hostSessions.first(where: { $0.sessionId == sessionId })?
+      .projections?.asOfSeq else {
+      if let index = sessions.firstIndex(where: { $0.id == localSessionID }) {
+        sessions[index].isLoadingHistory = false
+      }
+      hostStatus = "会话历史加载失败：缺少可用的历史游标"
+      return
+    }
     let generation = beginRootHistoryRequest(
       sessionID: sessionId,
       localSessionID: localSessionID)
+    scheduleHistoryLoadingWatchdog(
+      sessionID: sessionId,
+      localSessionID: localSessionID,
+      generation: generation)
     Task {
+      try? await Task.sleep(nanoseconds: 1_500_000_000)
+      let shouldLoad = await MainActor.run {
+        self.acceptsRootHistoryRequest(
+          sessionID: sessionId,
+          localSessionID: localSessionID,
+          generation: generation)
+          && self.rootSessionFollowCursor == nil
+      }
+      guard shouldLoad else { return }
       do {
-        let page = try await hostClient.history(sessionId: sessionId)
-        let folded = foldHistoryContent(page.events)
+        let page = try await hostClient.sessionPage(
+          sessionId: sessionId,
+          throughSeq: throughSeq,
+          beforeSeq: nil,
+          maxMessages: DSHHistoryPagination.pageSize)
+        let folded = foldHistoryContent(page.records)
         await MainActor.run {
           guard self.acceptsRootHistoryRequest(
             sessionID: sessionId,
             localSessionID: localSessionID,
             generation: generation),
+            self.rootSessionFollowCursor == nil,
             let index = self.sessions.firstIndex(where: { $0.id == localSessionID })
           else { return }
-          self.sessions[index].messages = folded.messages.isEmpty ? [Message(role: .system, text: "这个会话还没有可显示的消息。")] : folded.messages
-          self.activeTools = folded.tools
-          self.historyHasMore = page.hasMore
-          self.historyOldestSeq = page.events.map { $0.event.seq }.min()
-          self.sessions[index].updatedAt = Date()
-          self.rememberPermissionSelection(
-            page.projections?.values.permissions,
+          self.sessions[index].messages = folded.messages.isEmpty && !page.hasMore
+            ? [Message(role: .system, text: "这个会话还没有可显示的消息。")]
+            : folded.messages
+          self.sessions[index].turnStartedAt = folded.activeTurnStartedAt
+          self.reconcileRootSessionRunningState(
             sessionID: sessionId,
-            seq: page.projections?.asOfSeq ?? -1)
-          self.status = "已载入 \(folded.messages.count) 条原生会话消息"
+            localSessionID: localSessionID,
+            running: folded.activeTurnStartedAt != nil)
+          self.sessions[index].isLoadingHistory = page.hasMore
+          self.activeTools = DSHToolActivityMerge.preservingDetails(
+            incoming: folded.tools,
+            previous: self.activeTools)
+          let oldest = DSHHistoryPagination.oldestSeq(in: page.records)
+          self.status = page.hasMore
+            ? "已载入 \(folded.messages.count) 条消息，正在补齐完整历史"
+            : "已载入完整会话历史"
+          self.refreshHostSnapshots()
+          if page.hasMore {
+            guard let oldest else {
+              self.sessions[index].isLoadingHistory = false
+              self.hostStatus = DSHHistoryLoadError.cursorDidNotAdvance.localizedDescription
+              return
+            }
+            self.loadAllOlderHistory(
+              sessionID: sessionId,
+              localSessionID: localSessionID,
+              throughSeq: throughSeq,
+              beforeSeq: oldest)
+          }
         }
       } catch {
         await MainActor.run {
           guard self.acceptsRootHistoryRequest(
             sessionID: sessionId,
             localSessionID: localSessionID,
-            generation: generation)
-          else { return }
-          self.appendSystem("载入会话历史失败：\(error.localizedDescription)", to: localSessionID)
+            generation: generation) else { return }
+          if let index = self.sessions.firstIndex(where: { $0.id == localSessionID }) {
+            self.sessions[index].isLoadingHistory = false
+          }
+          self.hostStatus = "会话历史加载失败：\(error.localizedDescription)"
         }
       }
     }
   }
 
-  func loadOlderHistory() {
-    guard let hostClient, let sessionId = hostCurrentSessionID,
-          let before = historyOldestSeq, historyHasMore,
-          let localSessionID = selectedSessionID
-    else { return }
-    let restoreAnchor = displayedWindowMessages.first?.id
+  /// `session/page` stays bounded, but the UI owns the complete transcript.
+  /// Fetch every page in sequence and expose one loading state to the user.
+  func loadAllOlderHistory(
+    sessionID sessionId: String,
+    localSessionID: UUID,
+    throughSeq: Int,
+    beforeSeq: Int
+  ) {
+    guard let hostClient else { return }
+    if let index = sessions.firstIndex(where: { $0.id == localSessionID }) {
+      sessions[index].isLoadingHistory = true
+    }
     let generation = beginRootHistoryRequest(
       sessionID: sessionId,
       localSessionID: localSessionID)
+    scheduleHistoryLoadingWatchdog(
+      sessionID: sessionId,
+      localSessionID: localSessionID,
+      generation: generation)
     Task {
+      var before = beforeSeq
+      var hasMore = true
       do {
-        let page = try await hostClient.history(sessionId: sessionId, beforeSeq: before, maxMessages: 100)
-        let older = foldHistoryContent(page.events)
+        while hasMore {
+          let page = try await hostClient.sessionPage(
+            sessionId: sessionId,
+            throughSeq: throughSeq,
+            beforeSeq: before,
+            maxMessages: DSHHistoryPagination.pageSize)
+          guard acceptsRootHistoryRequest(
+            sessionID: sessionId,
+            localSessionID: localSessionID,
+            generation: generation)
+          else {
+            if let index = sessions.firstIndex(where: { $0.id == localSessionID }) {
+              sessions[index].isLoadingHistory = false
+            }
+            return
+          }
+          if page.records.isEmpty {
+            guard page.hasMore else {
+              hasMore = false
+              break
+            }
+            throw DSHHistoryLoadError.cursorDidNotAdvance
+          }
+          let pageOldest = DSHHistoryPagination.oldestSeq(in: page.records)
+          guard DSHHistoryPagination.advances(
+            currentOldest: before,
+            pageOldest: pageOldest),
+            let pageOldest
+          else { throw DSHHistoryLoadError.cursorDidNotAdvance }
+          let older = foldHistoryContent(page.records)
+          let applied = await MainActor.run {
+            guard self.acceptsRootHistoryRequest(
+              sessionID: sessionId,
+              localSessionID: localSessionID,
+              generation: generation),
+              let index = self.sessions.firstIndex(where: { $0.id == localSessionID })
+            else { return false }
+            self.sessions[index].messages = DSHHistoryPageMerge.prepend(
+              older.messages,
+              to: self.sessions[index].messages)
+            for tool in older.tools
+            where !self.activeTools.contains(where: { $0.callId == tool.callId }) {
+              self.activeTools.append(tool)
+            }
+            self.sessions[index].isLoadingHistory = page.hasMore
+            self.status = page.hasMore
+              ? "已显示最近内容，正在继续补齐更早历史"
+              : "已载入完整会话历史"
+            return true
+          }
+          guard applied else { return }
+          before = pageOldest
+          hasMore = page.hasMore
+        }
         await MainActor.run {
           guard self.acceptsRootHistoryRequest(
             sessionID: sessionId,
             localSessionID: localSessionID,
-            generation: generation),
-            let index = self.sessions.firstIndex(where: { $0.id == localSessionID })
+            generation: generation)
           else { return }
-          self.sessions[index].messages = older.messages + self.sessions[index].messages
-          self.prepareDisplayedConversationForPrepend(
-            insertedCount: older.messages.count,
-            anchorMessageID: restoreAnchor)
-          for tool in older.tools
-          where !self.activeTools.contains(where: { $0.callId == tool.callId }) {
-            self.activeTools.append(tool)
+          guard let index = self.sessions.firstIndex(where: { $0.id == localSessionID }) else { return }
+          if self.sessions[index].messages.isEmpty {
+            self.sessions[index].messages = [
+              Message(role: .system, text: "这个会话还没有可显示的消息。")
+            ]
           }
-          self.historyHasMore = page.hasMore
-          self.historyOldestSeq = page.events.map { $0.event.seq }.min() ?? self.historyOldestSeq
+          self.sessions[index].isLoadingHistory = false
+          self.status = "已载入完整会话历史"
         }
       } catch {
         await MainActor.run {
@@ -307,7 +500,10 @@ extension HarnessController {
             localSessionID: localSessionID,
             generation: generation)
           else { return }
-          self.status = "载入更早消息失败"
+          if let index = self.sessions.firstIndex(where: { $0.id == localSessionID }) {
+            self.sessions[index].isLoadingHistory = false
+          }
+          self.hostStatus = "完整会话历史加载失败：\(error.localizedDescription)"
         }
       }
     }
@@ -327,6 +523,7 @@ extension HarnessController {
     var result: [Message] = []
     var tools: [String: ToolActivity] = [:]
     var toolSequences: [String: Int] = [:]
+    var activeTurnStartedAt: Double?
     for entry in entries {
       let event = entry.event
       guard let data = event.data.object else { continue }
@@ -356,39 +553,51 @@ extension HarnessController {
             result.append(message)
           }
         }
-      case "assistant/chunk":
-        // Some adapters (e.g. hand-declared relay providers) log only the
-        // stream — without folding it, a reloaded transcript has no
-        // assistant text at all. Mirrors the live anchoring: extend the
-        // trailing assistant bubble, otherwise open a fresh one.
-        guard let chunk = data["chunk"]?.object else { continue }
-        if chunk["type"]?.string == "text-delta", let delta = chunk["textDelta"]?.string {
-          if result.last?.role == .assistant,
-             result.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
-            result[result.count - 1].text += delta
-          } else {
-            var message = Message(role: .assistant, text: delta, timestamp: Date(timeIntervalSince1970: event.time / 1000))
-            message.hostMessageId = DSHTranscriptMessageMarker.streamingAssistantHostMessageID
-            result.append(message)
-          }
-        }
-        if chunk["type"]?.string == "reasoning-delta", let delta = chunk["text"]?.string {
-          if result.last?.role == .assistant,
-             result.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
-            result[result.count - 1].reasoning = (result[result.count - 1].reasoning ?? "") + delta
-          } else {
-            var message = Message(role: .assistant, text: "", timestamp: Date(timeIntervalSince1970: event.time / 1000))
-            message.reasoning = delta
-            message.hostMessageId = DSHTranscriptMessageMarker.streamingAssistantHostMessageID
-            result.append(message)
-          }
+      case "assistant/chunk", "text-chunks", "reasoning-chunks":
+        // Some adapters log only the stream and some interrupted sessions
+        // never produce a final assistant message. Fold every supported
+        // stream shape so reloading does not erase the response.
+        guard let delta = DSHAssistantStreamProjection.history(eventType: event.type, data: data) else { continue }
+        if result.last?.role == .assistant,
+           result.last?.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
+          DSHAssistantStreamProjection.append(delta, to: &result[result.count - 1])
+        } else {
+          result.append(DSHAssistantStreamProjection.createMessage(
+            from: delta,
+            timestamp: Date(timeIntervalSince1970: event.time / 1000)))
         }
       case "tool/call":
         let name = data["name"]?.string ?? "tool"
         let id = data["callId"]?.string ?? "\(event.seq)"
-        tools[id] = ToolActivity(callId: id, name: name, summary: "工具调用", state: .running, output: "", presentation: historyPresentation(entry.view))
+        let presentation = historyPresentation(entry.view)
+          ?? ToolPresentation.fromHistoryToolCall(name: name, arguments: data["arguments"])
+        tools[id] = ToolActivity(
+          callId: id,
+          name: name,
+          summary: "工具调用",
+          state: .running,
+          output: "",
+          arguments: DSHToolArguments.history(data["arguments"]),
+          presentation: presentation)
         toolSequences[id] = event.seq
         result.append(Message(role: .tool, text: name, timestamp: Date(timeIntervalSince1970: event.time / 1000), toolCallId: id))
+      case "tool/ptc-dispatch-start", "tool/code-dispatch-start":
+        guard let subcall = DSHSubcallDecoder.history(from: data),
+              var tool = tools[subcall.rootCallId] else { continue }
+        tool.startChild(subcall)
+        tools[subcall.rootCallId] = tool
+      case "tool/ptc-dispatch", "tool/code-dispatch":
+        guard let subcall = DSHSubcallDecoder.history(from: data),
+              var tool = tools[subcall.rootCallId] else { continue }
+        let failed = data["isError"]?.bool == true
+        let output = DSHSubcallDecoder.output(from: data["content"])
+        tool.finishChild(
+          subcall,
+          output: output,
+          failed: failed,
+          imageAttachments: DSHAttachmentRef.fromHistoryContent(
+            data["content"]?.array ?? []))
+        tools[subcall.rootCallId] = tool
       case "tool/result":
         guard let result = DSHToolResultDecoder.history(from: data),
               var tool = tools[result.callId] else { continue }
@@ -402,6 +611,7 @@ extension HarnessController {
           ?? result.output.nonEmpty
           ?? result.errorSummary
           ?? "工具已完成"
+        tool.imageAttachments = result.imageAttachments
         if let errorSummary = result.errorSummary, !errorSummary.isEmpty {
           tool.summary = errorSummary
         }
@@ -409,8 +619,68 @@ extension HarnessController {
         toolSequences[result.callId] = event.seq
       case "todo/write":
         if let todos = data["todos"]?.array { result.append(Message(role: .system, text: "任务清单更新：\(todos.count) 项")) }
+      case "command/run":
+        let sourceKind = data["source"]?.object?["kind"]?.string
+        if sourceKind == nil || sourceKind == "user",
+           let name = data["name"]?.string,
+           !name.isEmpty {
+          let args = data["args"]?.string ?? ""
+          result.append(Message(
+            role: .user,
+            text: "/\(name)\(args)",
+            timestamp: Date(timeIntervalSince1970: event.time / 1000)))
+        }
+      case "command/done":
+        if let text = data["text"]?.string, !text.isEmpty {
+          let failed = data["kind"]?.string != "success"
+          result.append(Message(
+            role: .system,
+            text: failed ? "命令失败：\(text)" : text,
+            timestamp: Date(timeIntervalSince1970: event.time / 1000)))
+        }
+      case "compaction/summary":
+        let summary = data["summary"]?.string
+        result.append(Message(
+          role: .system,
+          text: summary.map { "历史上下文已压缩。摘要：\($0)" } ?? "历史上下文已压缩。",
+          timestamp: Date(timeIntervalSince1970: event.time / 1000)))
+      case "turn/start":
+        activeTurnStartedAt = event.time
       case "turn/end":
-        break
+        for id in tools.keys where tools[id]?.state == .running {
+          tools[id]?.state = .succeeded
+        }
+        let reason = data["reason"]?.object
+        switch reason?["kind"]?.string {
+        case "error":
+          let detail = reason?["error"]?.object?["message"]?.string
+          let text = detail.flatMap { $0.isEmpty ? nil : "本轮执行失败：\($0)" }
+            ?? "本轮执行失败"
+          result.append(Message(
+            role: .system,
+            text: text,
+            timestamp: Date(timeIntervalSince1970: event.time / 1000)))
+        case "aborted", "interrupted":
+          result.append(Message(
+            role: .system,
+            text: "本轮已中断",
+            timestamp: Date(timeIntervalSince1970: event.time / 1000)))
+        case "max-tokens":
+          result.append(Message(
+            role: .system,
+            text: "本轮达到最大输出 token 限制",
+            timestamp: Date(timeIntervalSince1970: event.time / 1000)))
+        default:
+          break
+        }
+        if let start = activeTurnStartedAt {
+          let duration = max(0, event.time - start)
+          result.append(Message(
+            role: .system,
+            text: "本轮用时 \(DSHTurnTiming.label(duration))",
+            timestamp: Date(timeIntervalSince1970: event.time / 1000)))
+        }
+        activeTurnStartedAt = nil
       default:
         continue
       }
@@ -418,7 +688,8 @@ extension HarnessController {
     return DSHFoldedHistory(
       messages: result,
       tools: Array(tools.values),
-      toolSequences: toolSequences)
+      toolSequences: toolSequences,
+      activeTurnStartedAt: DSHTurnTiming.date(from: activeTurnStartedAt))
   }
 
   private func reasoningFromMessage(_ value: DSHJSONValue?) -> String? {
@@ -472,7 +743,7 @@ extension HarnessController {
     return String(text[..<range.lowerBound])
   }
 
-  private func anyValue(_ value: DSHJSONValue) -> Any {
+  func anyValue(_ value: DSHJSONValue) -> Any {
     switch value {
     case .string(let x): return x
     case .number(let x): return x

@@ -13,7 +13,10 @@ export class KeyedSingleFlight {
 }
 
 export function deliverDurableAgentMessage(agent, message) {
-  if (agent.session.events.some((event) => event.type === "user/message" && event.data?.id === message.id)) {
+  const events = typeof agent.session.snapshotEvents === "function"
+    ? agent.session.snapshotEvents()
+    : agent.session.events ?? [];
+  if (events.some((event) => event.type === "user/message" && event.data?.id === message.id)) {
     return "logged";
   }
   const pending = agent.inbox.nextTurn.some((item) => item.id === message.id)

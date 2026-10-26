@@ -185,6 +185,7 @@ enum VoiceRoute: Equatable {
 enum VoiceCommitAction: Equatable {
   case fillComposer
   case submitCurrent
+  case steerCurrent
   case queueCurrent
   case dispatchBackground
 }
@@ -194,6 +195,7 @@ extension VoiceRoute {
     viaWake: Bool,
     autoSend: Bool,
     canSubmit: Bool,
+    canSteer: Bool,
     canQueue: Bool
   ) -> VoiceCommitAction {
     guard viaWake, autoSend else { return .fillComposer }
@@ -202,6 +204,7 @@ extension VoiceRoute {
       return .dispatchBackground
     case .dialog:
       if canSubmit { return .submitCurrent }
+      if canSteer { return .steerCurrent }
       if canQueue { return .queueCurrent }
       return .fillComposer
     }
@@ -625,6 +628,64 @@ final class LocalServerSynthesizer: NSObject, VoiceSpeechSynthesizer {
 
 // MARK: - Controller
 
+struct VoicePermissionGrant {
+  let speech: Bool
+  let microphone: Bool
+  var isGranted: Bool { speech && microphone }
+}
+
+/// TCC requests can originate from a manual dictation controller, the resident
+/// wake listener, and multiple restored windows. Coalesce them so the OS sees
+/// at most one request operation while authorization is still undetermined.
+actor VoicePermissionCoordinator {
+  static let shared = VoicePermissionCoordinator()
+
+  private var inFlight: Task<VoicePermissionGrant, Never>?
+
+  func request() async -> VoicePermissionGrant {
+    if let inFlight {
+      return await inFlight.value
+    }
+    let task = Task { await Self.resolve() }
+    inFlight = task
+    let grant = await task.value
+    inFlight = nil
+    return grant
+  }
+
+  private static func resolve() async -> VoicePermissionGrant {
+    let speech = await requestSpeech()
+    let microphone = await requestMicrophone()
+    return VoicePermissionGrant(speech: speech, microphone: microphone)
+  }
+
+  private static func requestSpeech() async -> Bool {
+    switch SFSpeechRecognizer.authorizationStatus() {
+    case .authorized:
+      return true
+    case .notDetermined:
+      return await withCheckedContinuation { continuation in
+        SFSpeechRecognizer.requestAuthorization { status in
+          continuation.resume(returning: status == .authorized)
+        }
+      }
+    default:
+      return false
+    }
+  }
+
+  private static func requestMicrophone() async -> Bool {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized:
+      return true
+    case .notDetermined:
+      return await AVCaptureDevice.requestAccess(for: .audio)
+    default:
+      return false
+    }
+  }
+}
+
 /// Push-to-talk voice controller: microphone streaming transcription with a
 /// silence endpoint, plus spoken playback of assistant replies. Main-actor
 /// confined; both engines deliver their callbacks on the main queue.
@@ -739,10 +800,9 @@ final class VoiceController: NSObject, ObservableObject {
     if sessionRoute == .dialog { VoiceFocusRequest.shared.request() }
     state = .requestingPermission
     Task { [weak self] in
-      let speechGranted = await Self.requestSpeechAuthorization()
-      let micGranted = await Self.requestMicrophoneAccess()
+      let permissions = await VoicePermissionCoordinator.shared.request()
       guard let self else { return }
-      guard speechGranted, micGranted else {
+      guard permissions.isGranted else {
         self.state = .denied("请在系统设置授权麦克风与语音识别")
         return
       }
@@ -877,22 +937,6 @@ final class VoiceController: NSObject, ObservableObject {
     silenceTimer = nil
   }
 
-  // Shared with WakeWordListener (same two permissions gate both features).
-  static func requestSpeechAuthorization() async -> Bool {
-    await withCheckedContinuation { continuation in
-      SFSpeechRecognizer.requestAuthorization { status in
-        continuation.resume(returning: status == .authorized)
-      }
-    }
-  }
-
-  static func requestMicrophoneAccess() async -> Bool {
-    switch AVCaptureDevice.authorizationStatus(for: .audio) {
-    case .authorized: return true
-    case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
-    default: return false
-    }
-  }
 }
 
 // MARK: - V2 wake word
@@ -906,6 +950,8 @@ final class VoiceController: NSObject, ObservableObject {
 /// session ends. Disabled by default (VoiceSettings.wakeEnabled).
 @MainActor
 final class WakeWordListener: NSObject, ObservableObject {
+  static let shared = WakeWordListener()
+
   /// True while the microphone tap is actually running — the UI shows this so
   /// the resident-mic state is always honest.
   @Published private(set) var isActive = false
@@ -931,16 +977,19 @@ final class WakeWordListener: NSObject, ObservableObject {
   /// Instant-failure streak feeding the circuit breaker in the task handler.
   private var consecutiveFailures = 0
 
+  private override init() {
+    super.init()
+  }
+
   func start() {
     guard !enabled else { return }
     enabled = true
     suspended = false
     Task { [weak self] in
-      let speechGranted = await VoiceController.requestSpeechAuthorization()
-      let micGranted = await VoiceController.requestMicrophoneAccess()
+      let permissions = await VoicePermissionCoordinator.shared.request()
       guard let self, self.enabled else { return }
-      voiceDiag("[wake] start speech=\(speechGranted) mic=\(micGranted)")
-      guard speechGranted, micGranted else {
+      voiceDiag("[wake] start speech=\(permissions.speech) mic=\(permissions.microphone)")
+      guard permissions.isGranted else {
         self.enabled = false
         self.statusNote = "唤醒词监听需要麦克风与语音识别权限"
         return

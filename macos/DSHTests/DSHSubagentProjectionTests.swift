@@ -253,7 +253,11 @@ private func testStaleSubagentHistoryActivationDoesNotReplaceNewerSelection() th
       mode: "continuable")
     let firstGeneration = harness.beginSubagentPresentationLoad(address: first)
     let secondGeneration = harness.beginSubagentPresentationLoad(address: second)
-    let folded = DSHFoldedHistory(messages: [], tools: [], toolSequences: [:])
+    let folded = DSHFoldedHistory(
+      messages: [],
+      tools: [],
+      toolSequences: [:],
+      activeTurnStartedAt: nil)
 
     try expect(!harness.activateLoadedSubagentPresentation(
       address: first,
@@ -445,7 +449,8 @@ private func testLoadingSubagent_replaysOnlyEventsNewerThanHistoryBaseline() thr
     let folded = DSHFoldedHistory(
       messages: [HarnessController.Message(role: .system, text: "history")],
       tools: [tool(callId: "history-tool", name: "bash", state: .succeeded)],
-      toolSequences: ["history-tool": 11])
+      toolSequences: ["history-tool": 11],
+      activeTurnStartedAt: nil)
     try expect(harness.activateLoadedSubagentPresentation(
       address: address,
       label: "Child",

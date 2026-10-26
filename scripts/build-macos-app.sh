@@ -7,6 +7,7 @@ STAGE="$ROOT/dist/.DeepSeek-Harness-stage-$RANDOM-$RANDOM.app"
 MINIMUM_MACOS_VERSION="14.0"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos${MINIMUM_MACOS_VERSION}}"
 BUILD_ARCH="${SWIFT_TARGET%%-*}"
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 
 # Node comes from the build machine. DSH is prepared below from the repository's
 # single pinned latest version; DSH_SOURCE is accepted only when it is that
@@ -195,7 +196,8 @@ done
 cd - >/dev/null
 "$STAGE/Contents/MacOS/node" "$STAGE/Contents/Resources/Runtime/dsh/lib/bin.js" --version
 ( cd "$STAGE/Contents/Resources" && shasum -a 256 -c Runtime.manifest.sha256 >/dev/null )
-codesign --force --deep --sign - "$STAGE"
+"$ROOT/scripts/sign-runtime-native-code.sh" "$STAGE" "$CODESIGN_IDENTITY"
+codesign --force --deep --sign "$CODESIGN_IDENTITY" "$STAGE"
 if [[ -e "$APP" ]]; then mv "$APP" "$APP.previous" 2>/dev/null || true; fi
 mv "$STAGE" "$APP"
 rm -rf "$APP.previous" 2>/dev/null || true

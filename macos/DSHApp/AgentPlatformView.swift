@@ -107,7 +107,7 @@ struct AgentPlatformProfilesView: View {
         Button(action: harness.refreshAgentPlatform) { Image(systemName: "arrow.clockwise") }
           .buttonStyle(.dshGhost).help("刷新")
         Button(action: { harness.editAgentProfile() }) { Image(systemName: "plus") }
-          .buttonStyle(.dshPrimary).help("新建 Agent Profile")
+          .buttonStyle(.dshIconPrimary).help("新建 Agent Profile")
       }
 
       runtimeSummary
@@ -608,7 +608,8 @@ struct AgentProfileEditorSheet: View {
     VStack(alignment: .leading, spacing: DSHSpace.s4) {
       HStack {
         Text(draft.id == nil ? "新建 Agent Profile" : "编辑 Agent Profile")
-          .font(.system(size: 18, weight: .semibold)).foregroundStyle(DSHTheme.ink)
+          .font(DSHType.display)
+          .foregroundStyle(DSHTheme.ink)
         Spacer()
         Button(action: { dismiss(); harness.showAgentProfileEditor = false }) { Image(systemName: "xmark") }
           .buttonStyle(.dshGhost)
@@ -835,9 +836,12 @@ struct AgentManualRunSheet: View {
     VStack(alignment: .leading, spacing: DSHSpace.s4) {
       HStack {
         VStack(alignment: .leading, spacing: 2) {
-          Text("运行 \(profile.name)").font(.system(size: 18, weight: .semibold)).foregroundStyle(DSHTheme.ink)
+          Text("运行 \(profile.name)")
+            .font(DSHType.display)
+            .foregroundStyle(DSHTheme.ink)
           Text("@\(profile.mention) · \(profile.enabledAdapterCount) 个成员")
-            .font(.caption).foregroundStyle(DSHTheme.inkFaint)
+            .font(DSHType.caption)
+            .foregroundStyle(DSHTheme.inkFaint)
         }
         Spacer()
         Button(action: { dismiss() }) { Image(systemName: "xmark") }.buttonStyle(.dshGhost)

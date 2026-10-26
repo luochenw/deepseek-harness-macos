@@ -22,8 +22,17 @@ extension HarnessController {
   }
 
   func openHostSessionID(_ id: String) {
-    guard let summary = hostSessions.first(where: { $0.sessionId == id }) else { return }
-    openHostSession(summary)
+    if let summary = hostSessions.first(where: { $0.sessionId == id }) {
+      openHostSession(summary)
+      return
+    }
+    guard let hostClient else { return }
+    Task {
+      guard let rows = try? await hostClient.sessions(),
+            let summary = rows.first(where: { $0.sessionId == id })
+      else { return }
+      await MainActor.run { self.openHostSession(summary) }
+    }
   }
 
 
@@ -84,11 +93,11 @@ extension HarnessController {
     guard let hostClient else { return }
     Task {
       do {
-        try await hostClient.archiveSession(sessionId)
+        let archived = try await hostClient.archiveSession(sessionId)
         await MainActor.run {
           self.status = "会话已删除（可在归档中找回）"
+          self.applyArchivedSessionIDs(archived)
           self.discardWorkbenchContext(hostSessionID: sessionId)
-          if self.hostCurrentSessionID == sessionId { self.clearToDefaultPage() }
           self.refreshHostSnapshots()
         }
       } catch { await MainActor.run { self.appendSystem("删除会话失败：\(error.localizedDescription)") } }
@@ -99,18 +108,36 @@ extension HarnessController {
     guard let hostClient, let sessionId = hostCurrentSessionID else { return }
     Task {
       do {
-        try await hostClient.archiveSession(sessionId)
+        let archived = try await hostClient.archiveSession(sessionId)
         await MainActor.run {
           self.status = "会话已归档"
+          self.applyArchivedSessionIDs(archived)
           self.discardWorkbenchContext(hostSessionID: sessionId)
           self.refreshHostSnapshots()
-          if self.hostCurrentSessionID == sessionId { self.clearToDefaultPage() }
         }
       } catch { await MainActor.run { self.appendSystem("归档会话失败：\(error.localizedDescription)") } }
     }
   }
 
+  func unarchiveSession(_ sessionId: String) {
+    guard let hostClient else { return }
+    Task {
+      do {
+        let archived = try await hostClient.unarchiveSession(sessionId)
+        await MainActor.run {
+          self.applyArchivedSessionIDs(archived)
+          self.status = "会话已恢复"
+          self.refreshHostSnapshots()
+        }
+      } catch { await MainActor.run { self.status = "恢复归档会话失败：\(error.localizedDescription)" } }
+    }
+  }
+
   func openHostSession(_ summary: DSHSessionSummary) {
+    guard confirmMigrationIfNeeded(for: summary) else {
+      status = "已取消升级会话"
+      return
+    }
     pauseWorkbenchMedia()
     invalidateRootHistoryRequests()
     invalidateSubagentPresentationLoad()
@@ -134,6 +161,8 @@ extension HarnessController {
       // wore the old session's state on the new one. The row's own flag
       // wins over the snapshot: mux turn events keep it fresher.
       syncSessionScopedState(from: summary, rowRunning: sessions[existing].isRunning)
+      status = summary.running ? "持久会话正在运行" : "正在同步持久会话"
+      loadHistory(sessionId: summary.sessionId, localSessionID: localSessionID)
       return
     }
     let local = Session(

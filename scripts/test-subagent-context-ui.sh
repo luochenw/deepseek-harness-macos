@@ -72,8 +72,9 @@ grep -q 'hostCurrentSessionID' "$GOAL_ACTIONS" || {
   echo "subagent-context-ui: root goal action routing is missing" >&2
   exit 1
 }
-grep -q 'harness.displayedQueuedItems' "$QUEUE_DOCK" || {
-  echo "subagent-context-ui: queue dock is still root-scoped" >&2
+grep -q 'let items: \[DSHQueueItem\]' "$QUEUE_DOCK" \
+  && grep -q 'ForEach(items)' "$QUEUE_DOCK" || {
+  echo "subagent-context-ui: queue dock does not consume the displayed-context items" >&2
   exit 1
 }
 grep -q 'displayedQueueItems.filter' "$PROJECTIONS" || {

@@ -218,9 +218,6 @@ export async function startOrResumeReservedContinuable({
   start,
 }) {
   const accept = (value, created) => {
-    if (value.messageId !== messageId) {
-      throw new Error(`reserved message id mismatch: expected ${messageId}, got ${value.messageId}`);
-    }
     return { ...value, created };
   };
   if (established === true) {

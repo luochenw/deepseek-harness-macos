@@ -44,7 +44,9 @@ extension HarnessController {
     case "title":
       if let title = value as? String { applyProjectedTitle(title) }
     case "todos":
-      if let items = value as? [[String: Any]] {
+      if value is NSNull {
+        todos = []
+      } else if let items = value as? [[String: Any]] {
         todos = items.compactMap { item in
           guard let content = item["content"] as? String, let status = item["status"] as? String else { return nil }
           return DSHTodoItem(content: content, status: status)
@@ -53,13 +55,49 @@ extension HarnessController {
     case "plan":
       if let object = value as? [String: Any], let active = object["active"] as? Bool { hostPlanActive = active }
     case "goal":
-      if let projection = DSHProjectionDecoder.decode(DSHGoalProjection.self, from: value) { goal = projection }
+      if value is NSNull {
+        goal = nil
+      } else if let projection = DSHProjectionDecoder.decode(DSHGoalProjection.self, from: value) {
+        goal = projection
+      }
     case "tokenUsage":
       if let usage = DSHProjectionDecoder.decode(DSHTokenUsage.self, from: value) { tokenUsage = usage }
     case "contextPressure":
       if let pressure = DSHProjectionDecoder.decode(DSHContextPressure.self, from: value) { contextPressure = pressure }
     case "sessionStats":
       if let stats = DSHProjectionDecoder.decode(DSHSessionStats.self, from: value) { sessionStats = stats }
+    case "inbox":
+      if let inbox = value as? [String: Any] {
+        var items: [DSHQueueItem] = []
+        for (target, placement) in [("next-turn", "queued"), ("next-step", "steering")] {
+          for (index, message) in (inbox[target] as? [[String: Any]] ?? []).enumerated() {
+            let content = message["content"] as? [[String: Any]] ?? []
+            let text = content.compactMap { $0["text"] as? String }.joined()
+            let messageID = message["id"] as? String ?? "\(target)-\(index)"
+            items.append(DSHQueueItem(
+              id: messageID,
+              messageID: messageID,
+              placement: placement,
+              text: text,
+              hasNonTextContent: content.contains { ($0["type"] as? String) != "text" }))
+          }
+        }
+        if let sessionID = hostCurrentSessionID { rememberQueueSnapshot(items, sessionID: sessionID) }
+      }
+    case "subagentCatalog":
+      if let entries = value as? [[String: Any]] {
+        subagents = entries.compactMap { entry in
+          guard let id = entry["id"] as? String else { return nil }
+          return DSHSubagentEntry(
+            kind: "child",
+            id: id,
+            activity: nil,
+            hasChildren: nil,
+            mode: entry["mode"] as? String,
+            label: entry["label"] as? String,
+            reason: nil)
+        }
+      }
     case "agent-platform/batches":
       applyAgentBatchProjection(value)
     default:

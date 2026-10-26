@@ -18,7 +18,6 @@ import {
   shouldInspectContextBeforeClose,
   shouldInspectWorkspaceBeforeCleanup,
 } from "./lifecycle.js";
-import { recoverRootSessions } from "./recovery.js";
 import { LaneScheduler } from "./scheduler.js";
 import { WorkspaceManager } from "./workspace.js";
 import {
@@ -44,7 +43,7 @@ import { RunLogStore } from "./logs.js";
 
 export const name = "agent-platform";
 export const inject = [
-  "agents", "apiProxy", "sandbox", "sandboxPolicy", "sessions",
+  "agents", "sandbox", "sandboxPolicy", "sessions",
   "sessionPersistence", "subagents", "tools", "typert", "sessionProjections",
 ];
 
@@ -103,15 +102,18 @@ function visibleToolNames(ctx, agent) {
     .filter((name) => typeof name === "string" && name !== "run_code"))];
 }
 
+function sessionEvents(session) {
+  return typeof session.snapshotEvents === "function"
+    ? session.snapshotEvents()
+    : session.events ?? [];
+}
+
 async function inheritableToolNames(ctx, initiator, agentPreset) {
   const sourceVisible = visibleToolNames(ctx, initiator);
-  const presets = initiator.ctx.get("agentPresets");
-  const compositionScope = agentPreset === undefined || presets === undefined
-    ? undefined
-    : await presets.standingKeyFor(agentPreset);
-  return inheritedToolAllowlist(
-    sourceVisible,
-    visibleToolNames(ctx, compositionScope));
+  // DSH 0.2 no longer exposes a preset scope key to controllers. Preserve the
+  // source's visible capability boundary and let the provider mount the exact
+  // preset; the runtime sandbox remains the hard safety boundary.
+  return inheritedToolAllowlist(sourceVisible, sourceVisible);
 }
 
 function dshToolFilter(ctx, parent, mode, binding, sourceToolAllowlist) {
@@ -209,7 +211,7 @@ class AgentPlatformCoordinator {
 
   installListeners() {
     this.ctx.on("agent/created", ({ agent }) => {
-      const descriptor = agent.session.events.find((event) => event.type === "subagent/descriptor")?.data;
+      const descriptor = sessionEvents(agent.session).find((event) => event.type === "subagent/descriptor")?.data;
       const pending = descriptor?.label && this.pendingCreationLabels.get(descriptor.label);
       const existing = this.state.contexts().find((context) => context.childSessionId === agent.id && context.closedAt === undefined);
       if ((pending?.mode ?? existing?.mode) === "analysis") {
@@ -259,7 +261,7 @@ class AgentPlatformCoordinator {
       if (event.type !== "turn/end") return;
       const pending = this.pendingDshByChild.get(session.id);
       if (pending === undefined) return;
-      const settlement = dshRunSettlement(session.events, pending.messageId);
+      const settlement = dshRunSettlement(sessionEvents(session), pending.messageId);
       if (settlement === undefined) return;
       this.settleDsh(settlement, pending).catch((error) => {
         pending.reject(error);
@@ -561,12 +563,19 @@ class AgentPlatformCoordinator {
   }
 
   async recoverRoots() {
-    await recoverRootSessions(
-      this.state.recoveryRoots(),
-      (request) => this.ctx.apiProxy.sessions.create(request),
-      (root, error) => {
+    for (const root of this.state.recoveryRoots()) {
+      try {
+        if (this.ctx.sessions.get(root.sessionId) === undefined) {
+          this.ctx.sessions.create(root.sessionId, {
+            meta: {
+              ...root.cwd === undefined ? {} : { cwd: root.cwd },
+            },
+          });
+        }
+      } catch (error) {
         this.ctx.logger.warn(`agent-platform: failed to recover root "${root.sessionId}": ${String(error)}`);
-      });
+      }
+    }
   }
 
   async startBatch(profileId, rootSessionId, initiatorSessionId, task, mode, integrationPolicy, source) {
@@ -948,9 +957,12 @@ class AgentPlatformCoordinator {
     const childAgentOptions = dshAgentOptions(
       context.sourceAgentOptions,
       context.bindingSnapshot);
+    const promptText = dshRunPrompt(batch.task, run.resumeAfterRestart, context.childSessionId);
     const prompt = [{
       type: "text",
-      text: dshRunPrompt(batch.task, run.resumeAfterRestart, context.childSessionId),
+      text: batch.profileSnapshot.persona === undefined
+        ? promptText
+        : `Agent Profile persona:\n${batch.profileSnapshot.persona}\n\nTask:\n${promptText}`,
     }];
     const label = `${PLATFORM_CHILD_LABEL_PREFIX}${context.id}`;
     const childId = context.childSessionId;
@@ -959,7 +971,9 @@ class AgentPlatformCoordinator {
       let settlement;
       try {
         const live = this.ctx.sessions.get(childId);
-        const events = live?.events ?? (await this.ctx.sessionPersistence.inspect(childId)).events;
+        const events = live === undefined
+          ? (await this.ctx.sessionPersistence.inspect(childId)).events
+          : sessionEvents(live);
         settlement = dshRunSettlement(events, reservedMessageId);
       } catch {
         settlement = undefined;
@@ -978,41 +992,32 @@ class AgentPlatformCoordinator {
       childId,
       messageId: reservedMessageId,
       established: context.childEstablished,
-      followup: (reservedId, reservedMessageId) => this.ctx.subagents.followup(parent, reservedId, prompt, {
-        messageId: reservedMessageId,
-        agentOptions: childAgentOptions,
-        source: {
-          kind: "plugin",
-          plugin: "agent-platform",
-          form: "relay",
-        },
+      followup: (reservedId) => this.ctx.subagents.sendMessage(parent, reservedId, prompt, {
         signal: new AbortController().signal,
       }),
-      start: async (reservedId, reservedMessageId) => {
+      start: async (reservedId) => {
         this.pendingCreationLabels.set(label, { mode: batch.mode });
         try {
-          return await this.ctx.subagents.startContinuable({
+          return await this.ctx.subagents.startActivation({
             childId: reservedId,
-            messageId: reservedMessageId,
-            ...context.sandboxMode === undefined ? {} : { sandboxMode: context.sandboxMode },
-            ...context.sourceAgentPreset === undefined ? {} : { agentPreset: context.sourceAgentPreset },
             provider: "spawn",
             label,
-            ...dshChildCwd(
-              context.sourceCwd ?? batch.sourceCwd ?? parent.session.header.cwd,
-              context.workspacePath) === undefined
-              ? {}
-              : {
-                  cwd: dshChildCwd(
-                    context.sourceCwd ?? batch.sourceCwd ?? parent.session.header.cwd,
-                    context.workspacePath),
-                },
+            delivery: "caller",
             request: {
               prompt,
               parent,
+              signal: new AbortController().signal,
+              ...context.sourceAgentPreset === undefined ? {} : { agentPreset: context.sourceAgentPreset },
+              ...dshChildCwd(
+                context.sourceCwd ?? batch.sourceCwd ?? parent.session.header.cwd,
+                context.workspacePath) === undefined
+                ? {}
+                : {
+                    cwd: dshChildCwd(
+                      context.sourceCwd ?? batch.sourceCwd ?? parent.session.header.cwd,
+                      context.workspacePath),
+                  },
               ...childAgentOptions === undefined ? {} : { agentOptions: childAgentOptions },
-              ...batch.profileSnapshot.persona === undefined ? {} : { persona: batch.profileSnapshot.persona },
-              ...toolFilter === undefined ? {} : { toolFilter },
             },
             signal: new AbortController().signal,
           });
@@ -1024,6 +1029,9 @@ class AgentPlatformCoordinator {
     const messageId = delivery.messageId;
     context.childEstablished = true;
     await this.state.upsertContext(context);
+    if (run.dshMessageId !== messageId) {
+      await this.state.updateRun(runId, { dshMessageId: messageId });
+    }
     if (this.stopRequested.has(runId)) {
       this.ctx.subagents.interrupt(childId, {
         kind: "user",
@@ -1059,7 +1067,7 @@ class AgentPlatformCoordinator {
   }
 
   async reconcileDsh(session, pending) {
-    const settlement = dshRunSettlement(session.events, pending.messageId);
+    const settlement = dshRunSettlement(sessionEvents(session), pending.messageId);
     if (settlement === undefined) return false;
     await this.settleDsh(settlement, pending);
     return true;

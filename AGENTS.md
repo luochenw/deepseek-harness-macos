@@ -109,6 +109,7 @@ When adding a feature:
 
 ```bash
 ./scripts/build-macos-app.sh                 # builds dist/DeepSeek Harness.app
+./scripts/refresh-macos-app.sh               # Swift-only in-place refresh of /Applications app
 ./scripts/test-macos-native.sh               # swiftc -typecheck + Info.plist lint (no build needed)
 ./scripts/test-macos-native.sh --smoke       # + starts the built app's Host, checks read/write API and Agent platform
 ./scripts/verify-native-host-api.sh <App>    # what --smoke calls; runnable standalone
@@ -117,6 +118,9 @@ codesign --verify --deep --strict --verbose=2 "dist/DeepSeek Harness.app"
 ```
 
 `NODE_SOURCE` overrides the Node executable embedded by the build.
+`CODESIGN_IDENTITY` selects the build/signing identity; it defaults to `-`
+(ad-hoc) for the full build, while `scripts/refresh-macos-app.sh` auto-selects
+an available Apple Development identity to keep local TCC grants stable.
 `scripts/dsh-runtime-version.txt` is the single supported DSH version;
 `scripts/prepare-dsh-runtime.sh` installs it into an ignored `dist` cache.
 `DSH_SOURCE` is accepted only when it points to that same complete version.

@@ -134,10 +134,9 @@ Batch with no still-eligible member cannot request an empty integration.
 release in `scripts/dsh-runtime-version.txt` and fails the app build when the
 package version or expected source anchors drift. It adds:
 
-- continuable child `cwd` override;
-- fixed child sandbox mode and Agent Preset overrides, restored on cold resume;
-- reserved child/message identities and idempotent message acceptance;
-- exact child disposal through upstream `drainContinuableChildren`;
-- managed-child follow-up protection;
 - the replayable `agent-platform/batches` Session event;
-- default Host plugin mounting.
+- default Host mounting for Agent Platform and the native workbench tools.
+
+DSH 0.2 now owns continuable activation, cwd/preset composition, child
+disposal, and the official DeepSeek model catalog, so the migration removes
+those obsolete source patches instead of carrying them forward.

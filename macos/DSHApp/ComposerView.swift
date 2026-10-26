@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 private struct VoiceComposerTarget: Equatable {
   let selectedSessionID: UUID?
@@ -30,6 +31,8 @@ struct Composer: View {
   @State private var paletteDismissed = false
   @State private var mentionSelection = 0
   @State private var mentionDismissed = false
+  @State private var previewDraftImage: HarnessController.DraftImage?
+  @State private var visibleQueuedItems: [DSHQueueItem] = []
   var compactControls = false
 
   /// The palette roster for the current draft — commands, native locals, and
@@ -70,7 +73,7 @@ struct Composer: View {
       // No status readout here — the transcript itself (waiting wave, tool
       // rows, system notes) already narrates what's happening; a second
       // ticker in the corner was noise. Plan/queue chips stay.
-      if harness.displayedPlanActive || !harness.displayedQueuedItems.isEmpty {
+      if harness.displayedPlanActive || !visibleQueuedItems.isEmpty {
         HStack {
           if harness.displayedPlanActive {
             if harness.canMutateDisplayedPlan {
@@ -79,14 +82,14 @@ struct Composer: View {
               DSHBadge(text: "子代理计划模式", tone: .neutral)
             }
           }
-          if !harness.displayedQueuedItems.isEmpty {
-            DSHBadge(text: "已排队 \(harness.displayedQueuedItems.count)", tone: .warm)
+          if !visibleQueuedItems.isEmpty {
+            DSHBadge(text: "已排队 \(visibleQueuedItems.count)", tone: .warm)
           }
           Spacer()
         }
       }
       GoalBar()
-      QueueDockView()
+      QueueDockView(items: visibleQueuedItems)
       if !mentionProfiles.isEmpty {
         AgentProfilePalette(
           profiles: mentionProfiles,
@@ -117,13 +120,24 @@ struct Composer: View {
         // to the max, which is exactly the "还是那么高" bug.
         ZStack(alignment: .topLeading) {
           Text(harness.draft.isEmpty ? " " : (harness.draft.hasSuffix("\n") ? harness.draft + " " : harness.draft))
-            .font(.system(.body, design: .rounded))
+            .font(DSHType.bodyLarge)
             .padding(.horizontal, 5)
             .opacity(0)
             .frame(maxWidth: .infinity, alignment: .leading)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { editorContentHeight = $0 }
-          TextEditor(text: $harness.draft).font(.system(.body, design: .rounded)).scrollContentBackground(.hidden)
+          TextEditor(text: $harness.draft)
+            .font(DSHType.bodyLarge)
+            .lineSpacing(4)
+            .scrollContentBackground(.hidden)
             .focused($editorFocused)
+            .onPasteCommand(of: [.image, .fileURL]) { _ in
+              _ = harness.pasteImageFromPasteboard()
+            }
+            .background {
+              DraftImagePasteMonitor(isEnabled: editorFocused) {
+                harness.pasteImageFromPasteboard()
+              }
+            }
             // No scroller on the composer at all — below the max height the
             // box grows instead of scrolling, so a bar has nothing to say;
             // past the max, wheel/trackpad still scroll. Enforced per bounds
@@ -208,23 +222,28 @@ struct Composer: View {
           // Vertically centered — the box is a single line when empty.
           if harness.draft.isEmpty && !editorFocused {
             Text(harness.displayedPlanActive ? "描述任务以生成计划" : "描述你想要构建的内容")
-              .font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
+              .font(DSHType.bodyLarge)
+              .foregroundStyle(DSHTheme.inkFaint)
               .padding(.leading, 5).allowsHitTesting(false)
           }
         }
-        if let image = harness.draftImage {
-          HStack(spacing: 6) {
-            Label(image.url.lastPathComponent, systemImage: "photo").font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(1)
-            Button(action: { harness.draftImage = nil }) { Image(systemName: "xmark.circle.fill") }.buttonStyle(.dshGhost)
-            Spacer()
-          }
+        if !harness.draftImages.isEmpty {
+          DraftImageStrip(
+            images: harness.draftImages,
+            previewImage: $previewDraftImage,
+            onRemove: harness.removeDraftImage)
         }
         composerControls
       }
       .padding(DSHSpace.s3)
       .frame(maxWidth: .infinity, alignment: .leading)
       .dshCard(tint: DSHTheme.surface, radius: DSHRadius.lg)
-    }.padding(DSHSpace.s5)
+    }
+    .frame(maxWidth: DSHConversationLayout.contentMaxWidth, alignment: .leading)
+    .frame(maxWidth: .infinity, alignment: .center)
+    .padding(.horizontal, DSHConversationLayout.horizontalInset)
+    .padding(.vertical, DSHSpace.s5)
+    .sheet(item: $previewDraftImage) { DraftImageLightbox(image: $0) }
     // Any edit re-arms the palette: selection returns to the top hit and an
     // Esc dismissal lasts only until the user types again. Opening the menu
     // (the draft becoming a lone "/") also refreshes both catalogs so newly
@@ -236,6 +255,17 @@ struct Composer: View {
       mentionDismissed = false
       if newValue == "/" { harness.refreshSlashCatalog() }
       if newValue.hasSuffix("@") { harness.refreshAgentProfiles() }
+    }
+    .task(id: harness.displayedQueuedItems) {
+      let candidates = harness.displayedQueuedItems
+      guard !candidates.isEmpty else {
+        visibleQueuedItems = []
+        return
+      }
+      try? await Task.sleep(
+        nanoseconds: UInt64(DSHQueueChrome.settleDelayMilliseconds) * 1_000_000)
+      guard !Task.isCancelled else { return }
+      visibleQueuedItems = candidates
     }
     }
   }
@@ -318,7 +348,12 @@ struct Composer: View {
           viaWake: viaWake,
           autoSend: VoiceSettings.wakeAutoSend,
           canSubmit: harness.composerCanSubmit,
-          canQueue: harness.displayedIsRunning && harness.composerAgentProfileID == nil
+          canSteer: harness.displayedIsRunning
+            && harness.composerAgentProfileID == nil
+            && harness.activeSubagentAddress == nil,
+          canQueue: harness.displayedIsRunning
+            && harness.composerAgentProfileID == nil
+            && (harness.activeSubagentAddress != nil || !harness.displayedQueuedItems.isEmpty)
         )
         if targetChanged {
           harness.status = "听写期间会话已切换，语音结果已保留在输入框"
@@ -334,6 +369,9 @@ struct Composer: View {
         case .submitCurrent:
           harness.draft = base + (base.isEmpty ? "" : " ") + text
           harness.submitComposer()
+        case .steerCurrent:
+          harness.draft = base + (base.isEmpty ? "" : " ") + text
+          harness.steerDraft()
         case .queueCurrent:
           harness.draft = base + (base.isEmpty ? "" : " ") + text
           harness.queueDraft()
@@ -354,26 +392,28 @@ struct Composer: View {
   @ViewBuilder private var composerSubmissionControls: some View {
     if harness.displayedIsRunning {
       Button(action: harness.stop) { Image(systemName: "stop.fill").font(.system(size: 13)) }
-        .buttonStyle(.dshSecondary).help("停止")
+        .buttonStyle(.dshIconSecondary).help("停止（Esc）")
       if harness.composerAgentProfileID == nil {
         if harness.activeSubagentAddress == nil {
-          Button(action: harness.steerDraft) { Image(systemName: "arrow.turn.down.right").font(.system(size: 13, weight: .semibold)) }
-            .buttonStyle(.dshPrimary)
+          Button(action: harness.steerDraft) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
+            .buttonStyle(.dshIconPrimary)
             .disabled(!harness.canSubmitRunningDraft)
-            .help("插话发送：追加到当前轮")
+            .help("直接发送到当前轮")
         }
-        Button(action: harness.queueDraft) { Image(systemName: "tray.and.arrow.down") }
-          .buttonStyle(.dshSecondary)
-          .disabled(!harness.canSubmitRunningDraft)
-          .help("排队发送：本轮结束后自动发送")
+        if harness.activeSubagentAddress != nil || !visibleQueuedItems.isEmpty {
+          Button(action: harness.queueDraft) { Image(systemName: "tray.and.arrow.down") }
+            .buttonStyle(.dshIconSecondary)
+            .disabled(!harness.canSubmitRunningDraft)
+            .help("排队发送：本轮结束后自动发送")
+        }
       }
     } else if harness.selectedComposerAgentProfile != nil {
       Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
-        .buttonStyle(.dshPrimary).disabled(!harness.composerCanSubmit)
+        .buttonStyle(.dshIconPrimary).disabled(!harness.composerCanSubmit)
         .help("派发 Agent Batch")
     } else {
       Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
-        .buttonStyle(.dshPrimary).disabled(!harness.composerCanSubmit)
+        .buttonStyle(.dshIconPrimary).disabled(!harness.composerCanSubmit)
         .help(AppPrefs.enterToSend ? "发送（回车）" : "发送（⌘回车）")
     }
   }
@@ -403,49 +443,21 @@ private struct ComposerModelMenu: View {
   @EnvironmentObject var harness: HarnessController
   var compact = false
   var body: some View {
-    Menu {
-      if harness.availableModels.isEmpty {
-        Text("尚未读到 Host 模型目录")
-        Button("刷新模型目录", action: harness.refreshModelConfiguration)
-      } else {
-        ForEach(harness.availableModels) { group in
-          Menu(group.nativeDisplayName) {
-            ForEach(group.models) { model in
-              Button(action: { harness.selectCurrentModel(provider: group.id, model: model.id) }) {
-                if harness.provider == group.id && harness.model == model.id { Label(model.name, systemImage: "checkmark") }
-                else { Text(model.name) }
-              }
-            }
-          }
-        }
-        // Effort rows come from the selected model's adapter-advertised
-        // levels, mirroring the upstream web composer: a fixed off/high/max
-        // list offered levels the adapter would reject outright
-        // (hand-declared relay models advertise none at all). No metadata →
-        // no effort submenu, matching "an adapter without reasoning metadata
-        // leaves the Effort row absent" in the model-selection contract.
-        if let reasoning = harness.currentModelEntry?.reasoning {
-          Divider()
-          Menu("推理强度") {
-            ForEach(reasoning.efforts) { effort in
-              Button(action: { harness.selectCurrentModel(provider: harness.provider, model: harness.model, reasoning: effort.id) }) {
-                if harness.reasoningEffort == effort.id { Label(effort.name, systemImage: "checkmark") }
-                else { Text(effort.name) }
-              }
-            }
-          }
-        }
-      }
+    Button {
+      harness.showModelPicker.toggle()
     } label: {
       Text(harness.currentModelLabel)
-        .font(.system(size: 10.5, design: .monospaced))
+        .font(DSHType.mono)
         .foregroundStyle(DSHTheme.inkFaint)
         .lineLimit(1)
         .truncationMode(.middle)
     }
-    .menuStyle(.borderlessButton)
+    .buttonStyle(.plain)
     .fixedSize(horizontal: !compact, vertical: true)
-    // `/model` 的落点：同一目录的 popover 形态（Menu 无法编程打开）。
+    .help("选择模型与推理强度")
+    // Direct clicks and `/model` share one stable panel. Native nested Menus
+    // could close while Host updates rebuilt the composer around an open
+    // reasoning hover.
     .popover(isPresented: $harness.showModelPicker, arrowEdge: .top) { ModelPickerPanel().environmentObject(harness) }
   }
 }
@@ -456,21 +468,21 @@ private struct ComposerModelMenu: View {
 private struct StatusStrip: View {
   @EnvironmentObject var harness: HarnessController
   var body: some View {
-    if harness.contextPressure != nil || harness.tokenUsage != nil || (harness.sessionStats?.turns ?? 0) > 0 {
+    if AppPrefs.showComposerUsage && harness.hasCurrentSessionUsage {
       HStack(spacing: DSHSpace.s3) {
-        if let pressure = harness.contextPressure, let occupied = pressure.projectedTokens ?? pressure.pressureTokens {
-          Text("上下文 \(Self.compact(occupied))\(pressure.contextWindow.map { "/\(Self.compact($0))" } ?? "")")
-            .foregroundStyle(pressure.contextWindow.map { Double(occupied) > Double($0) * 0.8 } == true ? DSHTheme.coral : DSHTheme.inkFaint)
+        if let pressure = harness.contextPressure, let occupied = DSHModelUsagePresentation.contextTokens(pressure) {
+          Text("上下文 \(DSHModelUsagePresentation.compact(occupied))\(pressure.contextWindow.map { "/\(DSHModelUsagePresentation.compact($0))" } ?? "")")
+            .foregroundStyle(DSHModelUsagePresentation.contextFraction(pressure).map { $0 >= 0.8 } == true ? DSHTheme.coral : DSHTheme.inkFaint)
             .help("下一次请求的预计上下文占用 / 模型窗口")
         }
         if let usage = harness.tokenUsage {
-          Text("↑\(Self.compact(usage.totalInputTokens)) ↓\(Self.compact(usage.outputTokens))")
+          Text("↑\(DSHModelUsagePresentation.compact(usage.totalInputTokens)) ↓\(DSHModelUsagePresentation.compact(usage.outputTokens))")
             .foregroundStyle(DSHTheme.inkFaint)
             .help("会话累计 token：输入（含缓存读写）↑ / 输出 ↓")
-          if usage.totalInputTokens > 0 {
-            Text("命中 \(Int((Double(usage.cacheReadTokens) / Double(usage.totalInputTokens) * 100).rounded()))%")
+          if let hitRate = DSHModelUsagePresentation.cacheHitRate(usage) {
+            Text("命中 \(hitRate)%")
               .foregroundStyle(DSHTheme.inkFaint)
-              .help("提示缓存命中率：缓存读 \(Self.compact(usage.cacheReadTokens)) / 总输入 \(Self.compact(usage.totalInputTokens))")
+              .help("提示缓存命中率：缓存读 \(DSHModelUsagePresentation.compact(usage.cacheReadTokens)) / 总输入 \(DSHModelUsagePresentation.compact(usage.totalInputTokens))")
           }
         }
         if let stats = harness.sessionStats, stats.turns > 0 {
@@ -479,11 +491,7 @@ private struct StatusStrip: View {
             .help("整个会话的回合与步骤计数（LLM \(Int(stats.llmMs / 1000))s · 工具 \(Int(stats.toolMs / 1000))s）")
         }
       }
-      .font(.system(size: 10.5, design: .monospaced))
+      .font(DSHType.mono)
     }
-  }
-
-  private static func compact(_ value: Int) -> String {
-    value >= 10_000 ? String(format: "%.0fk", Double(value) / 1000) : value >= 1000 ? String(format: "%.1fk", Double(value) / 1000) : "\(value)"
   }
 }

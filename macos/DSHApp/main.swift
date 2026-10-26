@@ -90,6 +90,8 @@ final class HarnessController: ObservableObject {
     var messages: [Message]
     var isRunning = false
     var hasUnread = false
+    var turnStartedAt: Date?
+    var isLoadingHistory = false
     /// The backing persistent Host session, once known — the durable join
     /// key for event routing and row reuse (title matching is only the
     /// fallback for rows created before the id existed).
@@ -176,13 +178,10 @@ final class HarnessController: ObservableObject {
 
   struct ToolActivity: Identifiable {
     enum State { case running, succeeded, failed }
-    let id = UUID()
-    let callId: String
-    var name: String
-    var summary: String
-    var state: State
-    var output: String
-    var presentation: ToolPresentation?
+    let id = UUID(); let callId: String
+    var name: String; var summary: String; var state: State
+    var output: String; var arguments: String? = nil; var imageAttachments: [DSHAttachmentRef] = []; var presentation: ToolPresentation?
+    var children: [DSHToolChildActivity] = []
   }
 
   struct ToolPresentation {
@@ -266,7 +265,7 @@ final class HarnessController: ObservableObject {
   @Published var subagentTreeLoading = false
   @Published var subagentTreeTruncated = false
   @Published var selectedWorkflowRunID: String?
-  @Published var draftImage: DraftImage?
+  @Published var draftImages: [DraftImage] = []
   /// `/model` 的原生落点：composer 模型选择 popover（SwiftUI Menu 无法编程打开）。
   @Published var showModelPicker = false
   @Published var isRunning = false {
@@ -303,8 +302,6 @@ final class HarnessController: ObservableObject {
   @Published var retryNotice: String?
   @Published var availableModels: [DSHModelGroup] = []
   @Published var currentSessionModels: DSHSessionModels?
-  @Published var historyHasMore = false
-  @Published var historyOldestSeq: Int?
   @Published var configurableProviders: [DSHConfigurableProvider] = []
   @Published var credentialStates: [String: DSHCredentialView] = [:]
   @Published var settingsDescription: DSHSettingsDescription?
@@ -352,7 +349,6 @@ final class HarnessController: ObservableObject {
   var hostRuntime: DSHHostRuntime?
   var hostClient: DSHHostClient?
   var hostEvents: DSHEventSocket?
-  var muxEvents: DSHEventSocket?
 
   init(startRuntime: Bool = true) {
     agentPlatform.attach(to: self)
@@ -370,7 +366,7 @@ final class HarnessController: ObservableObject {
     }
   }
 
-  deinit { muxEvents?.stop(); hostEvents?.stop(); hostRuntime?.stop() }
+  deinit { hostEvents?.stop(); hostRuntime?.stop() }
 
   var workspaceName: String { workspace?.lastPathComponent ?? "无工作区" }
   var selectedSessionIndex: Int? { sessions.firstIndex { $0.id == selectedSessionID } }
@@ -390,7 +386,7 @@ final class HarnessController: ObservableObject {
   /// A one-shot subagent's transcript is a frozen, read-only overlay — see
   /// the subagent-transcript-redesign Agent Note.
   var isViewingReadOnlySubagent: Bool { subagentTranscript != nil && activeSubagentAddress?.mode != "continuable" }
-  var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && hasCredential && !displayedIsRunning && !isViewingReadOnlySubagent }
+  var canSend: Bool { (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty) && hasCredential && !displayedIsRunning && !isViewingReadOnlySubagent }
   /// The currently-selected model's catalog entry, when the live catalog
   /// lists it. Carries the adapter-owned reasoning metadata (nil for a model
   /// with no selectable effort).

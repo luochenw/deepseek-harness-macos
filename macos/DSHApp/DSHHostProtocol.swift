@@ -10,6 +10,14 @@ struct DSHRPCEnvelope<Payload: Encodable>: Encodable {
   let payload: Payload
 }
 
+struct DSHArgsPayload<Args: Encodable>: Encodable {
+  let args: Args
+}
+
+struct DSHRequestArgsPayload<Request: Encodable>: Encodable {
+  let request: Request
+}
+
 struct DSHRPCServerResponse<Value: Decodable>: Decodable {
   struct Result: Decodable {
     let ok: Bool
@@ -39,7 +47,11 @@ struct DSHHostDescription: Decodable {
 
 struct DSHSessionSummary: Decodable, Identifiable {
   let sessionId: String
-  let updatedAt: Double
+  var updatedAt: Double
+  /// Whether a live Agent currently owns this persistent Session.
+  var agentAvailable = false
+  /// `current`, `migration-required`, or nil when this old row cannot report it.
+  var formatStatus: String?
   /// Mutable: the mux stream's turn/start / turn/end frames keep this live
   /// between snapshot refreshes (the sidebar dot reads it).
   var running: Bool
@@ -51,10 +63,19 @@ struct DSHSessionSummary: Decodable, Identifiable {
   let projections: DSHSessionProjections?
   var id: String { sessionId }
   var title: String { projections?.values.title ?? "新会话" }
+  var needsMigration: Bool { formatStatus == "migration-required" }
+  var isCurrentFormat: Bool { formatStatus == nil || formatStatus == "current" }
 }
 
 struct DSHSessionProjections: Decodable {
-  let asOfSeq: Int
+  enum Kind: String, Decodable, Equatable {
+    case cached
+    case sequenced
+    case migrationRequired = "migration-required"
+  }
+
+  let kind: Kind
+  let asOfSeq: Int?
   let values: DSHSessionProjectionValues
   /// Projection values are intentionally wide on the wire. The raw form
   /// distinguishes a missing capability from a present JSON null so child
@@ -66,22 +87,32 @@ struct DSHSessionProjections: Decodable {
     values: DSHSessionProjectionValues,
     rawValues: [String: DSHJSONValue] = [:]
   ) {
+    self.kind = .sequenced
     self.asOfSeq = asOfSeq
     self.values = values
     self.rawValues = rawValues
   }
 
   private enum CodingKeys: String, CodingKey {
+    case kind
     case asOfSeq
     case values
   }
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    asOfSeq = try container.decode(Int.self, forKey: .asOfSeq)
+    kind = try container.decodeIfPresent(Kind.self, forKey: .kind) ?? .sequenced
+    asOfSeq = try container.decodeIfPresent(Int.self, forKey: .asOfSeq)
+    if kind == .sequenced && asOfSeq == nil {
+      throw DecodingError.keyNotFound(
+        CodingKeys.asOfSeq,
+        DecodingError.Context(codingPath: container.codingPath, debugDescription: "sequenced projections require asOfSeq"))
+    }
     values = try container.decode(DSHSessionProjectionValues.self, forKey: .values)
     rawValues = try container.decode([String: DSHJSONValue].self, forKey: .values)
   }
+
+  var canMerge: Bool { kind == .sequenced && asOfSeq != nil }
 }
 
 struct DSHSessionProjectionValues: Decodable {
@@ -89,6 +120,7 @@ struct DSHSessionProjectionValues: Decodable {
   let todos: [DSHTodoItem]?
   let plan: DSHPlanState?
   let goal: DSHGoalProjection?
+  let modelSelection: DSHModelSelectionProjection?
   let tokenUsage: DSHTokenUsage?
   let contextPressure: DSHContextPressure?
   let sessionStats: DSHSessionStats?
@@ -99,6 +131,7 @@ struct DSHSessionProjectionValues: Decodable {
     todos: [DSHTodoItem]?,
     plan: DSHPlanState?,
     goal: DSHGoalProjection?,
+    modelSelection: DSHModelSelectionProjection? = nil,
     tokenUsage: DSHTokenUsage?,
     contextPressure: DSHContextPressure?,
     sessionStats: DSHSessionStats?,
@@ -108,6 +141,7 @@ struct DSHSessionProjectionValues: Decodable {
     self.todos = todos
     self.plan = plan
     self.goal = goal
+    self.modelSelection = modelSelection
     self.tokenUsage = tokenUsage
     self.contextPressure = contextPressure
     self.sessionStats = sessionStats
@@ -142,6 +176,15 @@ struct DSHSessionList: Decodable {
   let items: [DSHSessionSummary]
 }
 
+struct DSHSessionListArgs: Encodable {
+  let _request: DSHSessionListRequest
+}
+
+struct DSHSessionListRequest: Encodable {
+  let cursor: String?
+  init(cursor: String? = nil) { self.cursor = cursor }
+}
+
 struct DSHCreatedSession: Decodable {
   let sessionId: String
   let agentPreset: String?
@@ -172,9 +215,22 @@ enum DSHPromptMode: String, Encodable, CaseIterable, Identifiable {
 }
 
 struct DSHPromptPayload: Encodable {
+  let requestId: String
   let sessionId: String
   let mode: DSHPromptMode
   let content: [DSHPromptContent]
+
+  init(
+    requestId: String = UUID().uuidString,
+    sessionId: String,
+    mode: DSHPromptMode,
+    content: [DSHPromptContent]
+  ) {
+    self.requestId = requestId
+    self.sessionId = sessionId
+    self.mode = mode
+    self.content = content
+  }
 }
 
 struct DSHCancelPayload: Encodable {
@@ -197,10 +253,21 @@ struct DSHWorkspaceList: Decodable {
 actor DSHHostClient {
   let baseURL: URL
   private let session: URLSession
+  private let launch: DSHHostLaunch?
+  private var authCookie: DSHHostAuthCookie?
 
   init(baseURL: URL) {
     self.baseURL = baseURL
-    self.session = URLSession(configuration: .default)
+    self.session = Self.authenticatedSession()
+    self.launch = nil
+    self.authCookie = nil
+  }
+
+  init(connection: DSHHostConnection) {
+    self.baseURL = connection.launch.baseURL
+    self.session = Self.authenticatedSession()
+    self.launch = connection.launch
+    self.authCookie = connection.cookie
   }
 
   func call<Payload: Encodable, Value: Decodable>(
@@ -208,88 +275,243 @@ actor DSHHostClient {
     payload: Payload,
     as valueType: Value.Type,
   ) async throws -> Value {
-    let endpoint = baseURL.appendingPathComponent("api/\(method)")
-    var request = URLRequest(url: endpoint)
-    request.httpMethod = "POST"
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue(baseURL.host.map { host in
-      baseURL.port.map { "\(host):\($0)" } ?? host
-    } ?? "127.0.0.1", forHTTPHeaderField: "Host")
-    request.httpBody = try JSONEncoder().encode(DSHRPCEnvelope(rpcId: UUID().uuidString, method: method, payload: payload))
-    let (data, response) = try await session.data(for: request)
-    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-      throw URLError(.badServerResponse)
-    }
-    let decoded = try JSONDecoder().decode(DSHRPCServerResponse<Value>.self, from: data)
-    guard decoded.result.ok, let value = decoded.result.value else {
-      throw decoded.result.error ?? URLError(.cannotParseResponse)
+    try await call(method, args: payload, as: valueType)
+  }
+
+  /// Calls one 0.2 Remote. The argument value is wrapped in the mandatory
+  /// single `args` field; endpoint-specific wrappers such as `request` and
+  /// `_request` are supplied by their typed wrapper methods.
+  func call<Args: Encodable, Value: Decodable>(
+    _ method: String,
+    args: Args,
+    as valueType: Value.Type,
+  ) async throws -> Value {
+    guard let value = try await callOptional(method, args: args, as: valueType) else {
+      throw URLError(.cannotParseResponse)
     }
     return value
   }
 
+  func callOptional<Args: Encodable, Value: Decodable>(
+    _ method: String,
+    args: Args,
+    as valueType: Value.Type,
+  ) async throws -> Value? {
+    let rpcId = UUID().uuidString
+    let body = try JSONEncoder().encode(
+      DSHRPCEnvelope(
+        rpcId: rpcId,
+        method: method,
+        payload: DSHArgsPayload(args: args)))
+    let data = try await post(method, body: body)
+    let decoded = try JSONDecoder().decode(DSHRPCServerResponse<Value>.self, from: data)
+    guard decoded.type == "server-response", decoded.rpcId == rpcId else {
+      throw URLError(.cannotParseResponse)
+    }
+    guard decoded.result.ok else {
+      throw decoded.result.error ?? URLError(.cannotParseResponse)
+    }
+    return decoded.result.value
+  }
+
+  /// Shared authenticated unary carrier used by the main RPC client and the
+  /// Typert extension surface. A 401 refreshes the launch handshake once and
+  /// replays the exact encoded body with a fresh cookie.
+  func post(_ method: String, body: Data) async throws -> Data {
+    for attempt in 0...1 {
+      try await ensureAuthentication()
+      var request = URLRequest(url: baseURL.appendingPathComponent("api/\(method)"))
+      request.httpMethod = "POST"
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.setValue(loopbackHost, forHTTPHeaderField: "Host")
+      if let authCookie { request.setValue(authCookie.headerValue, forHTTPHeaderField: "Cookie") }
+      request.httpBody = body
+      let (data, response) = try await session.data(for: request)
+      guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+      if http.statusCode == 401, attempt == 0, launch?.token != nil {
+        authCookie = nil
+        continue
+      }
+      guard (200...299).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+      return data
+    }
+    throw URLError(.userAuthenticationRequired)
+  }
+
+  func authenticatedRequest(path: String, method: String = "GET", body: Data? = nil) async throws -> URLRequest {
+    try await ensureAuthentication()
+    var request = URLRequest(url: baseURL.appendingPathComponent(path))
+    request.httpMethod = method
+    request.setValue(loopbackHost, forHTTPHeaderField: "Host")
+    if let authCookie { request.setValue(authCookie.headerValue, forHTTPHeaderField: "Cookie") }
+    request.httpBody = body
+    return request
+  }
+
+  func authenticatedDownload(_ request: URLRequest) async throws -> (URL, URLResponse) {
+    for attempt in 0...1 {
+      var authenticated = request
+      try await ensureAuthentication()
+      if let authCookie { authenticated.setValue(authCookie.headerValue, forHTTPHeaderField: "Cookie") }
+      let result = try await session.download(for: authenticated)
+      if let http = result.1 as? HTTPURLResponse,
+         http.statusCode == 401,
+         attempt == 0,
+         launch?.token != nil {
+        authCookie = nil
+        continue
+      }
+      return result
+    }
+    throw URLError(.userAuthenticationRequired)
+  }
+
+  func webSocketRequest(path: String) async throws -> URLRequest {
+    try await ensureAuthentication()
+    guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
+      throw URLError(.badURL)
+    }
+    components.scheme = components.scheme == "https" ? "wss" : "ws"
+    guard let url = components.url else { throw URLError(.badURL) }
+    var request = URLRequest(url: url)
+    request.setValue(loopbackHost, forHTTPHeaderField: "Host")
+    if let authCookie { request.setValue(authCookie.headerValue, forHTTPHeaderField: "Cookie") }
+    return request
+  }
+
+  private var loopbackHost: String {
+    baseURL.host.map { host in
+      baseURL.port.map { "\(host):\($0)" } ?? host
+    } ?? "127.0.0.1"
+  }
+
+  private static func authenticatedSession() -> URLSession {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.httpShouldSetCookies = false
+    configuration.httpCookieStorage = nil
+    return URLSession(configuration: configuration)
+  }
+
+  private func ensureAuthentication() async throws {
+    guard authCookie == nil, let launch else { return }
+    authCookie = try await DSHHostHandshake.authenticate(launch: launch)
+  }
+
   func openPath(_ path: String) async throws {
-    _ = try await call("host.openPath", payload: DSHOpenPathPayload(path: path), as: DSHOpenPathResult.self)
+    _ = try await call(
+      "session/openWorkspacePath",
+      args: DSHRequestArgsPayload(request: DSHOpenPathPayload(path: path)),
+      as: DSHOpenPathResult.self)
   }
 
   func describe() async throws -> DSHHostDescription {
-    try await call("host.describe", payload: EmptyPayload(), as: DSHHostDescription.self)
+    throw URLError(.unsupportedURL)
   }
 
   func sessions() async throws -> [DSHSessionSummary] {
-    try await call("session.list", payload: EmptyPayload(), as: DSHSessionList.self).items
+    try await call(
+      "session/list",
+      args: DSHSessionListArgs(_request: DSHSessionListRequest()),
+      as: DSHSessionList.self).items
   }
 
   func searchSessions(query: String) async throws -> DSHSessionSearchResults {
-    try await call("session.search", payload: DSHSessionSearchPayload(query: query), as: DSHSessionSearchResults.self)
+    try await call(
+      "session/search",
+      args: DSHRequestArgsPayload(request: DSHSessionSearchPayload(query: query)),
+      as: DSHSessionSearchResults.self)
   }
 
-  func archiveSession(_ sessionId: String) async throws {
-    _ = try await call("workspace.archiveSession", payload: DSHArchiveSessionPayload(sessionId: sessionId), as: DSHArchiveSessionResult.self)
+  @discardableResult
+  func archiveSession(_ sessionId: String) async throws -> [String] {
+    try await call(
+      "workspace/archiveSession",
+      args: DSHRequestArgsPayload(request: DSHArchiveSessionPayload(sessionId: sessionId)),
+      as: DSHArchiveSessionResult.self).archivedSessionIds
+  }
+
+  @discardableResult
+  func unarchiveSession(_ sessionId: String) async throws -> [String] {
+    try await call(
+      "workspace/unarchiveSession",
+      args: DSHRequestArgsPayload(request: DSHArchiveSessionPayload(sessionId: sessionId)),
+      as: DSHArchiveSessionResult.self).archivedSessionIds
   }
 
   func createWorkspace(path: String) async throws -> DSHWorkspaceCreateResult {
-    try await call("workspace.create", payload: DSHWorkspaceCreatePayload(path: path), as: DSHWorkspaceCreateResult.self)
+    try await call(
+      "workspace/create",
+      args: DSHRequestArgsPayload(request: DSHWorkspaceCreatePayload(path: path)),
+      as: DSHWorkspaceCreateResult.self)
   }
 
   func renameWorkspace(id: String, title: String) async throws -> DSHWorkspaceView {
-    try await call("workspace.rename", payload: DSHWorkspaceRenamePayload(workspaceId: id, title: title), as: DSHWorkspaceView.self)
+    try await call(
+      "workspace/rename",
+      args: DSHRequestArgsPayload(request: DSHWorkspaceRenamePayload(workspaceId: id, title: title)),
+      as: DSHWorkspaceValue.self).workspace
   }
 
   func deleteWorkspace(id: String) async throws {
-    _ = try await call("workspace.delete", payload: DSHWorkspaceDeletePayload(workspaceId: id), as: DSHWorkspaceDeleteResult.self)
-  }
-
-  func workspaces() async throws -> [DSHWorkspaceView] {
-    try await call("workspace.list", payload: EmptyPayload(), as: DSHWorkspaceList.self).items
+    _ = try await call(
+      "workspace/delete",
+      args: DSHRequestArgsPayload(request: DSHWorkspaceDeletePayload(workspaceId: id)),
+      as: DSHWorkspaceDeleteResult.self)
   }
 
   func sessionModels(sessionId: String) async throws -> DSHSessionModels {
-    try await call("session.models", payload: DSHSessionIDModelPayload(sessionId: sessionId), as: DSHSessionModels.self)
+    async let summaries = sessions()
+    async let catalog = modelCatalog()
+    let (rows, nextCatalog) = try await (summaries, catalog)
+    let current = rows.first(where: { $0.sessionId == sessionId })?
+      .projections?.values.modelSelection
+    return DSHSessionModels(
+      current: current?.next ?? current?.lastUsed ?? nextCatalog.default,
+      routable: !nextCatalog.groups.isEmpty,
+      groups: nextCatalog.groups)
   }
 
   @discardableResult
   func selectModel(sessionId: String, provider: String, model: String, reasoningEffort: String? = nil) async throws -> DSHSelectedModel {
-    try await call("session.selectModel", payload: DSHSelectModelPayload(sessionId: sessionId, provider: provider, model: model, reasoningEffort: reasoningEffort), as: DSHSelectModelResult.self).selected
+    try await call(
+      "session/selectModel",
+      args: DSHRequestArgsPayload(request: DSHSelectModelPayload(sessionId: sessionId, provider: provider, model: model, reasoningEffort: reasoningEffort)),
+      as: DSHSelectModelResult.self).selected
   }
 
   func renameSession(_ sessionId: String, title: String) async throws -> String {
-    try await call("session.rename", payload: DSHRenameSessionPayload(sessionId: sessionId, title: title), as: DSHRenameSessionResult.self).title
+    try await call(
+      "session/rename",
+      args: DSHRequestArgsPayload(request: DSHRenameSessionPayload(sessionId: sessionId, title: title)),
+      as: DSHRenameSessionResult.self).title
   }
 
   func forkSession(_ sessionId: String) async throws -> String {
-    try await call("session.fork", payload: DSHForkSessionPayload(sessionId: sessionId), as: DSHForkSessionResult.self).sessionId
+    try await call(
+      "session/fork",
+      args: DSHRequestArgsPayload(request: DSHForkSessionPayload(sessionId: sessionId)),
+      as: DSHForkSessionResult.self).sessionId
   }
 
   func createSession(cwd: String?, agentPreset: String?) async throws -> DSHCreatedSession {
-    try await call("session.create", payload: DSHCreateSessionPayload(cwd: cwd, agentPreset: agentPreset), as: DSHCreatedSession.self)
+    try await call(
+      "session/create",
+      args: DSHRequestArgsPayload(request: DSHCreateSessionPayload(cwd: cwd, agentPreset: agentPreset)),
+      as: DSHCreatedSession.self)
   }
 
   func prompt(sessionId: String, content: [DSHPromptContent], mode: DSHPromptMode = .queue) async throws {
-    _ = try await call("session.prompt", payload: DSHPromptPayload(sessionId: sessionId, mode: mode, content: content), as: DSHPromptAccepted.self)
+    _ = try await call(
+      "session/prompt",
+      args: DSHRequestArgsPayload(request: DSHPromptPayload(sessionId: sessionId, mode: mode, content: content)),
+      as: DSHPromptAccepted.self)
   }
 
   func attachment(sessionId: String, attachmentId: String) async throws -> DSHAttachmentResult {
-    try await call("session.attachment", payload: DSHAttachmentPayload(sessionId: sessionId, attachmentId: attachmentId), as: DSHAttachmentResult.self)
+    try await call(
+      "session/attachment",
+      args: DSHRequestArgsPayload(request: DSHAttachmentPayload(sessionId: sessionId, attachmentId: attachmentId)),
+      as: DSHAttachmentResult.self)
   }
 
   func prompt(sessionId: String, text: String, mode: DSHPromptMode = .queue) async throws {
@@ -297,47 +519,86 @@ actor DSHHostClient {
   }
 
   func cancel(sessionId: String) async throws {
-    _ = try await call("session.cancel", payload: DSHCancelPayload(sessionId: sessionId), as: DSHPromptAccepted.self)
+    _ = try await call(
+      "session/cancel",
+      args: DSHRequestArgsPayload(request: DSHCancelPayload(sessionId: sessionId)),
+      as: DSHPromptAccepted.self)
   }
 
   func openSettingsDocument() async throws {
-    _ = try await call("settings.openDocument", payload: EmptyPayload(), as: DSHSettingsOpenResult.self)
+    _ = try await call("settings/openSettingsDocument", args: EmptyPayload(), as: DSHSettingsOpenResult.self)
   }
 
   func mutateSettings(ns: String, ops: [DSHSettingsPathOperation], revision: Int) async throws -> DSHSettingsNamespace {
-    try await call("settings.mutate", payload: DSHSettingsMutatePayload(ns: ns, ops: ops, expectedRevision: revision), as: DSHSettingsNamespace.self)
+    try await call(
+      "settings/mutate",
+      args: DSHSettingsMutatePayload(ns: ns, ops: ops, expectedRevision: revision),
+      as: DSHSettingsNamespace.self)
   }
 
   func updateSettings(ns: String, patch: [String: Any], expectedRevision: Int? = nil) async throws -> DSHSettingsNamespace {
-    try await call("settings.update", payload: DSHSettingsUpdatePayload(ns: ns, patch: DSHJSONPatch(values: patch), expectedRevision: expectedRevision), as: DSHSettingsNamespace.self)
+    try await call(
+      "settings/update",
+      args: DSHSettingsUpdatePayload(ns: ns, patch: DSHJSONPatch(values: patch), expectedRevision: expectedRevision),
+      as: DSHSettingsNamespace.self)
   }
 
   func setCredential(ref: String, value: String) async throws {
-    _ = try await call("credentials.set", payload: DSHCredentialSetPayload(ref: ref, value: value), as: DSHEMPTY.self)
+    _ = try await callOptional(
+      "credentials/set",
+      args: DSHCredentialSetPayload(ref: ref, value: value),
+      as: DSHJSONValue.self)
   }
 
   func unsetCredential(ref: String) async throws {
-    _ = try await call("credentials.unset", payload: DSHCredentialRefPayload(ref: ref), as: DSHEMPTY.self)
+    _ = try await callOptional(
+      "credentials/unset",
+      args: DSHCredentialRefPayload(ref: ref),
+      as: DSHJSONValue.self)
   }
 
   func settings() async throws -> DSHSettingsDescription {
-    try await call("settings.describe", payload: EmptyPayload(), as: DSHSettingsDescription.self)
+    try await call("settings/describe", args: EmptyPayload(), as: DSHSettingsDescription.self)
   }
 
   func providers() async throws -> [DSHConfigurableProvider] {
-    try await call("llm.providers", payload: EmptyPayload(), as: DSHProviderList.self).providers
+    async let configurable = call(
+      "llm/listConfigurableProviders",
+      args: EmptyPayload(),
+      as: [DSHConfigurableProvider].self)
+    async let available = call(
+      "llm/listProviders",
+      args: EmptyPayload(),
+      as: [DSHProviderInfo].self)
+    let (routes, live) = try await (configurable, available)
+    let active = Set(live.map(\.id))
+    return routes.map { route in
+      var route = route
+      route.active = active.contains(route.provider)
+      return route
+    }
+  }
+
+  func modelCatalog() async throws -> DSHModelCatalog {
+    try await call("session/modelCatalog", args: EmptyPayload(), as: DSHModelCatalog.self)
   }
 
   func models() async throws -> [DSHModelGroup] {
-    try await call("llm.models", payload: EmptyPayload(), as: DSHModelCatalog.self).groups
+    try await modelCatalog().groups
   }
 
   func credentials(refs: [String]) async throws -> [String: DSHCredentialView] {
-    try await call("credentials.describe", payload: DSHCredentialRefsPayload(refs: refs), as: DSHCredentialCatalog.self).credentials
+    try await call(
+      "credentials/describe",
+      args: DSHCredentialRefsPayload(refs: refs),
+      as: [String: DSHCredentialView].self)
   }
 
   func skills(sessionId: String) async throws -> [DSHSkillEntry] {
-    try await call("skill.list", payload: DSHSessionIDPayload(sessionId: sessionId), as: DSHSkillList.self).skills
+    try await call(
+      "skills/list",
+      args: DSHRequestArgsPayload(request: DSHSessionIDPayload(sessionId: sessionId)),
+      as: DSHSkillList.self).skills
   }
 }
 
@@ -410,7 +671,7 @@ final class DSHHostRuntime {
     [dshPath, "web", "--host", "127.0.0.1", "--port", "0", "--no-open"]
   }
 
-  func start(onReady: @escaping (Result<URL, Error>) -> Void) {
+  func start(onReady: @escaping (Result<DSHHostConnection, Error>) -> Void) {
     guard process == nil else { return }
     let process = Process()
     process.executableURL = node
@@ -427,7 +688,7 @@ final class DSHHostRuntime {
 
     var resolved = false
     var timeoutItem: DispatchWorkItem?
-    let resolve: (Result<URL, Error>) -> Void = { result in
+    let resolve: (Result<DSHHostConnection, Error>) -> Void = { result in
       guard !resolved else { return }
       resolved = true
       timeoutItem?.cancel()
@@ -445,8 +706,16 @@ final class DSHHostRuntime {
         self.output += chunk
         for line in self.output.split(separator: "\n", omittingEmptySubsequences: true) {
           let value = String(line)
-          guard value.hasPrefix("dsh web: http://127.0.0.1:"), let url = URL(string: String(value.dropFirst("dsh web: ".count))) else { continue }
-          resolve(.success(url))
+          guard value.hasPrefix("dsh web: http://127.0.0.1:"),
+                let launch = DSHHostLaunch.parse(launchLine: value) else { continue }
+          Task {
+            do {
+              let cookie = try await DSHHostHandshake.authenticate(launch: launch)
+              resolve(.success(DSHHostConnection(launch: launch, cookie: cookie)))
+            } catch {
+              resolve(.failure(error))
+            }
+          }
           return
         }
       }

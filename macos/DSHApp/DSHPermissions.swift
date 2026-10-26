@@ -37,11 +37,36 @@ struct DSHPermissionOption: Decodable, Identifiable, Equatable {
 }
 
 struct DSHPermissionSelection: Decodable, Equatable {
-  let options: [DSHPermissionOption]
+  var options: [DSHPermissionOption] = []
   let currentValue: String
+
+  private enum CodingKeys: String, CodingKey { case options, currentValue }
+
+  init(options: [DSHPermissionOption] = [], currentValue: String) {
+    self.options = options
+    self.currentValue = currentValue
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    options = try container.decodeIfPresent([DSHPermissionOption].self, forKey: .options) ?? []
+    currentValue = try container.decode(String.self, forKey: .currentValue)
+  }
 
   var currentOption: DSHPermissionOption? {
     options.first { $0.value == currentValue }
+  }
+}
+
+struct DSHPermissionCatalog: Decodable {
+  let options: [DSHPermissionOption]
+  let defaultOptions: [DSHPermissionOption]
+  let defaultPreset: String
+}
+
+extension DSHHostClient {
+  func permissionCatalog() async throws -> DSHPermissionCatalog {
+    try await call("permissionPresets/catalog", args: EmptyPayload(), as: DSHPermissionCatalog.self)
   }
 }
 
@@ -91,6 +116,7 @@ private final class DSHPermissionClientState {
 
   weak var controller: HarnessController?
   var snapshots: [String: Snapshot] = [:]
+  var catalogOptions: [DSHPermissionOption] = []
 
   init(controller: HarnessController) {
     self.controller = controller
@@ -254,8 +280,30 @@ extension HarnessController {
   }
 
   func rememberPermissionSelection(_ selection: DSHPermissionSelection?, sessionID: String, seq: Int) {
-    guard let selection else { return }
-    permissionClientState.set(selection, for: sessionID, seq: seq)
+    guard var selection else { return }
+    let state = permissionClientState
+    if selection.options.isEmpty { selection.options = state.catalogOptions }
+    state.set(selection, for: sessionID, seq: seq)
+  }
+
+  func refreshPermissionCatalog() {
+    guard let hostClient else { return }
+    Task {
+      guard let catalog = try? await hostClient.permissionCatalog() else { return }
+      await MainActor.run {
+        let options = catalog.options.map {
+          DSHPermissionOption(value: $0.value, name: $0.name, description: $0.description)
+        }
+        let state = self.permissionClientState
+        state.catalogOptions = options
+        for (sessionID, snapshot) in state.snapshots {
+          var selection = snapshot.selection
+          selection.options = options
+          state.snapshots[sessionID] = .init(selection: selection, seq: snapshot.seq)
+        }
+        self.objectWillChange.send()
+      }
+    }
   }
 
   @discardableResult

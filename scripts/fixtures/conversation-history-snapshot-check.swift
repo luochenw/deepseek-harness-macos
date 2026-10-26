@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 @testable import DSHAppLib
 
-enum ConversationWindowSnapshotFailure: Error, CustomStringConvertible {
+enum ConversationHistorySnapshotFailure: Error, CustomStringConvertible {
   case invalid(String)
 
   var description: String {
@@ -12,11 +12,11 @@ enum ConversationWindowSnapshotFailure: Error, CustomStringConvertible {
 }
 
 @main
-struct ConversationWindowSnapshotCheck {
+struct ConversationHistorySnapshotCheck {
   @MainActor
   static func main() throws {
     guard CommandLine.arguments.count == 2 else {
-      throw ConversationWindowSnapshotFailure.invalid("usage: conversation-window-snapshot-check OUTPUT_DIR")
+      throw ConversationHistorySnapshotFailure.invalid("usage: conversation-history-snapshot-check OUTPUT_DIR")
     }
     _ = NSApplication.shared
     NSApp.appearance = NSAppearance(named: .aqua)
@@ -27,7 +27,7 @@ struct ConversationWindowSnapshotCheck {
     let messages = (0..<2_000).map { index -> HarnessController.Message in
       switch index % 3 {
       case 0: return HarnessController.Message(role: .user, text: "用户消息 \(index)：继续检查这个长会话。")
-      case 1: return HarnessController.Message(role: .assistant, text: "助手回复 \(index)：当前只物化窗口内的消息。")
+      case 1: return HarnessController.Message(role: .assistant, text: "助手回复 \(index)：完整历史已经自动载入。")
       default: return HarnessController.Message(role: .system, text: "状态更新 \(index)")
       }
     }
@@ -40,12 +40,9 @@ struct ConversationWindowSnapshotCheck {
     harness.sessions = [session]
     harness.selectedSessionID = session.id
     harness.hostCurrentSessionID = "long-session"
-    harness.updateDisplayedConversationWindow(messageCount: messages.count, pinnedToBottom: true)
-
-    guard let snapshot = harness.conversationWindowDebugSnapshot,
-          snapshot.totalCount == 2_000,
-          snapshot.materializedCount == DSHConversationWindowPlanner.capacity else {
-      throw ConversationWindowSnapshotFailure.invalid("conversation window is not bounded to the configured capacity")
+    guard harness.displayedSession?.messages.count == 2_000,
+          harness.displayedConversationMessageToken.count == 2_000 else {
+      throw ConversationHistorySnapshotFailure.invalid("conversation transcript does not expose all loaded messages")
     }
 
     let size = CGSize(width: 900, height: 720)
@@ -71,28 +68,28 @@ struct ConversationWindowSnapshotCheck {
 
     guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
       window.close()
-      throw ConversationWindowSnapshotFailure.invalid("ConversationView produced no bitmap")
+      throw ConversationHistorySnapshotFailure.invalid("ConversationView produced no bitmap")
     }
     hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
     window.orderOut(nil)
     window.close()
     guard let png = bitmap.representation(using: .png, properties: [:]) else {
-      throw ConversationWindowSnapshotFailure.invalid("ConversationView could not encode PNG")
+      throw ConversationHistorySnapshotFailure.invalid("ConversationView could not encode PNG")
     }
-    let destination = output.appendingPathComponent("conversation-window-2000.png")
+    let destination = output.appendingPathComponent("conversation-history-2000.png")
     try png.write(to: destination)
     try validate(data: png, expected: size)
-    print("conversation-window-snapshot: \(destination.path)")
+    print("conversation-history-snapshot: \(destination.path)")
   }
 
   private static func validate(data: Data, expected: CGSize) throws {
     guard data.count > 4_000, let bitmap = NSBitmapImageRep(data: data) else {
-      throw ConversationWindowSnapshotFailure.invalid("conversation snapshot is blank or unexpectedly small")
+      throw ConversationHistorySnapshotFailure.invalid("conversation snapshot is blank or unexpectedly small")
     }
     let scaleX = Double(bitmap.pixelsWide) / expected.width
     let scaleY = Double(bitmap.pixelsHigh) / expected.height
     guard abs(scaleX - scaleY) < 0.01, scaleX >= 1, scaleX <= 3 else {
-      throw ConversationWindowSnapshotFailure.invalid("conversation snapshot has an invalid scale")
+      throw ConversationHistorySnapshotFailure.invalid("conversation snapshot has an invalid scale")
     }
     var colors = Set<UInt32>()
     var nonBackgroundSamples = 0
@@ -111,7 +108,7 @@ struct ConversationWindowSnapshotCheck {
       }
     }
     guard colors.count > 12, nonBackgroundSamples > 20 else {
-      throw ConversationWindowSnapshotFailure.invalid(
+      throw ConversationHistorySnapshotFailure.invalid(
         "conversation snapshot appears blank (\(colors.count) colors, \(nonBackgroundSamples) content samples)")
     }
   }

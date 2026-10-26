@@ -90,7 +90,7 @@ struct WorkbenchSnapshotCheck {
         Sidebar().frame(width: 290)
         ConversationWorkbenchLayout()
       }
-      .background(DSHTheme.canvasGradient)
+      .background(DSHTheme.canvas)
       .environmentObject(fullHarness))
 
     let compactHarness = HarnessController(startRuntime: false)

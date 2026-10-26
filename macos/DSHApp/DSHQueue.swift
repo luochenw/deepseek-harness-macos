@@ -41,6 +41,14 @@ struct DSHQueueItem: Identifiable, Equatable {
     }
   }
 }
+
+enum DSHQueueChrome {
+  /// Host admission can publish a one-frame queue snapshot while a steer is
+  /// being attached to the current turn. Queue chrome appears only after the
+  /// snapshot remains stable long enough to represent a real pending queue.
+  static let settleDelayMilliseconds = 300
+}
+
 struct DSHQueueActionPayload: Encodable {
   let sessionId: String
   let itemId: String
@@ -243,37 +251,32 @@ extension HarnessController {
   func submitRunningDraft(mode requestedMode: DSHPromptMode) {
     let originalText = draft
     let text = originalText.trimmingCharacters(in: .whitespacesAndNewlines)
-    let image = draftImage
-    guard !text.isEmpty || image != nil else { return }
+    let images = draftImages
+    guard !text.isEmpty || !images.isEmpty else { return }
     guard composerAgentProfileID == nil, displayedIsRunning, let hostClient else { return }
     if let address = activeSubagentAddress {
       submitSubagentComposerDraft(address: address, successStatus: "已排队发送子代理追问")
       return
     }
     guard let hostSessionID = hostCurrentSessionID else { return }
-    if submitNativeComposerCommandIfNeeded(text: text, hasImage: image != nil) { return }
+    if submitNativeComposerCommandIfNeeded(text: text, hasImage: !images.isEmpty) { return }
     let mode = requestedMode
     let localSessionID = selectedSessionID
     var content: [DSHPromptContent] = text.isEmpty ? [] : [.text(text)]
-    if let image {
-      do {
-        let bytes = try Data(contentsOf: image.url)
-        content.append(.image(
-          data: bytes.base64EncodedString(),
-          mediaType: image.mediaType,
-          name: image.url.lastPathComponent))
-      } catch {
-        status = "读取图片失败：\(error.localizedDescription)"
-        return
-      }
+    do {
+      content.append(contentsOf: try imagePromptContents(images))
+    } catch {
+      status = "读取图片失败：\(error.localizedDescription)"
+      return
     }
+    let originalImageIDs = Set(images.map(\.id))
     guard beginComposerSubmission(sessionID: hostSessionID) else { return }
     Task {
       do {
         var commandExecution: DSHCommandExecution?
         if DSHComposerSubmissionPolicy.shouldExecuteCommand(
           text: text,
-          hasImage: image != nil,
+          hasImage: !images.isEmpty,
           isRootSession: true
         ), let execution = try await hostClient.executeCommand(sessionId: hostSessionID, line: text) {
           guard execution.succeeded else {
@@ -295,7 +298,7 @@ extension HarnessController {
           }
           self.clearAcceptedComposerDraft(
             originalText: originalText,
-            originalImageID: image?.id)
+            originalImageIDs: originalImageIDs)
         }
       } catch {
         await MainActor.run {

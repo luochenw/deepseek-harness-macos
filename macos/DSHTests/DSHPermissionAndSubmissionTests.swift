@@ -59,55 +59,76 @@ private func testPromptPayload_encodesSteerMode() throws {
   try expectEqual(object?["mode"] as? String, "steer")
 }
 
-private func testCommandExecutePayload_includesEmptyImages() throws {
+private func testCommandExecutePayload_includesEmptyAttachments() throws {
   let payload = DSHTypertArgsEnvelope(
-    args: DSHCommandExecuteArgsWithImages(
+    args: DSHCommandExecuteArgs(
       agentId: "session-1",
       line: "/permission workspace-write",
-      images: []))
+      submittedAttachments: []))
   let data = try JSONEncoder().encode(payload)
   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
   let args = object?["args"] as? [String: Any]
   try expectEqual(args?["agentId"] as? String, "session-1")
   try expectEqual(args?["line"] as? String, "/permission workspace-write")
-  try expectEqual((args?["images"] as? [Any])?.count, 0)
+  try expectEqual((args?["submittedAttachments"] as? [Any])?.count, 0)
 }
 
-private func testComposerSubmissionPolicy_matchesBusyEnterPreference() throws {
+private func testComposerSubmissionPolicy_sendsDirectlyWhenQueueIsEmpty() throws {
   try expectEqual(
     DSHComposerSubmissionPolicy.mode(
       running: false,
       accelerated: true,
       preferredBusyMode: .steer,
-      steeringAvailable: true),
+      steeringAvailable: true,
+      hasQueuedMessages: true),
     .queue)
   try expectEqual(
     DSHComposerSubmissionPolicy.mode(
       running: true,
       accelerated: false,
       preferredBusyMode: .queue,
-      steeringAvailable: true),
+      steeringAvailable: true,
+      hasQueuedMessages: false),
+    .steer)
+  try expectEqual(
+    DSHComposerSubmissionPolicy.mode(
+      running: true,
+      accelerated: true,
+      preferredBusyMode: .queue,
+      steeringAvailable: true,
+      hasQueuedMessages: false),
+    .steer)
+  try expectEqual(
+    DSHComposerSubmissionPolicy.mode(
+      running: true,
+      accelerated: false,
+      preferredBusyMode: .queue,
+      steeringAvailable: true,
+      hasQueuedMessages: true),
     .queue)
   try expectEqual(
     DSHComposerSubmissionPolicy.mode(
       running: true,
       accelerated: true,
       preferredBusyMode: .queue,
-      steeringAvailable: true),
+      steeringAvailable: true,
+      hasQueuedMessages: true),
     .steer)
   try expectEqual(
     DSHComposerSubmissionPolicy.mode(
       running: true,
       accelerated: false,
       preferredBusyMode: .steer,
-      steeringAvailable: true),
+      steeringAvailable: true,
+      hasQueuedMessages: true),
     .steer)
   try expectEqual(
     DSHComposerSubmissionPolicy.mode(
       running: true,
       accelerated: true,
       preferredBusyMode: .steer,
-      steeringAvailable: false),
+      steeringAvailable: false,
+      hasQueuedMessages: true),
     .queue)
 }
 
@@ -183,6 +204,10 @@ private func testQueueItems_separateQueuedAndSteering() throws {
   try expectEqual(items.filter(\.isQueued).map(\.id), ["queue-1"])
   try expectEqual(items.filter(\.isSteering).map(\.id), ["steer-1"])
   try expectEqual(items.last?.messageID, "message-steer-1")
+}
+
+private func testQueueChrome_waitsForStableQueueSnapshot() throws {
+  try expect(DSHQueueChrome.settleDelayMilliseconds >= 200)
 }
 
 private func testQueueItems_disableEditingForNonTextContent() throws {
@@ -296,7 +321,7 @@ private func testAcceptedComposerDraft_clearsSubmittedPrefixAfterNavigation() th
   try MainActor.assumeIsolated {
     let harness = HarnessController(startRuntime: false)
     harness.draft = "原始内容，随后补充"
-    harness.clearAcceptedComposerDraft(originalText: "原始内容", originalImageID: nil)
+    harness.clearAcceptedComposerDraft(originalText: "原始内容", originalImageIDs: [])
     try expectEqual(harness.draft, "，随后补充")
   }
 }
@@ -329,6 +354,86 @@ private func testSubmissionRunning_updatesOnlyOriginatingSession() throws {
     try expect(!harness.sessions[0].isRunning)
     try expect(harness.sessions[1].isRunning)
     try expect(harness.isRunning)
+  }
+}
+
+private func testRootRunningReconciliation_clearsDisplayedStaleSession() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let root = HarnessController.Session(
+      title: "Root",
+      workspaceName: "Workspace",
+      updatedAt: Date(),
+      messages: [],
+      isRunning: true,
+      hostSessionId: "root")
+    harness.sessions = [root]
+    harness.selectedSessionID = root.id
+    harness.hostCurrentSessionID = "root"
+    harness.isRunning = true
+
+    harness.reconcileRootSessionRunningState(
+      sessionID: "root",
+      localSessionID: root.id,
+      running: false)
+
+    try expect(!harness.sessions[0].isRunning)
+    try expect(!harness.isRunning)
+  }
+}
+
+private func testRootRunningReconciliation_updatesBackgroundRowWithoutDisplayedFlag() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let first = HarnessController.Session(
+      title: "A",
+      workspaceName: "A",
+      updatedAt: Date(),
+      messages: [],
+      isRunning: true,
+      hostSessionId: "session-a")
+    let second = HarnessController.Session(
+      title: "B",
+      workspaceName: "B",
+      updatedAt: Date(),
+      messages: [],
+      isRunning: true,
+      hostSessionId: "session-b")
+    harness.sessions = [first, second]
+    harness.selectedSessionID = second.id
+    harness.hostCurrentSessionID = "session-b"
+    harness.isRunning = true
+
+    harness.reconcileRootSessionRunningState(
+      sessionID: "session-a",
+      localSessionID: first.id,
+      running: false)
+
+    try expect(!harness.sessions[0].isRunning)
+    try expect(harness.sessions[1].isRunning)
+    try expect(harness.isRunning)
+  }
+}
+
+private func testRemoteSessionStatus_clearsDisplayedRunningState() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let root = HarnessController.Session(
+      title: "Root",
+      workspaceName: "Workspace",
+      updatedAt: Date(),
+      messages: [],
+      isRunning: true,
+      hostSessionId: "root")
+    harness.sessions = [root]
+    harness.selectedSessionID = root.id
+    harness.hostCurrentSessionID = "root"
+    harness.isRunning = true
+
+    harness.applyRemoteSessionStatus(sessionID: "root", running: false)
+
+    try expect(!harness.sessions[0].isRunning)
+    try expect(!harness.isRunning)
   }
 }
 
@@ -422,13 +527,14 @@ let dshPermissionAndSubmissionTests: [NamedTest] = [
   ("Permission custom state is display-only", testPermissionProjection_customIsDisplayOnly),
   ("Settings schema extracts string choices", testSettingsSchema_extractsStringChoices),
   ("Prompt payload encodes steer mode", testPromptPayload_encodesSteerMode),
-  ("Command execution payload includes empty images", testCommandExecutePayload_includesEmptyImages),
-  ("Composer submission policy matches busy Enter preference", testComposerSubmissionPolicy_matchesBusyEnterPreference),
+  ("Command execution payload includes empty attachments", testCommandExecutePayload_includesEmptyAttachments),
+  ("Composer submission sends directly when the queue is empty", testComposerSubmissionPolicy_sendsDirectlyWhenQueueIsEmpty),
   ("Busy submission preserves selected Agent Profile semantics", testBusySubmission_requiresPlainComposerMode),
   ("Empty busy submission respects the resolved alternate mode", testBusySubmission_emptyDraftOnlySteersWhenResolvedModeIsSteer),
   ("Busy submission routes root slash commands through command plane", testBusySubmission_routesRootSlashCommandsThroughCommandPlane),
   ("Native composer commands stay local while busy", testComposerSubmissionPolicy_keepsNativeCommandsLocal),
   ("Queue items separate queued and steering placements", testQueueItems_separateQueuedAndSteering),
+  ("Queue chrome waits for a stable queue snapshot", testQueueChrome_waitsForStableQueueSnapshot),
   ("Queue items disable editing for non-text content", testQueueItems_disableEditingForNonTextContent),
   ("Queue snapshots restore by session and retire by message id", testQueueSnapshots_restoreBySessionAndRetireByMessageID),
   ("Settings choice mutations lock independently", testSettingsChoiceMutationLocksPerNamespaceAndSession),
@@ -437,6 +543,9 @@ let dshPermissionAndSubmissionTests: [NamedTest] = [
   ("Accepted running submission preserves later typing", testAcceptedRunningDraftRemainder_preservesNewTyping),
   ("Accepted composer submission clears its prefix after navigation", testAcceptedComposerDraft_clearsSubmittedPrefixAfterNavigation),
   ("Submission completion updates only its originating session", testSubmissionRunning_updatesOnlyOriginatingSession),
+  ("Root running reconciliation clears a displayed stale session", testRootRunningReconciliation_clearsDisplayedStaleSession),
+  ("Root running reconciliation keeps background state isolated", testRootRunningReconciliation_updatesBackgroundRowWithoutDisplayedFlag),
+  ("Remote session status clears the displayed running state", testRemoteSessionStatus_clearsDisplayedRunningState),
   ("Subagent failures route to their originating root session", testSubagentFailure_routesToOriginatingRootAfterNavigation),
   ("Permission projection rejects an older snapshot", testPermissionProjection_rejectsOlderSnapshot),
   ("Permission projection accepts restarted baseline after reset", testPermissionProjection_acceptsRestartedBaselineAfterReset),

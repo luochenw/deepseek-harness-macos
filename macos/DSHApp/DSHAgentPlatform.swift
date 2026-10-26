@@ -488,7 +488,7 @@ extension HarnessController {
       selectedProfileID: composerAgentProfileID,
       profileResolved: selectedComposerAgentProfile != nil
     ) {
-      guard draftImage == nil else {
+      guard draftImages.isEmpty else {
         status = "Agent Batch 暂不支持图片附件；请移除附件或改用普通消息"
         return
       }
@@ -743,9 +743,9 @@ extension HarnessController {
           selectedProfileID: self.composerAgentProfileID,
           submittedTask: submitted,
           currentDraft: self.draft
-        ) {
+        ) && self.draftImages.isEmpty {
           self.draft = ""
-          self.draftImage = nil
+          self.draftImages = []
           self.clearComposerAgentProfile()
         }
       },

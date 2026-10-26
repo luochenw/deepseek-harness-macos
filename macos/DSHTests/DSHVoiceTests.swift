@@ -34,25 +34,28 @@ private func testIsCancelCommand_rejectsEmbeddedCancelPhrase() throws {
 
 private func testVoiceRoute_commitActionRespectsForegroundAndAutoSend() throws {
   try expectEqual(
-    VoiceRoute.dialog.commitAction(viaWake: true, autoSend: true, canSubmit: true, canQueue: false),
+    VoiceRoute.dialog.commitAction(viaWake: true, autoSend: true, canSubmit: true, canSteer: false, canQueue: false),
     .submitCurrent)
   try expectEqual(
-    VoiceRoute.dialog.commitAction(viaWake: true, autoSend: true, canSubmit: false, canQueue: true),
+    VoiceRoute.dialog.commitAction(viaWake: true, autoSend: true, canSubmit: false, canSteer: true, canQueue: false),
+    .steerCurrent)
+  try expectEqual(
+    VoiceRoute.dialog.commitAction(viaWake: true, autoSend: true, canSubmit: false, canSteer: false, canQueue: true),
     .queueCurrent)
   try expectEqual(
-    VoiceRoute.background.commitAction(viaWake: true, autoSend: true, canSubmit: false, canQueue: false),
+    VoiceRoute.background.commitAction(viaWake: true, autoSend: true, canSubmit: false, canSteer: false, canQueue: false),
     .dispatchBackground)
 }
 
 private func testVoiceRoute_commitActionKeepsTextWhenAutoSendIsOff() throws {
   try expectEqual(
-    VoiceRoute.background.commitAction(viaWake: true, autoSend: false, canSubmit: false, canQueue: false),
+    VoiceRoute.background.commitAction(viaWake: true, autoSend: false, canSubmit: false, canSteer: false, canQueue: false),
     .fillComposer)
   try expectEqual(
-    VoiceRoute.dialog.commitAction(viaWake: false, autoSend: true, canSubmit: true, canQueue: false),
+    VoiceRoute.dialog.commitAction(viaWake: false, autoSend: true, canSubmit: true, canSteer: false, canQueue: false),
     .fillComposer)
   try expectEqual(
-    VoiceRoute.dialog.commitAction(viaWake: true, autoSend: true, canSubmit: false, canQueue: false),
+    VoiceRoute.dialog.commitAction(viaWake: true, autoSend: true, canSubmit: false, canSteer: false, canQueue: false),
     .fillComposer)
 }
 

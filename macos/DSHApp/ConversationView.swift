@@ -6,9 +6,14 @@ private struct HeaderChip<Content: View>: View {
   @ViewBuilder let content: () -> Content
   var body: some View {
     Menu { content() } label: {
-      HStack(spacing: 6) { Image(systemName: icon).font(.system(size: 11)); Text(label).font(.system(size: 11.5)) }
+      HStack(spacing: 6) {
+        Image(systemName: icon).font(DSHType.caption)
+        Text(label).font(DSHType.caption)
+      }
         .padding(.horizontal, DSHSpace.s3).padding(.vertical, 6)
-        .background(DSHTheme.surface, in: Capsule())
+        .background(
+          DSHTheme.surface,
+          in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
         .foregroundStyle(DSHTheme.inkSoft)
     }.menuStyle(.borderlessButton).fixedSize()
   }
@@ -44,14 +49,27 @@ struct ConversationHeader: View {
               Text(harness.subagentPath.map(\.title).joined(separator: " › ")).font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
             }
           }
-          Text(harness.displayedSession?.title ?? "新会话").font(.system(size: 15, weight: .semibold)).foregroundStyle(DSHTheme.ink)
-          Text(harness.workspace?.path ?? "无工作区 · Host 默认目录").font(.caption).foregroundStyle(DSHTheme.inkFaint).lineLimit(1)
+          Text(harness.displayedSession?.title ?? "新会话")
+            .font(DSHType.pageTitle)
+            .foregroundStyle(DSHTheme.ink)
+          Text(harness.conversationWorkspacePathLabel)
+            .font(.caption)
+            .foregroundStyle(DSHTheme.inkFaint)
+            .lineLimit(1)
+            .help(harness.hostCurrentSessionID == nil
+              ? "新会话将在此目录中运行"
+              : "当前 Host 会话的固定工作目录")
         }
         Spacer()
         if presetLocked {
-          HStack(spacing: 6) { Image(systemName: "lock.fill").font(.system(size: 11)); Text(lockedPresetLabel).font(.system(size: 11.5)) }
+          HStack(spacing: 6) {
+            Image(systemName: "lock.fill").font(DSHType.caption)
+            Text(lockedPresetLabel).font(DSHType.caption)
+          }
             .padding(.horizontal, DSHSpace.s3).padding(.vertical, 6)
-            .background(DSHTheme.warmSoft, in: Capsule())
+            .background(
+              DSHTheme.warmSoft,
+              in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
             .foregroundStyle(DSHTheme.warm)
             .help("会话已开始运行，Agent Preset 无法再切换（Host 会拒绝：agent-preset-locked）")
         } else {
@@ -82,9 +100,284 @@ private struct ConversationBottomDistanceKey: PreferenceKey {
   static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-private enum ConversationWindowEdgeIntent {
-  case earlier
-  case later
+enum DSHConversationLayout {
+  static let contentMaxWidth: CGFloat = 1040
+  static let horizontalInset = DSHSpace.s6
+}
+
+enum DSHReasoningLayout {
+  static let maximumExpandedHeight: CGFloat = 240
+  static let initialExpandedHeight: CGFloat = 44
+
+  static func expandedHeight(measured: CGFloat?) -> CGFloat {
+    guard let measured else { return initialExpandedHeight }
+    return min(maximumExpandedHeight, max(1, measured))
+  }
+}
+
+enum DSHToolDetailsLayout {
+  static let maximumExpandedHeight: CGFloat = 320
+  static let initialExpandedHeight: CGFloat = 56
+
+  static func expandedHeight(measured: CGFloat?) -> CGFloat {
+    guard let measured else { return initialExpandedHeight }
+    return min(maximumExpandedHeight, max(1, measured))
+  }
+}
+
+private struct AdaptiveToolDetails<Content: View>: View {
+  private let content: Content
+  @State private var contentHeight: CGFloat?
+
+  init(@ViewBuilder content: () -> Content) {
+    self.content = content()
+  }
+
+  var body: some View {
+    ScrollView {
+      content
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, DSHSpace.s3)
+        .padding(.vertical, DSHSpace.s2)
+        .onGeometryChange(for: CGFloat.self) { geometry in
+          geometry.size.height
+        } action: { height in
+          contentHeight = height
+        }
+    }
+    .dshThinScrollers()
+    .frame(height: DSHToolDetailsLayout.expandedHeight(measured: contentHeight))
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      DSHTheme.surfaceTint,
+      in: RoundedRectangle(cornerRadius: DSHRadius.md, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: DSHRadius.md, style: .continuous))
+    .overlay(alignment: .leading) {
+      RoundedRectangle(cornerRadius: 1, style: .continuous)
+        .fill(DSHTheme.accentSoft)
+        .frame(width: 2)
+        .padding(.vertical, DSHSpace.s2)
+    }
+  }
+}
+
+private struct ToolStatusHeader: View {
+  let title: String?
+  let running: Bool
+  let failed: Bool
+  let expanded: Bool
+  let onToggle: () -> Void
+  var onOpenDetails: (() -> Void)?
+  @State private var hovering = false
+
+  private var accessibilityState: String {
+    if running { return "运行中" }
+    if failed { return "失败" }
+    return "已完成"
+  }
+
+  var body: some View {
+    HStack(spacing: DSHSpace.s2) {
+      Button {
+        withAnimation(.easeInOut(duration: 0.15)) {
+          onToggle()
+        }
+      } label: {
+        ToolStatusLabel(
+          title: title,
+          running: running,
+          failed: failed,
+          expanded: expanded,
+          hovering: hovering)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, DSHSpace.s2 + 1)
+          .padding(.vertical, 5)
+          .background(
+            hovering || expanded ? DSHTheme.surfaceTint2 : DSHTheme.surfaceTint,
+            in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .onHover { hovering = $0 }
+      .accessibilityLabel(
+        "\(title ?? "指令")，\(accessibilityState)，\(expanded ? "收起详情" : "展开详情")")
+      Spacer(minLength: 0)
+      if let onOpenDetails {
+        Button(action: onOpenDetails) {
+          Image(systemName: "sidebar.right")
+        }
+        .buttonStyle(.dshGhost)
+        .help("在工作台查看工具详情")
+      }
+    }
+  }
+}
+
+private struct ToolStatusLabel: View {
+  let title: String?
+  let running: Bool
+  let failed: Bool
+  let expanded: Bool
+  let hovering: Bool
+
+  private var iconColor: Color {
+    if running { return DSHTheme.warm }
+    if failed { return DSHTheme.coral }
+    return DSHTheme.inkFaint
+  }
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "terminal")
+        .font(DSHType.caption)
+        .foregroundStyle(iconColor)
+      if let title {
+        Text(title)
+          .font(DSHType.mono)
+          .foregroundStyle(DSHTheme.inkSoft)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .contentTransition(.opacity)
+          .animation(.easeInOut(duration: 0.16), value: title)
+      }
+      Spacer(minLength: DSHSpace.s2)
+      if running || failed {
+        ToolStateAccessory(running: running, failed: failed)
+          .transition(.opacity)
+      }
+      Image(systemName: "chevron.right")
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(DSHTheme.inkFaint)
+        .rotationEffect(.degrees(expanded ? 90 : 0))
+    }
+    .foregroundStyle(hovering || expanded ? DSHTheme.inkSoft : DSHTheme.inkFaint)
+    .animation(.easeOut(duration: 0.18), value: running)
+    .animation(.easeOut(duration: 0.18), value: failed)
+  }
+}
+
+private struct ToolStateAccessory: View {
+  let running: Bool
+  let failed: Bool
+
+  var body: some View {
+    if running {
+      HStack(spacing: 5) {
+        DSHRunningBars(color: DSHTheme.warm, height: 9)
+        Text("运行中")
+          .font(DSHType.micro)
+          .foregroundStyle(DSHTheme.warm)
+      }
+      .fixedSize()
+    } else if failed {
+      HStack(spacing: 4) {
+        Image(systemName: "xmark.circle.fill")
+          .font(DSHType.micro)
+        Text("有失败")
+          .font(DSHType.micro)
+      }
+      .foregroundStyle(DSHTheme.coral)
+      .fixedSize()
+    }
+  }
+}
+
+private struct ToolInstructionRow: View {
+  @EnvironmentObject var harness: HarnessController
+  let instruction: DSHToolInstruction
+  let initiallyExpanded: Bool?
+  @State private var userToggled: Bool?
+  private var expanded: Bool { userToggled ?? initiallyExpanded ?? false }
+  private var activity: HarnessController.ToolActivity? {
+    guard case .activity(let activity) = instruction.source else { return nil }
+    return activity
+  }
+
+  init(
+    instruction: DSHToolInstruction,
+    initiallyExpanded: Bool? = nil
+  ) {
+    self.instruction = instruction
+    self.initiallyExpanded = initiallyExpanded
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      ToolStatusHeader(
+        title: instruction.title,
+        running: instruction.state == .running,
+        failed: instruction.state == .failed,
+        expanded: expanded,
+        onToggle: { userToggled = !expanded },
+        onOpenDetails: activity.map { selected in
+          { harness.toolDetail(selected) }
+        })
+      if expanded {
+        AdaptiveToolDetails {
+          ToolInstructionDetails(instruction: instruction)
+        }
+        .padding(.leading, DSHSpace.s4)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+private struct ToolInstructionDetails: View {
+  @EnvironmentObject private var harness: HarnessController
+  let instruction: DSHToolInstruction
+
+  @ViewBuilder var body: some View {
+    switch instruction.source {
+    case .activity(let activity):
+      ToolPresentationContent(tool: activity, compact: true)
+        .frame(maxWidth: 760, alignment: .leading)
+        .contentTransition(.opacity)
+        .animation(.easeOut(duration: 0.18), value: activity.output)
+    case .child(let child):
+      VStack(alignment: .leading, spacing: DSHSpace.s2) {
+        if child.imageAttachments.isEmpty {
+          if hasArguments(child.arguments) {
+            Text("参数")
+              .font(DSHType.micro)
+              .foregroundStyle(DSHTheme.inkFaint)
+            ToolOutputBlock(text: child.arguments)
+          }
+          if !child.output.isEmpty {
+            Text("输出")
+              .font(DSHType.micro)
+              .foregroundStyle(DSHTheme.inkFaint)
+            ToolOutputBlock(text: child.output)
+          }
+        } else {
+          ForEach(child.imageAttachments, id: \.attachmentId) { attachment in
+            AttachmentPreview(
+              ref: attachment,
+              sessionID: harness.displayedAttachmentSessionID)
+          }
+        }
+        if instruction.state == .running,
+           child.output.isEmpty,
+           child.imageAttachments.isEmpty {
+          HStack(spacing: 5) {
+            DSHRunningBars(color: DSHTheme.warm, height: 9)
+            Text("等待结果…")
+              .font(DSHType.micro)
+              .foregroundStyle(DSHTheme.inkFaint)
+          }
+          .transition(.opacity)
+        }
+      }
+      .frame(maxWidth: 760, alignment: .leading)
+      .animation(.easeOut(duration: 0.18), value: child.output)
+      .animation(.easeOut(duration: 0.18), value: child.imageAttachments)
+    }
+  }
+
+  private func hasArguments(_ value: String) -> Bool {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !trimmed.isEmpty && trimmed != "{}" && trimmed != "[]"
+  }
 }
 
 struct ConversationView: View {
@@ -96,88 +389,70 @@ struct ConversationView: View {
   @State private var pinnedToBottom = true
   @State private var bottomDistance: CGFloat = 0
   @State private var scrollMonitor: Any?
-  @State private var windowEdgeIntent: ConversationWindowEdgeIntent?
-  @State private var earlierEdgeVisible = false
-  @State private var laterEdgeVisible = false
   @State private var pointerInsideTranscript = false
   var body: some View {
     GeometryReader { viewport in
     ScrollViewReader { proxy in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: DSHSpace.s4) {
-          if harness.displayedConversationWindowHasEarlier {
-            Button("载入上一段") {
-              windowEdgeIntent = nil
-              harness.expandDisplayedConversationEarlier(
-                anchorMessageID: harness.displayedWindowMessages.first?.id)
-            }
-              .buttonStyle(.dshSecondary)
-              .frame(maxWidth: .infinity)
-              .id("conversation-window-earlier-\(harness.displayedMessageWindow.lowerBound)")
-              .onAppear {
-                earlierEdgeVisible = true
-                guard windowEdgeIntent == .earlier else { return }
-                windowEdgeIntent = nil
-                harness.expandDisplayedConversationEarlier(
-                  anchorMessageID: harness.displayedWindowMessages.first?.id)
-              }
-              .onDisappear { earlierEdgeVisible = false }
-          } else if harness.historyHasMore && harness.subagentTranscript == nil {
-            Button("载入更早消息", action: harness.loadOlderHistory).buttonStyle(.dshSecondary).frame(maxWidth: .infinity)
-          }
-          let allMessages = harness.displayedSession?.messages ?? []
-          let messages = harness.displayedWindowMessages
-          if messages.isEmpty {
+          let messages = harness.displayedSession?.messages ?? []
+          let liveActivity = DSHConversationLiveActivity.text(
+            messages: messages,
+            tools: harness.displayedTools,
+            running: harness.displayedIsRunning)
+          let loadingPresentation = DSHConversationHistoryLoadingPresentation.resolve(
+            isLoading: harness.displayedIsLoadingHistory,
+            hasMessages: !messages.isEmpty)
+          if loadingPresentation == .placeholder {
+            ConversationLoadingView()
+              .id("conversation-history-loading")
+          } else if messages.isEmpty {
             ConversationEmptyState()
           } else {
-            ForEach(Self.foldTranscript(messages)) { item in
+            if loadingPresentation == .inline {
+              ConversationLoadingView(compact: true)
+                .id("conversation-history-loading-compact")
+            }
+            ForEach(Self.foldTranscript(
+              messages,
+              activeTurnRunning: harness.displayedIsRunning)) { item in
               switch item {
+              case .reasoning(let trace):
+                // "live" = this turn's collapsed status row follows the latest
+                // thought/body/tool action until the turn settles.
+                ReasoningBlock(
+                  text: trace.text,
+                  segments: trace.segments,
+                  live: trace.live,
+                  liveStatus: liveActivity)
+                  .id(item.id)
               case .message(let message):
-                VStack(alignment: .leading, spacing: DSHSpace.s2) {
-                  if let reasoning = message.reasoning {
-                    // "live" = this thought is still streaming: last row of a
-                    // running turn with no answer text yet.
-                    ReasoningBlock(text: reasoning, live: harness.displayedIsRunning && message.id == allMessages.last?.id && message.text.isEmpty)
-                  }
-                  MessageBubble(message: message)
-                }.id(message.id)
+                MessageBubble(message: message).id(item.id)
               case .toolGroup(let group):
-                ToolGroupRow(messages: group).id(group[0].id)
+                ToolGroupRow(messages: group).id(item.id)
               }
             }
-            if harness.displayedConversationWindowHasLater {
-              Button("载入下一段") {
-                windowEdgeIntent = nil
-                harness.expandDisplayedConversationLater(
-                  anchorMessageID: harness.displayedWindowMessages.last?.id)
-              }
-                .buttonStyle(.dshSecondary)
-                .frame(maxWidth: .infinity)
-                .id("conversation-window-later-\(harness.displayedMessageWindow.upperBound)")
-                .onAppear {
-                  laterEdgeVisible = true
-                  guard windowEdgeIntent == .later else { return }
-                  windowEdgeIntent = nil
-                  harness.expandDisplayedConversationLater(
-                    anchorMessageID: harness.displayedWindowMessages.last?.id)
-                }
-                .onDisappear { laterEdgeVisible = false }
-            } else {
-              ForEach(harness.displayedSteeringItems) { item in
-                PendingSteeringBubble(item: item).id("steering-\(item.id)")
-              }
-              // The transcript tail row: the rolling-wave miniature animates
-              // for the whole running turn (it also fills the send→first-token
-              // gap), then freezes into the static icon once the turn settles.
-              // One row view with a parameter — NOT an if/else of two view
-              // types sharing this id: inside a LazyVStack that shape reuses
-              // the cached static row on branch swap, so the TimelineView
-              // never mounts and the icon sits frozen through the whole run
-              // (reproduced in isolation; see the transcript-tail Agent Note).
-              TranscriptTailIcon(running: harness.displayedIsRunning).id("transcript-tail")
+            ForEach(harness.displayedSteeringItems) { item in
+              PendingSteeringBubble(item: item).id("steering-\(item.id)")
             }
+            // The transcript tail row: the rolling-wave miniature animates
+            // for the whole running turn (it also fills the send→first-token
+            // gap), then freezes into the static icon once the turn settles.
+            // One row view with a parameter — NOT an if/else of two view
+            // types sharing this id: inside a LazyVStack that shape reuses
+            // the cached static row on branch swap, so the TimelineView
+            // never mounts and the icon sits frozen through the whole run
+            // (reproduced in isolation; see the transcript-tail Agent Note).
+            TranscriptTailIcon(running: harness.displayedIsRunning).id("transcript-tail")
           }
-        }.frame(maxWidth: .infinity).padding(DSHSpace.s6)
+        }
+          // The transcript column carries a readable measure and is centered,
+          // so a wide window puts the slack on both sides instead of leaving
+          // every answer hugging the left edge with a dead right half.
+          .frame(maxWidth: DSHConversationLayout.contentMaxWidth, alignment: .leading)
+          .frame(maxWidth: .infinity, alignment: .center)
+          .padding(.horizontal, DSHConversationLayout.horizontalInset)
+          .padding(.vertical, DSHSpace.s6)
           // Thin overlay scroller (appears while scrolling, no gutter) —
           // AppKit-level because "始终显示滚动条" otherwise forces the
           // thick legacy bar.
@@ -203,9 +478,6 @@ struct ConversationView: View {
         bottomDistance = distance
       }
       .onChange(of: harness.displayedConversationMessageToken) { oldToken, token in
-        harness.updateDisplayedConversationWindow(
-          messageCount: token.count,
-          pinnedToBottom: pinnedToBottom)
         guard let last = harness.displayedSession?.messages.last else { return }
         // Follow only while pinned — except the user's own send, which
         // always snaps down so the new turn starts in view. Anchor is the
@@ -213,9 +485,6 @@ struct ConversationView: View {
         // it is the transcript's true bottom.
         if last.role == .user, oldToken.lastID != token.lastID {
           pinnedToBottom = true
-          harness.updateDisplayedConversationWindow(
-            messageCount: token.count,
-            pinnedToBottom: true)
         }
         if pinnedToBottom {
           DispatchQueue.main.async {
@@ -227,12 +496,6 @@ struct ConversationView: View {
       // pin — a freshly opened transcript always lands at its bottom.
       .onChange(of: harness.displayedConversationContextKey) { _, contextKey in
         pinnedToBottom = true
-        windowEdgeIntent = nil
-        earlierEdgeVisible = false
-        laterEdgeVisible = false
-        harness.updateDisplayedConversationWindow(
-          messageCount: harness.displayedSession?.messages.count ?? 0,
-          pinnedToBottom: true)
         DispatchQueue.main.async {
           guard harness.displayedConversationContextKey == contextKey else { return }
           if harness.displayedSession?.messages.isEmpty == false {
@@ -244,9 +507,6 @@ struct ConversationView: View {
       // drain) swaps the tail row in place — keep it in view while pinned.
       .onChange(of: harness.displayedIsRunning) { _, _ in
         if pinnedToBottom, harness.displayedSession?.messages.isEmpty == false {
-          harness.updateDisplayedConversationWindow(
-            messageCount: harness.displayedSession?.messages.count ?? 0,
-            pinnedToBottom: true)
           DispatchQueue.main.async {
             proxy.scrollTo("transcript-tail", anchor: .bottom)
           }
@@ -254,32 +514,12 @@ struct ConversationView: View {
       }
       .onChange(of: harness.displayedSteeringItems.map(\.id)) { _, _ in
         if pinnedToBottom {
-          harness.updateDisplayedConversationWindow(
-            messageCount: harness.displayedSession?.messages.count ?? 0,
-            pinnedToBottom: true)
           DispatchQueue.main.async {
             proxy.scrollTo("transcript-tail", anchor: .bottom)
           }
         }
       }
-      .onChange(of: windowEdgeIntent) { _, intent in
-        switch intent {
-        case .earlier where earlierEdgeVisible:
-          windowEdgeIntent = nil
-          harness.expandDisplayedConversationEarlier(
-            anchorMessageID: harness.displayedWindowMessages.first?.id)
-        case .later where laterEdgeVisible:
-          windowEdgeIntent = nil
-          harness.expandDisplayedConversationLater(
-            anchorMessageID: harness.displayedWindowMessages.last?.id)
-        default:
-          break
-        }
-      }
       .onAppear {
-        harness.updateDisplayedConversationWindow(
-          messageCount: harness.displayedSession?.messages.count ?? 0,
-          pinnedToBottom: true)
         DispatchQueue.main.async {
           if harness.displayedSession?.messages.isEmpty == false {
             proxy.scrollTo("transcript-tail", anchor: .bottom)
@@ -291,15 +531,10 @@ struct ConversationView: View {
           if event.scrollingDeltaY > 0 {
             // Scrolling up = reading history: break the pin immediately.
             pinnedToBottom = false
-            windowEdgeIntent = .earlier
           } else if event.scrollingDeltaY < 0,
-                    bottomDistance < 120,
-                    !harness.displayedConversationWindowHasLater {
+                    bottomDistance < 120 {
             // Scrolling down and (nearly) at the bottom: re-engage.
             pinnedToBottom = true
-            windowEdgeIntent = .later
-          } else if event.scrollingDeltaY < 0 {
-            windowEdgeIntent = .later
           }
           return event
         }
@@ -307,17 +542,6 @@ struct ConversationView: View {
       .onDisappear {
         if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
         scrollMonitor = nil
-      }
-      .onChange(of: harness.conversationWindowRestoreRequest) { _, request in
-        guard let request,
-              harness.displayedWindowMessages.contains(where: { $0.id == request.messageID })
-        else { return }
-        DispatchQueue.main.async {
-          proxy.scrollTo(
-            request.messageID,
-            anchor: request.alignment == .top ? .top : .bottom)
-          harness.consumeConversationWindowRestoreAnchor(request.messageID)
-        }
       }
       // One-tap return to the latest content, icon only — a circle floating
       // centered just above the composer, shown whenever follow mode is off
@@ -327,9 +551,6 @@ struct ConversationView: View {
           Button {
             pinnedToBottom = true
             if harness.displayedSession?.messages.isEmpty == false {
-              harness.updateDisplayedConversationWindow(
-                messageCount: harness.displayedSession?.messages.count ?? 0,
-                pinnedToBottom: true)
               DispatchQueue.main.async {
                 withAnimation(.easeOut(duration: 0.2)) {
                   proxy.scrollTo("transcript-tail", anchor: .bottom)
@@ -338,7 +559,7 @@ struct ConversationView: View {
             }
           } label: {
             Image(systemName: "arrow.down.to.line")
-              .font(.system(size: 13, weight: .semibold))
+              .font(DSHType.label.weight(.semibold))
               .foregroundStyle(DSHTheme.ink)
               .frame(width: 34, height: 34)
               .background(DSHTheme.surface, in: Circle())
@@ -354,33 +575,104 @@ struct ConversationView: View {
     }
   }
 
-  /// A transcript row after folding: plain message, or a run of consecutive
-  /// same-tool calls merged into one group ("run_code ×3") so repeated steps
-  /// read as one status instead of a ladder of identical rows.
-  fileprivate enum TranscriptItem: Identifiable {
+  /// One assistant turn's step traces, aggregated into a single ✻ row.
+  struct ReasoningTrace: Identifiable {
+    let id: UUID
+    var text: String
+    var segments: Int
+    var live: Bool
+    let turnOrdinal: Int
+  }
+
+  /// A transcript row after folding: plain message, an aggregated trace, or a
+  /// run of consecutive same-tool calls merged into one execution status so
+  /// repeated steps do not read as a ladder of identical rows.
+  enum TranscriptItem: Identifiable {
+    case reasoning(ReasoningTrace)
     case message(HarnessController.Message)
     case toolGroup([HarnessController.Message])
-    var id: UUID {
+    /// Type-prefixed identity: a turn's trace row and the answer row carrying
+    /// the same message id must stay distinct rows, and a duplicate ForEach
+    /// identity silently drops one of them.
+    var id: String {
       switch self {
-      case .message(let message): message.id
-      case .toolGroup(let group): group[0].id
+      case .reasoning(let trace): "reasoning-\(trace.id.uuidString)"
+      case .message(let message): "message-\(message.id.uuidString)"
+      case .toolGroup(let group): "tool-\(group[0].id.uuidString)"
       }
     }
   }
 
-  private static func foldTranscript(_ messages: [HarnessController.Message]) -> [TranscriptItem] {
+  /// Fold the transcript for rendering: same-name tool rows collapse into one
+  /// group, and every step trace of a turn folds into ONE ✻ row.
+  ///
+  /// A turn emits a reasoning block per step, so the raw transcript carries a
+  /// dozen traces per answer. Rendering one row each stacked an identical
+  /// "思考过程" one-liner around every tool call — the same thought looked like
+  /// it was being shown over and over. Each turn now owns exactly one trace row,
+  /// anchored where that turn's first trace landed and extended in place as
+  /// later steps add theirs ("N 段" says how many), so the row never moves and
+  /// expanding it still exposes every step. Steps whose only content is a trace
+  /// or a tool call contribute no body row of their own.
+  static func foldTranscript(
+    _ messages: [HarnessController.Message],
+    activeTurnRunning: Bool = false
+  ) -> [TranscriptItem] {
     var items: [TranscriptItem] = []
+    // Index into `items` of the current turn's aggregated trace row, if any.
+    var turnTrace: Int?
+    var turnOrdinal = 0
+
     for message in messages {
-      if message.role == .tool, case .toolGroup(var group) = items.last, group[0].text == message.text {
+      if message.role == .user {
+        turnOrdinal += 1
+        turnTrace = nil
+      }
+      let reasoning = message.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let hasBody = !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || message.attachment != nil
+      if message.role == .assistant, !reasoning.isEmpty {
+        if let index = turnTrace, case .reasoning(var existing) = items[index] {
+          existing.text += "\n\n" + reasoning
+          existing.segments += 1
+          existing.live = false
+          items[index] = .reasoning(existing)
+        } else {
+          items.append(.reasoning(ReasoningTrace(
+            id: message.id,
+            text: reasoning,
+            segments: 1,
+            live: false,
+            turnOrdinal: turnOrdinal)))
+          turnTrace = items.count - 1
+        }
+        if hasBody { items.append(.message(message)) }
+        continue
+      }
+      if message.role == .assistant, !hasBody { continue }
+      // A new user/system row opens the next turn: its traces get their own row.
+      if message.role == .system { turnTrace = nil }
+      if message.role == .tool,
+         case .toolGroup(var group) = items.last, group[0].text == message.text {
         group.append(message)
         items[items.count - 1] = .toolGroup(group)
         continue
       }
-      if message.role == .tool, case .message(let previous) = items.last, previous.role == .tool, previous.text == message.text {
+      if message.role == .tool,
+         case .message(let previous) = items.last,
+         previous.role == .tool, previous.text == message.text {
         items[items.count - 1] = .toolGroup([previous, message])
         continue
       }
       items.append(.message(message))
+    }
+    if activeTurnRunning,
+       let index = items.lastIndex(where: { item in
+         guard case .reasoning(let trace) = item else { return false }
+         return trace.turnOrdinal == turnOrdinal
+       }),
+       case .reasoning(var trace) = items[index] {
+      trace.live = true
+      items[index] = .reasoning(trace)
     }
     return items
   }
@@ -398,7 +690,8 @@ private struct PendingSteeringBubble: View {
           .padding(.top, 3)
         Text(item.displayText)
           .textSelection(.enabled)
-          .font(.system(.body, design: .rounded))
+          .font(DSHType.body)
+          .lineSpacing(4)
           .foregroundStyle(DSHTheme.ink)
       }
       .padding(.horizontal, DSHSpace.s4).padding(.vertical, DSHSpace.s3)
@@ -408,41 +701,50 @@ private struct PendingSteeringBubble: View {
   }
 }
 
-/// Merged view of consecutive same-tool calls: one header with a count and a
-/// live (pulsing) dot while any member is still running; expanding lists the
-/// individual calls with their own inline detail.
-private struct ToolGroupRow: View {
+/// Consecutive same-tool calls share one compact execution status. Expanding
+/// it reveals instruction rows only; each instruction owns its result details.
+struct ToolGroupRow: View {
   @EnvironmentObject var harness: HarnessController
   let messages: [HarnessController.Message]
-  @State private var expanded = false
+  @State private var expanded: Bool
+
+  init(
+    messages: [HarnessController.Message],
+    initiallyExpanded: Bool = false
+  ) {
+    self.messages = messages
+    _expanded = State(initialValue: initiallyExpanded)
+  }
+
   private var activities: [HarnessController.ToolActivity] {
     messages.compactMap { message in
       guard let id = message.toolCallId else { return nil }
       return harness.displayedTools.last { $0.callId == id }
     }
   }
-  private var anyRunning: Bool { activities.contains { $0.state == .running } }
-  private var anyFailed: Bool { activities.contains { $0.state == .failed } }
+  private var summary: DSHToolGroupStatusSummary? {
+    DSHToolGroupStatus.summary(for: activities)
+  }
+  private var instructions: [DSHToolInstruction] {
+    DSHToolInstructionFlatten.instructions(from: activities)
+  }
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
-      Button(action: { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }) {
-        HStack(spacing: 7) {
-          ToolStateDot(color: anyRunning ? DSHTheme.warm : anyFailed ? Color.red.opacity(0.75) : DSHTheme.accent, pulsing: anyRunning)
-          Text("\(messages[0].text) ×\(messages.count)")
-            .font(.system(size: 12.5, design: .monospaced)).foregroundStyle(DSHTheme.ink)
-          Text(anyRunning ? "运行中…" : anyFailed ? "有失败" : "完成")
-            .font(.system(size: 11, design: .monospaced)).foregroundStyle(anyRunning ? DSHTheme.warm : anyFailed ? DSHTheme.coral : DSHTheme.inkFaint)
-          Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
-            .foregroundStyle(DSHTheme.inkFaint).rotationEffect(.degrees(expanded ? 90 : 0))
+      ToolStatusHeader(
+        title: summary?.detail,
+        running: summary?.running == true,
+        failed: summary?.failed == true,
+        expanded: expanded,
+        onToggle: { expanded.toggle() })
+      if expanded, !instructions.isEmpty {
+        AdaptiveToolDetails {
+          VStack(alignment: .leading, spacing: DSHSpace.s2) {
+            ForEach(instructions) { instruction in
+              ToolInstructionRow(instruction: instruction)
+            }
+          }
         }
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      if expanded {
-        VStack(alignment: .leading, spacing: 6) {
-          ForEach(messages) { message in ToolCallRow(message: message) }
-        }
-        .padding(.leading, 13)
+        .padding(.leading, DSHSpace.s4)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -544,15 +846,21 @@ private struct ConversationEmptyState: View {
   }
 }
 
-/// A model's reasoning/thinking trace, Claude Code / Codex-style: while the
-/// thought is still streaming (`live`) the row shows the latest line rolling
-/// by in dim italic; once done it collapses to a bare "✻ 思考过程" one-liner
-/// with no preview — completed thinking is chrome, not content. Click to
-/// expand the full trace either way.
+/// A model's reasoning/thinking trace, Codex-style: while the turn is active,
+/// this remains one collapsed status row whose preview follows the latest
+/// thought, answer, or tool action. Once done it becomes a bare
+/// "✻ 思考过程" row. Click to expand the full trace at any time.
 private struct ReasoningBlock: View {
   let text: String
+  /// How many step traces this run aggregates — one turn emits a trace per step,
+  /// and the label says so instead of repeating an identical row per step.
+  var segments: Int = 1
   var live: Bool = false
+  var liveStatus: String?
   @State private var expanded = false
+  @State private var hovering = false
+  @State private var pulse = false
+  @State private var expandedContentHeight: CGFloat?
   private var latestLine: String {
     var end = text.endIndex
     while end > text.startIndex, text[text.index(before: end)].isNewline {
@@ -564,29 +872,107 @@ private struct ReasoningBlock: View {
     }
     return String(text[text.index(after: newline)..<end])
   }
+  /// Traces are free-form prose; blank lines separate steps, so render them as
+  /// paragraphs instead of one undifferentiated wall of text.
+  private var paragraphs: [String] {
+    text.components(separatedBy: "\n\n")
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+  }
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
+    VStack(alignment: .leading, spacing: DSHSpace.s2) {
       Button(action: { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }) {
         HStack(spacing: 6) {
-          Text("✻").font(.system(size: 11))
-          Text(live ? "思考中" : "思考过程").font(.system(size: 12)).italic()
-          if live, !expanded, !latestLine.isEmpty {
-            Text(latestLine).font(.system(size: 12)).italic().lineLimit(1).opacity(0.7)
+          Text("✻")
+            .font(DSHType.caption)
+            .opacity(live && pulse ? 0.42 : 1)
+          Text(live ? "处理中" : "思考过程")
+            .font(DSHType.label)
+          if segments > 1 {
+            Text("\(segments) 段")
+              .font(.system(size: 10, weight: .semibold))
+              .foregroundStyle(DSHTheme.inkFaint)
+              .padding(.horizontal, 5).padding(.vertical, 1)
+              .background(
+                DSHTheme.surfaceTint2,
+                in: RoundedRectangle(cornerRadius: 4, style: .continuous))
           }
-          Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)).rotationEffect(.degrees(expanded ? 90 : 0))
+          if live, !expanded, let status = liveStatus ?? nonEmpty(latestLine) {
+            Text(status)
+              .font(DSHType.caption).italic().lineLimit(1)
+              .foregroundStyle(DSHTheme.inkFaint)
+              .contentTransition(.opacity)
+              .animation(.easeInOut(duration: 0.16), value: status)
+          }
+          Image(systemName: "chevron.right")
+            .font(.system(size: 9, weight: .semibold))
+            .rotationEffect(.degrees(expanded ? 90 : 0))
+            .foregroundStyle(DSHTheme.inkFaint)
         }
-        .foregroundStyle(DSHTheme.inkFaint)
+        .foregroundStyle(hovering || expanded ? DSHTheme.inkSoft : DSHTheme.inkFaint)
+        .padding(.horizontal, DSHSpace.s2 + 1)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous)
+              .fill(hovering || expanded ? DSHTheme.surfaceTint2 : DSHTheme.surfaceTint))
         .contentShape(Rectangle())
       }.buttonStyle(.plain)
+      .onHover { hovering = $0 }
+      .onAppear { pulse = live }
+      .onChange(of: live) { _, active in pulse = active }
+      .animation(
+        live ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default,
+        value: pulse)
+      .accessibilityLabel(expanded ? "收起思考过程" : "展开思考过程")
       if expanded {
-        Text(text)
-          .font(.system(size: 12)).italic().foregroundStyle(DSHTheme.inkFaint)
-          .textSelection(.enabled)
-          .frame(maxWidth: 760, alignment: .leading)
-          .padding(.leading, 17)
+        ScrollViewReader { proxy in
+          ScrollView {
+            VStack(alignment: .leading, spacing: DSHSpace.s2) {
+              ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                Text(paragraph)
+                  .font(DSHType.body)
+                  .lineSpacing(6)
+                  .foregroundStyle(DSHTheme.inkSoft)
+                  .textSelection(.enabled)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+              }
+              Color.clear
+                .frame(height: 1)
+                .id("reasoning-expanded-bottom")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { geometry in
+              geometry.size.height
+            } action: { height in
+              expandedContentHeight = height
+            }
+          }
+          .dshThinScrollers()
+          .frame(height: DSHReasoningLayout.expandedHeight(measured: expandedContentHeight))
+          .onAppear {
+            proxy.scrollTo("reasoning-expanded-bottom", anchor: .bottom)
+          }
+        }
+        .padding(.vertical, DSHSpace.s2)
+        .padding(.leading, DSHSpace.s4)
+        .padding(.trailing, DSHSpace.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+          RoundedRectangle(cornerRadius: DSHRadius.md, style: .continuous)
+            .fill(DSHTheme.surfaceTint))
+        .overlay(alignment: .leading) {
+          RoundedRectangle(cornerRadius: 1, style: .continuous)
+            .fill(DSHTheme.accentSoft)
+            .frame(width: 2)
+            .padding(.vertical, DSHSpace.s2)
+        }
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func nonEmpty(_ value: String) -> String? {
+    value.isEmpty ? nil : value
   }
 }
 
@@ -616,7 +1002,10 @@ private struct MessageBubble: View {
           }
           VStack(alignment: .leading, spacing: 7) {
             Text(message.text)
-              .textSelection(.enabled).font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.ink)
+              .textSelection(.enabled)
+              .font(DSHType.bodyLarge)
+              .lineSpacing(5)
+              .foregroundStyle(DSHTheme.ink)
             if let attachment = message.attachment { AttachmentPreview(ref: attachment, sessionID: harness.displayedAttachmentSessionID) }
           }
           .padding(.horizontal, DSHSpace.s4).padding(.vertical, DSHSpace.s3)
@@ -634,17 +1023,15 @@ private struct MessageBubble: View {
           // Empty text + reasoning = the ✻ thinking row above already says
           // what's happening; a second "正在思考…" line doubles the signal.
           if message.reasoning == nil, message.attachment == nil {
-            Text("正在思考…").font(.system(.body, design: .rounded)).foregroundStyle(DSHTheme.inkFaint)
+            Text("正在思考…")
+              .font(DSHType.bodyLarge)
+              .foregroundStyle(DSHTheme.inkFaint)
           }
         } else {
           if message.hostMessageId == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
-            Text(message.text)
-              .font(.system(.body, design: .rounded))
-              .foregroundStyle(DSHTheme.ink)
-              .textSelection(.enabled)
-              .frame(maxWidth: 760, alignment: .leading)
+            StreamingAssistantText(text: message.text)
           } else {
-            MarkdownText(text: message.text).frame(maxWidth: 760, alignment: .leading)
+            MarkdownText(text: message.text).frame(maxWidth: .infinity, alignment: .leading)
           }
         }
         if let attachment = message.attachment { AttachmentPreview(ref: attachment, sessionID: harness.displayedAttachmentSessionID) }
@@ -661,7 +1048,10 @@ private struct MessageBubble: View {
     case .system:
       HStack(spacing: 7) {
         Image(systemName: "info.circle").font(.system(size: 11))
-        Text(message.text).textSelection(.enabled).font(.system(size: 12, design: .rounded))
+        Text(message.text)
+          .textSelection(.enabled)
+          .font(DSHType.body)
+          .lineSpacing(3)
       }
       .foregroundStyle(DSHTheme.inkFaint)
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -671,118 +1061,35 @@ private struct MessageBubble: View {
   }
 }
 
-/// Claude Code-style inline tool row: a state dot plus `Name(argument)` in
-/// monospace, a dim `⎿ result` summary, and click-to-expand inline detail —
-/// terminal output as a folded code block, file edits as real ± diff lines
-/// (diff cards start expanded, CC-style: the change IS the content there).
+/// One instruction disclosure. Its result is rendered only after the user
+/// expands that instruction.
 struct ToolCallRow: View {
   @EnvironmentObject var harness: HarnessController
   let message: HarnessController.Message
   let initiallyExpanded: Bool?
-  /// nil until the user toggles; the default is open only for diff cards.
-  @State private var userToggled: Bool?
-  private var activity: HarnessController.ToolActivity? {
-    guard let id = message.toolCallId else { return nil }
-    return harness.displayedTools.last { $0.callId == id }
+  private var activities: [HarnessController.ToolActivity] {
+    guard let id = message.toolCallId else { return [] }
+    return harness.displayedTools.last { $0.callId == id }.map { [$0] } ?? []
   }
-  private var isDiffCard: Bool { activity?.presentation?.card == "diff" }
-  private var expanded: Bool { userToggled ?? initiallyExpanded ?? isDiffCard }
+  private var instructions: [DSHToolInstruction] {
+    DSHToolInstructionFlatten.instructions(from: activities)
+  }
 
   init(message: HarnessController.Message, initiallyExpanded: Bool? = nil) {
     self.message = message
     self.initiallyExpanded = initiallyExpanded
   }
 
-  var body: some View {
-    VStack(alignment: .leading, spacing: 3) {
-      HStack(alignment: .top, spacing: DSHSpace.s2) {
-        Button(action: { userToggled = !expanded }) {
-          HStack(spacing: 7) {
-            ToolStateDot(color: dotColor, pulsing: activity?.state == .running)
-            Text(headline).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(DSHTheme.ink).lineLimit(1)
-            Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
-              .foregroundStyle(DSHTheme.inkFaint).rotationEffect(.degrees(expanded ? 90 : 0))
-          }
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        Spacer(minLength: DSHSpace.s1)
-        if let activity {
-          Button(action: { harness.toolDetail(activity) }) {
-            Image(systemName: "sidebar.right")
-          }
-          .buttonStyle(.dshGhost)
-          .help("在工作台查看工具详情")
-        }
-      }
-      if !expanded, let detail {
-        HStack(alignment: .top, spacing: 6) {
-          Text("⎿").font(.system(size: 11, design: .monospaced))
-          Text(detail).font(.system(size: 11.5, design: .monospaced)).lineLimit(2).multilineTextAlignment(.leading)
-        }
-        .foregroundStyle(DSHTheme.inkFaint)
-        .padding(.leading, 13)
-      }
-      if expanded, let activity {
-        ToolPresentationContent(tool: activity, compact: true)
-          .padding(.leading, 13)
-          .frame(maxWidth: 760, alignment: .leading)
-      }
+  @ViewBuilder var body: some View {
+    if instructions.count > 1 {
+      ToolGroupRow(
+        messages: [message],
+        initiallyExpanded: initiallyExpanded ?? false)
+    } else if let instruction = instructions.first {
+      ToolInstructionRow(
+        instruction: instruction,
+        initiallyExpanded: initiallyExpanded)
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  /// `Name(argument)` — the argument is the presentation's own title when the
-  /// adapter supplied one (command line, file path, search query), else bare name.
-  private var headline: String {
-    let name = activity?.name ?? message.text
-    let argument = activity?.presentation?.title ?? activity?.presentation?.path
-    if let argument, !argument.isEmpty, argument != name { return "\(name)(\(argument))" }
-    return name
-  }
-  /// Collapsed summary: first output line plus a "+N 行" tail when more
-  /// follows; the running placeholder while in flight.
-  private var detail: String? {
-    guard let activity else { return nil }
-    if activity.state == .running { return "运行中…" }
-    let lines = activity.output.split(separator: "\n", omittingEmptySubsequences: true)
-    if let first = lines.first.map(String.init), !first.isEmpty, first != "工具已完成" {
-      return lines.count > 1 ? "\(first) … +\(lines.count - 1) 行" : first
-    }
-    if activity.state == .failed { return activity.summary }
-    return nil
-  }
-  private var dotColor: Color {
-    switch activity?.state {
-    case .running: DSHTheme.warm
-    case .failed: Color.red.opacity(0.75)
-    default: DSHTheme.accent
-    }
-  }
-}
-
-/// The tool row's state dot; a running tool pulses (opacity breathing plus a
-/// soft expanding halo) so "in progress" is visible motion, not just amber.
-private struct ToolStateDot: View {
-  let color: Color
-  let pulsing: Bool
-  @State private var pulse = false
-  var body: some View {
-    ZStack {
-      if pulsing {
-        Circle().fill(color.opacity(0.35))
-          .frame(width: 13, height: 13)
-          .scaleEffect(pulse ? 1.0 : 0.4)
-          .opacity(pulse ? 0 : 0.9)
-      }
-      Circle().fill(color)
-        .frame(width: 7, height: 7)
-        .opacity(pulsing && pulse ? 0.55 : 1)
-    }
-    .frame(width: 13, height: 13)
-    .animation(pulsing ? .easeInOut(duration: 0.9).repeatForever(autoreverses: false) : .default, value: pulse)
-    .onAppear { if pulsing { pulse = true } }
-    .onChange(of: pulsing) { _, active in pulse = active }
   }
 }
 

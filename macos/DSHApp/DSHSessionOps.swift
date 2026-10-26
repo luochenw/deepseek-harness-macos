@@ -4,14 +4,6 @@ import Foundation
 // Session operations: archived-session listing, session-log ZIP export, and
 // Host preset management. Views live in SessionOpsViews.swift.
 
-extension DSHHostClient {
-  /// Full workspace.list snapshot INCLUDING the registry-global archive set.
-  /// `workspaces()` (DSHHostProtocol.swift) keeps returning `items` only;
-  /// this method exists so the archive surface can read `archivedSessionIds`
-  /// without disturbing existing call sites.
-  func workspaceSnapshot() async throws -> DSHWorkspaceList { try await call("workspace.list", payload: EmptyPayload(), as: DSHWorkspaceList.self) }
-}
-
 extension HarnessController {
   // MARK: - Archived sessions
 
@@ -25,7 +17,7 @@ extension HarnessController {
     var id: String { sessionId }
   }
 
-  /// Archived ids come from workspace.list's registry-global archive set;
+  /// Archived ids come from workspace/follow's registry-global archive set;
   /// display metadata joins against session.list, which returns every
   /// persisted session — hiding archived rows is a grouping-surface concern,
   /// not a session.list one (workspace.d.ts: "Archived sessions stay in their
@@ -35,9 +27,9 @@ extension HarnessController {
   func loadArchivedSessions() async -> [ArchivedSessionRow] {
     guard let hostClient else { return [] }
     do {
-      async let snapshot = hostClient.workspaceSnapshot()
       async let summaries = hostClient.sessions()
-      let (list, sessions) = try await (snapshot, summaries)
+      let list = hostWorkspaceSnapshot
+      let sessions = try await summaries
       let byId = Dictionary(sessions.map { ($0.sessionId, $0) }, uniquingKeysWith: { first, _ in first })
       return list.archivedSessionIds.map { id in
         let summary = byId[id]
@@ -80,7 +72,7 @@ extension HarnessController {
     status = "正在导出会话日志…"
     Task {
       do {
-        let (temporary, response) = try await URLSession.shared.download(for: request)
+        let (temporary, response) = try await hostClient.authenticatedDownload(request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
           try? FileManager.default.removeItem(at: temporary)
           throw URLError(.badServerResponse)

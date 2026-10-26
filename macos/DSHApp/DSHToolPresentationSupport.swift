@@ -60,6 +60,507 @@ struct DSHToolResultPayload: Equatable {
   let output: String
   let isError: Bool
   let errorSummary: String?
+  let imageAttachments: [DSHAttachmentRef]
+}
+
+struct DSHToolChildActivity: Identifiable {
+  let id = UUID()
+  let callId: String
+  let name: String
+  let title: String
+  let arguments: String
+  var state: HarnessController.ToolActivity.State
+  var output: String
+  var imageAttachments: [DSHAttachmentRef] = []
+}
+
+struct DSHSubcallPayload {
+  let rootCallId: String
+  let callId: String
+  let name: String
+  let title: String
+  let arguments: String
+}
+
+enum DSHToolArguments {
+  static func live(_ value: Any?) -> String? {
+    if let text = value as? String {
+      return text.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+    }
+    guard let value, JSONSerialization.isValidJSONObject(value),
+          let data = try? JSONSerialization.data(
+            withJSONObject: value,
+            options: [.prettyPrinted, .sortedKeys])
+    else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+
+  static func history(_ value: DSHJSONValue?) -> String? {
+    guard let value else { return nil }
+    if case .string(let text) = value {
+      return text.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+    }
+    let any = anyValue(value)
+    guard JSONSerialization.isValidJSONObject(any),
+          let data = try? JSONSerialization.data(
+            withJSONObject: any,
+            options: [.prettyPrinted, .sortedKeys])
+    else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+
+  private static func anyValue(_ value: DSHJSONValue) -> Any {
+    switch value {
+    case .string(let value): value
+    case .number(let value): value
+    case .bool(let value): value
+    case .object(let value): value.mapValues(anyValue)
+    case .array(let value): value.map(anyValue)
+    case .null: NSNull()
+    }
+  }
+}
+
+enum DSHSubcallDecoder {
+  static func live(from data: [String: Any]) -> DSHSubcallPayload? {
+    guard let rootCallId = callID(data["rootCallId"]) ?? callID(data["parentCallId"]),
+          let callId = callID(data["subCallId"]),
+          let name = data["name"] as? String else { return nil }
+    let object = data["arguments"] as? [String: Any]
+    let rawArguments = data["arguments"] as? String
+    let parsed = object ?? rawArguments.flatMap(parseObject)
+    return DSHSubcallPayload(
+      rootCallId: rootCallId,
+      callId: callId,
+      name: name,
+      title: title(name: name, arguments: parsed, fallback: rawArguments),
+      arguments: prettyJSON(object ?? parsed) ?? rawArguments ?? "")
+  }
+
+  static func history(from data: [String: DSHJSONValue]) -> DSHSubcallPayload? {
+    guard let rootCallId = data["rootCallId"]?.string ?? data["parentCallId"]?.string,
+          let callId = data["subCallId"]?.string,
+          let name = data["name"]?.string else { return nil }
+    let object = data["arguments"]?.object?.mapValues(anyValue)
+    let rawArguments = data["arguments"]?.string
+    let parsed = object ?? rawArguments.flatMap(parseObject)
+    return DSHSubcallPayload(
+      rootCallId: rootCallId,
+      callId: callId,
+      name: name,
+      title: title(name: name, arguments: parsed, fallback: rawArguments),
+      arguments: prettyJSON(object ?? parsed) ?? rawArguments ?? "")
+  }
+
+  static func output(from value: Any?) -> String {
+    DSHToolContentText.live(value)
+  }
+
+  static func output(from value: DSHJSONValue?) -> String {
+    DSHToolContentText.history(value)
+  }
+
+  static func instructionTitle(name: String, arguments: String) -> String? {
+    resolvedTitle(
+      name: name,
+      arguments: parseObject(arguments),
+      fallback: arguments)
+  }
+
+  private static func callID(_ value: Any?) -> String? {
+    (value as? String).flatMap { $0.isEmpty ? nil : $0 }
+  }
+
+  private static func title(
+    name: String,
+    arguments: [String: Any]?,
+    fallback: String?
+  ) -> String {
+    resolvedTitle(name: name, arguments: arguments, fallback: fallback) ?? name
+  }
+
+  private static func resolvedTitle(
+    name: String,
+    arguments: [String: Any]?,
+    fallback: String?
+  ) -> String? {
+    guard let arguments else {
+      return meaningfulFallback(fallback)
+    }
+    switch name {
+    case "bash":
+      return (arguments["command"] as? String)?.nonEmpty
+    case "read", "write", "edit", "read_image":
+      return ((arguments["file_path"] as? String)
+        ?? (arguments["path"] as? String))?.nonEmpty
+    case "glob":
+      return (arguments["pattern"] as? String)?.nonEmpty
+    case "grep":
+      let pattern = arguments["pattern"] as? String ?? ""
+      let path = arguments["path"] as? String
+      return ([pattern.nonEmpty, path].compactMap { $0 }).joined(separator: " · ").nonEmpty
+    case "web_fetch":
+      return (arguments["url"] as? String)?.nonEmpty
+    case "web_search":
+      return (arguments["queries"] as? [String])?
+        .filter { !$0.isEmpty }
+        .joined(separator: " · ")
+        .nonEmpty
+    case "todo_write":
+      return "\((arguments["todos"] as? [Any])?.count ?? 0) 项任务"
+    case "skill":
+      return (arguments["name"] as? String)?.nonEmpty
+    case "apply_patch":
+      return patchInstruction(from: arguments["patch"] as? String)
+    default:
+      return genericInstruction(name: name, arguments: arguments)
+        ?? meaningfulFallback(fallback)
+    }
+  }
+
+  private static func genericInstruction(
+    name: String,
+    arguments: [String: Any]
+  ) -> String? {
+    let preferredKeys = [
+      "description", "prompt", "command", "file_path", "path",
+      "pattern", "query", "queries", "url", "name", "label", "action",
+    ]
+    let remainingKeys = arguments.keys
+      .filter { !preferredKeys.contains($0) && !["code", "content", "output"].contains($0) }
+      .sorted()
+
+    for key in preferredKeys + remainingKeys {
+      guard let value = argumentText(arguments[key]) else { continue }
+      if ["description", "prompt", "action"].contains(key) {
+        return value
+      }
+      return "\(name) · \(value)"
+    }
+    return nil
+  }
+
+  private static func argumentText(_ value: Any?) -> String? {
+    switch value {
+    case let text as String:
+      return text.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+    case let values as [String]:
+      return values.filter { !$0.isEmpty }.joined(separator: " · ").nonEmpty
+    case let values as [Any]:
+      return values.compactMap(argumentText).joined(separator: " · ").nonEmpty
+    default:
+      return nil
+    }
+  }
+
+  private static func meaningfulFallback(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let trimmed = trimmed.nonEmpty else { return nil }
+    if ["{}", "[]", "null", "undefined"].contains(trimmed.lowercased()) {
+      return nil
+    }
+    if trimmed.hasPrefix("{") || trimmed.hasPrefix("["),
+       (try? JSONSerialization.jsonObject(with: Data(trimmed.utf8))) != nil {
+      return nil
+    }
+    return String(trimmed.prefix(180))
+  }
+
+  private static func patchInstruction(from patch: String?) -> String? {
+    guard let patch else { return nil }
+    for line in patch.split(whereSeparator: \.isNewline) {
+      for prefix in ["*** Update File: ", "*** Add File: ", "*** Delete File: "] {
+        if line.hasPrefix(prefix) {
+          return String(line.dropFirst(prefix.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty
+        }
+      }
+    }
+    return nil
+  }
+
+  private static func parseObject(_ value: String) -> [String: Any]? {
+    guard let data = value.data(using: .utf8) else { return nil }
+    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+  }
+
+  private static func prettyJSON(_ value: [String: Any]?) -> String? {
+    guard let value,
+          let data = try? JSONSerialization.data(
+            withJSONObject: value,
+            options: [.prettyPrinted, .sortedKeys]) else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+
+  private static func anyValue(_ value: DSHJSONValue) -> Any {
+    switch value {
+    case .string(let value): value
+    case .number(let value): value
+    case .bool(let value): value
+    case .object(let value): value.mapValues(anyValue)
+    case .array(let value): value.map(anyValue)
+    case .null: NSNull()
+    }
+  }
+}
+
+extension HarnessController.ToolActivity {
+  mutating func startChild(_ subcall: DSHSubcallPayload) {
+    if let index = children.lastIndex(where: { $0.callId == subcall.callId }) {
+      children[index] = DSHToolChildActivity(
+        callId: subcall.callId,
+        name: subcall.name,
+        title: subcall.title,
+        arguments: subcall.arguments,
+        state: .running,
+        output: "")
+    } else {
+      children.append(DSHToolChildActivity(
+        callId: subcall.callId,
+        name: subcall.name,
+        title: subcall.title,
+        arguments: subcall.arguments,
+        state: .running,
+        output: ""))
+    }
+  }
+
+  mutating func finishChild(
+    _ subcall: DSHSubcallPayload,
+    output: String,
+    failed: Bool,
+    imageAttachments: [DSHAttachmentRef] = []
+  ) {
+    let state: State = failed ? .failed : .succeeded
+    if let index = children.lastIndex(where: { $0.callId == subcall.callId }) {
+      children[index].state = state
+      children[index].output = output
+      children[index].imageAttachments = imageAttachments
+    } else {
+      children.append(DSHToolChildActivity(
+        callId: subcall.callId,
+        name: subcall.name,
+        title: subcall.title,
+        arguments: subcall.arguments,
+        state: state,
+        output: output,
+        imageAttachments: imageAttachments))
+    }
+  }
+}
+
+enum DSHToolActivityMerge {
+  static func preservingDetails(
+    incoming: [HarnessController.ToolActivity],
+    previous: [HarnessController.ToolActivity]
+  ) -> [HarnessController.ToolActivity] {
+    incoming.map { tool in
+      guard let old = previous.last(where: { $0.callId == tool.callId }) else { return tool }
+      return merging(incoming: tool, previous: old)
+    }
+  }
+
+  static func merging(
+    incoming: HarnessController.ToolActivity,
+    previous: HarnessController.ToolActivity
+  ) -> HarnessController.ToolActivity {
+    var tool = incoming
+    if tool.presentation == nil { tool.presentation = previous.presentation }
+    if tool.children.isEmpty { tool.children = previous.children }
+    if tool.imageAttachments.isEmpty { tool.imageAttachments = previous.imageAttachments }
+    if tool.arguments?.nonEmpty == nil { tool.arguments = previous.arguments }
+    if tool.output.isEmpty || tool.output == "工具已完成" {
+      tool.output = previous.output.nonEmpty ?? tool.output
+    }
+    if tool.summary == "工具调用" || tool.summary == "正在运行" {
+      tool.summary = previous.summary
+    }
+    return tool
+  }
+}
+
+struct DSHToolGroupStatusSummary: Equatable {
+  let detail: String?
+  let running: Bool
+  let failed: Bool
+}
+
+enum DSHToolGroupStatus {
+  static func summary(
+    for activities: [HarnessController.ToolActivity]
+  ) -> DSHToolGroupStatusSummary? {
+    guard let latest = activities.last else { return nil }
+    return DSHToolGroupStatusSummary(
+      detail: instructionTitle(for: latest),
+      running: activities.contains { $0.state == .running },
+      failed: activities.contains { $0.state == .failed })
+  }
+
+  static func instructionTitle(for activity: HarnessController.ToolActivity) -> String? {
+    let presentation = activity.presentation
+    let directCandidates = [
+      activity.children.last.flatMap { instructionTitle(for: $0) },
+      presentation?.title,
+      presentation?.path,
+    ]
+    for candidate in directCandidates {
+      if let title = meaningfulText(candidate),
+         title.caseInsensitiveCompare(activity.name) != .orderedSame {
+        return title
+      }
+    }
+
+    if presentation?.card != "code",
+       let description = meaningfulText(presentation?.description) {
+      return description
+    }
+
+    if let summary = meaningfulText(activity.summary),
+       !["工具调用", "正在运行", "工具已完成"].contains(summary) {
+      return summary
+    }
+
+    if let arguments = activity.arguments,
+       let title = DSHSubcallDecoder.instructionTitle(
+         name: activity.name,
+         arguments: arguments) {
+      return title
+    }
+
+    if presentation?.card == "code" {
+      return codeInstruction(from: presentation?.description)
+    }
+    return nil
+  }
+
+  static func instructionTitle(for child: DSHToolChildActivity) -> String? {
+    if let title = meaningfulText(child.title),
+       title.caseInsensitiveCompare(child.name) != .orderedSame {
+      return title
+    }
+    return DSHSubcallDecoder.instructionTitle(
+      name: child.name,
+      arguments: child.arguments)
+  }
+
+  private static func meaningfulText(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    if ["{}", "[]", "null", "undefined"].contains(trimmed.lowercased()) {
+      return nil
+    }
+    if trimmed.hasPrefix("{") || trimmed.hasPrefix("["),
+       (try? JSONSerialization.jsonObject(with: Data(trimmed.utf8))) != nil {
+      return nil
+    }
+    let firstLine = trimmed.split(whereSeparator: \.isNewline)
+      .first
+      .map(String.init)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let firstLine, !firstLine.isEmpty else { return nil }
+    return String(firstLine.prefix(180))
+  }
+
+  private static func codeInstruction(from source: String?) -> String? {
+    guard let source else { return nil }
+    let pattern = #"tools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\{\s*(?:command|file_path|path|pattern|url)\s*:\s*["']([^"']+)["']"#
+    guard let expression = try? NSRegularExpression(
+      pattern: pattern,
+      options: [.dotMatchesLineSeparators]),
+          let match = expression.firstMatch(
+            in: source,
+            range: NSRange(source.startIndex..., in: source)),
+          let nameRange = Range(match.range(at: 1), in: source),
+          let argumentRange = Range(match.range(at: 2), in: source)
+    else { return nil }
+    let name = String(source[nameRange])
+    let argument = String(source[argumentRange])
+    return "\(name) · \(argument)"
+  }
+}
+
+struct DSHToolInstruction: Identifiable {
+  enum Source {
+    case activity(HarnessController.ToolActivity)
+    case child(DSHToolChildActivity)
+  }
+
+  let id: String
+  let title: String
+  let state: HarnessController.ToolActivity.State
+  let output: String
+  let source: Source
+}
+
+enum DSHToolInstructionFlatten {
+  static func instructions(
+    from activities: [HarnessController.ToolActivity]
+  ) -> [DSHToolInstruction] {
+    var instructions: [DSHToolInstruction] = []
+    var seen = Set<String>()
+
+    for activity in activities {
+      if activity.children.isEmpty {
+        guard let title = DSHToolGroupStatus.instructionTitle(for: activity) else {
+          continue
+        }
+        let id = "activity:\(activity.callId)"
+        if seen.insert(id).inserted {
+          instructions.append(DSHToolInstruction(
+            id: id,
+            title: title,
+            state: activity.state,
+            output: activity.output,
+            source: .activity(activity)))
+        }
+        continue
+      }
+
+      let instructionCountBeforeChildren = instructions.count
+      for child in activity.children {
+        let id = "child:\(activity.callId):\(child.callId)"
+        guard seen.insert(id).inserted else { continue }
+        guard let title = DSHToolGroupStatus.instructionTitle(for: child) else {
+          continue
+        }
+        instructions.append(DSHToolInstruction(
+          id: id,
+          title: title,
+          state: child.state,
+          output: child.output,
+          source: .child(child)))
+      }
+      if instructions.count == instructionCountBeforeChildren,
+         let title = DSHToolGroupStatus.instructionTitle(for: activity) {
+        let id = "activity:\(activity.callId)"
+        if seen.insert(id).inserted {
+          instructions.append(DSHToolInstruction(
+            id: id,
+            title: title,
+            state: activity.state,
+            output: activity.output,
+            source: .activity(activity)))
+        }
+      }
+    }
+    return instructions
+  }
+}
+
+enum DSHToolJobState {
+  static func resolve(_ status: String) -> HarnessController.ToolActivity.State {
+    switch status.lowercased() {
+    case "completed", "succeeded":
+      return .succeeded
+    case "failed", "killed", "cancelled", "canceled":
+      return .failed
+    default:
+      return .running
+    }
+  }
 }
 
 enum DSHToolContentText {
@@ -102,16 +603,24 @@ enum DSHToolContentText {
 enum DSHToolResultDecoder {
   static func live(from data: [String: Any]) -> DSHToolResultPayload? {
     if let message = data["message"] as? [String: Any],
-       let source = message["source"] as? [String: Any],
-       let callId = source["callId"] as? String,
-       let blocks = message["content"] as? [[String: Any]],
-       let result = blocks.first(where: { $0["type"] as? String == "tool-result" }) {
-      let content = result["content"] as? [[String: Any]] ?? []
+       let callId = (message["source"] as? [String: Any])?["callId"] as? String
+        ?? message["toolCallId"] as? String,
+       let blocks = message["content"] as? [[String: Any]] {
+      if let result = blocks.first(where: { $0["type"] as? String == "tool-result" }) {
+        let content = result["content"] as? [[String: Any]] ?? []
+        return DSHToolResultPayload(
+          callId: callId,
+          output: DSHToolContentText.live(content),
+          isError: (result["isError"] as? Bool ?? false) || data["error"] != nil,
+          errorSummary: errorSummary(data["error"]),
+          imageAttachments: DSHAttachmentRef.fromLiveContent(content))
+      }
       return DSHToolResultPayload(
         callId: callId,
-        output: DSHToolContentText.live(content),
-        isError: (result["isError"] as? Bool ?? false) || data["error"] != nil,
-        errorSummary: errorSummary(data["error"]))
+        output: DSHToolContentText.live(blocks),
+        isError: (message["isError"] as? Bool ?? false) || data["error"] != nil,
+        errorSummary: errorSummary(data["error"]),
+        imageAttachments: DSHAttachmentRef.fromLiveContent(blocks))
     }
 
     guard let callId = data["callId"] as? String else { return nil }
@@ -119,21 +628,30 @@ enum DSHToolResultDecoder {
       callId: callId,
       output: DSHToolContentText.live(data["result"]),
       isError: data["error"] != nil,
-      errorSummary: errorSummary(data["error"]))
+      errorSummary: errorSummary(data["error"]),
+      imageAttachments: [])
   }
 
   static func history(from data: [String: DSHJSONValue]) -> DSHToolResultPayload? {
     if let message = data["message"]?.object,
-       let source = message["source"]?.object,
-       let callId = source["callId"]?.string,
-       let blocks = message["content"]?.array,
-       let result = blocks.compactMap(\.object).first(where: { $0["type"]?.string == "tool-result" }) {
-      let content = result["content"]?.array ?? []
+       let callId = message["source"]?.object?["callId"]?.string
+        ?? message["toolCallId"]?.string,
+       let blocks = message["content"]?.array {
+      if let result = blocks.compactMap(\.object).first(where: { $0["type"]?.string == "tool-result" }) {
+        let content = result["content"]?.array ?? []
+        return DSHToolResultPayload(
+          callId: callId,
+          output: DSHToolContentText.history(.array(content)),
+          isError: historyBool(result["isError"]) || data["error"] != nil,
+          errorSummary: errorSummary(data["error"]),
+          imageAttachments: DSHAttachmentRef.fromHistoryContent(content))
+      }
       return DSHToolResultPayload(
         callId: callId,
-        output: DSHToolContentText.history(.array(content)),
-        isError: historyBool(result["isError"]) || data["error"] != nil,
-        errorSummary: errorSummary(data["error"]))
+        output: DSHToolContentText.history(.array(blocks)),
+        isError: historyBool(message["isError"]) || data["error"] != nil,
+        errorSummary: errorSummary(data["error"]),
+        imageAttachments: DSHAttachmentRef.fromHistoryContent(blocks))
     }
 
     guard let callId = data["callId"]?.string else { return nil }
@@ -141,7 +659,8 @@ enum DSHToolResultDecoder {
       callId: callId,
       output: DSHToolContentText.history(data["result"]),
       isError: data["error"] != nil,
-      errorSummary: errorSummary(data["error"]))
+      errorSummary: errorSummary(data["error"]),
+      imageAttachments: [])
   }
 
   private static func historyBool(_ value: DSHJSONValue?) -> Bool {
@@ -166,6 +685,47 @@ enum DSHToolResultDecoder {
 }
 
 extension HarnessController.ToolPresentation {
+  static func fromToolCall(name: String, arguments: Any?) -> Self? {
+    let object: [String: Any]?
+    if let arguments = arguments as? [String: Any] {
+      object = arguments
+    } else if let arguments = arguments as? String,
+              let data = arguments.data(using: .utf8) {
+      object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    } else {
+      object = nil
+    }
+    switch name {
+    case "run_code":
+      guard let code = object?["code"] as? String, !code.isEmpty else { return nil }
+      return from([
+        "card": "code",
+        "title": object?["description"] as? String ?? "run_code",
+        "description": code,
+        "lang": "typescript",
+      ])
+    case "read_image":
+      guard let path = ((object?["file_path"] as? String)
+        ?? (object?["path"] as? String))?.nonEmpty else { return nil }
+      return from([
+        "card": "image",
+        "title": path,
+        "path": path,
+      ])
+    default:
+      return nil
+    }
+  }
+
+  static func fromHistoryToolCall(name: String, arguments: DSHJSONValue?) -> Self? {
+    if let value = arguments?.string {
+      return fromToolCall(name: name, arguments: value)
+    }
+    guard let object = arguments?.object else { return nil }
+    let any = Dictionary(uniqueKeysWithValues: object.map { ($0.key, toolAnyValue($0.value)) })
+    return fromToolCall(name: name, arguments: any)
+  }
+
   static func fromEventView(_ eventView: [String: Any]?) -> Self? {
     guard let eventView else { return nil }
     var raw = (eventView["view"] as? [String: Any]) ?? eventView

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Dashboard card listing the session's available skills（skill.list →
+/// Dashboard card listing the session's available skills（skills/list →
 /// `harness.skills`）. A sibling of `NativeDashboard.swift`'s
 /// `TodoCard`/`JobCard`/`SubagentCard`/`WorkflowCard`: same icon+label
 /// header via `.dshSectionLabel()`, same `.dshCard(tint: DSHTheme.surface,

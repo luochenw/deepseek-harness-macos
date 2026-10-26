@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum MarkdownPresentation {
@@ -33,7 +34,7 @@ struct MarkdownText: View {
   private struct IdentifiedBlock: Identifiable { let id: Int; let block: Block }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: presentation == .document ? DSHSpace.s3 : 7) {
+    VStack(alignment: .leading, spacing: presentation == .document ? DSHSpace.s4 : 10) {
       ForEach(Self.parse(text)) { entry in
         blockView(entry.block)
       }
@@ -45,44 +46,61 @@ struct MarkdownText: View {
     case .paragraph(let content):
       Text(Self.inline(content))
         .font(paragraphFont).foregroundStyle(DSHTheme.ink)
+        .lineSpacing(presentation == .document ? 6 : 5)
         .textSelection(.enabled)
     case .heading(let level, let content, let anchor):
       Text(Self.inline(content))
         .font(headingFont(level))
         .foregroundStyle(DSHTheme.ink)
+        .lineSpacing(4)
         .textSelection(.enabled)
         .padding(.top, presentation == .document ? DSHSpace.s3 : 3)
         .id(anchor)
     case .code(let content):
       CollapsibleCodeBlock(content: content, collapsesLongContent: presentation == .transcript)
     case .bullet(let items):
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: 6) {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-          HStack(alignment: .top, spacing: 7) {
+          HStack(alignment: .top, spacing: 9) {
             if let task = Self.taskItem(item) {
               Image(systemName: task.checked ? "checkmark.square.fill" : "square")
                 .foregroundStyle(task.checked ? DSHTheme.accent : DSHTheme.inkFaint)
               Text(Self.inline(task.text)).foregroundStyle(DSHTheme.ink).textSelection(.enabled)
             } else {
-              Text("•").foregroundStyle(DSHTheme.inkSoft)
+              Image(systemName: "circle.fill")
+                .font(.system(size: 4.5))
+                .foregroundStyle(DSHTheme.inkSoft)
+                .padding(.top, 7)
               Text(Self.inline(item)).foregroundStyle(DSHTheme.ink).textSelection(.enabled)
             }
-          }.font(paragraphFont)
+          }
+          .font(paragraphFont)
+          .lineSpacing(5)
         }
       }
     case .numbered(let items):
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: 6) {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-          HStack(alignment: .top, spacing: 7) {
+          HStack(alignment: .top, spacing: 9) {
             Text(item.marker).foregroundStyle(DSHTheme.inkSoft).monospacedDigit()
             Text(Self.inline(item.text)).foregroundStyle(DSHTheme.ink).textSelection(.enabled)
-          }.font(paragraphFont)
+          }
+          .font(paragraphFont)
+          .lineSpacing(5)
         }
       }
     case .quote(let content):
       HStack(alignment: .top, spacing: 9) {
         RoundedRectangle(cornerRadius: 1.5).fill(DSHTheme.inkFaint.opacity(0.5)).frame(width: 3)
-        Text(Self.inline(content)).font(paragraphFont).foregroundStyle(DSHTheme.inkSoft).textSelection(.enabled)
+        Image(systemName: "quote.opening")
+          .font(.system(size: 10.5, weight: .semibold))
+          .foregroundStyle(DSHTheme.accent)
+          .padding(.top, 3)
+        Text(Self.inline(content))
+          .font(paragraphFont)
+          .foregroundStyle(DSHTheme.inkSoft)
+          .lineSpacing(5)
+          .textSelection(.enabled)
       }
     case .table(let rows):
       // Real grid, not monospaced pipes: cells split on `|`, first row is
@@ -94,36 +112,48 @@ struct MarkdownText: View {
           .map { $0.trimmingCharacters(in: .whitespaces) }
       }
       ScrollView(.horizontal) {
-        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
-          ForEach(Array(parsed.enumerated()), id: \.offset) { rowIndex, cells in
-            GridRow {
-              ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
-                Text(Self.inline(cell))
-                  .font(.system(size: 12.5, design: .rounded))
-                  .fontWeight(rowIndex == 0 ? .semibold : .regular)
-                  .foregroundStyle(rowIndex == 0 ? DSHTheme.ink : DSHTheme.inkSoft)
-                  .textSelection(.enabled)
+        VStack(alignment: .leading, spacing: DSHSpace.s2) {
+          Label("表格", systemImage: "tablecells")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(DSHTheme.inkFaint)
+          Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
+            ForEach(Array(parsed.enumerated()), id: \.offset) { rowIndex, cells in
+              GridRow {
+                ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                  Text(Self.inline(cell))
+                    .font(DSHType.body)
+                    .fontWeight(rowIndex == 0 ? .semibold : .regular)
+                    .foregroundStyle(rowIndex == 0 ? DSHTheme.ink : DSHTheme.inkSoft)
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+                }
               }
             }
           }
         }
       }
-      .padding(10)
-      .background(DSHTheme.surfaceTint, in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
+      .padding(12)
+      .background(DSHTheme.surfaceTint, in: RoundedRectangle(cornerRadius: DSHRadius.md, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: DSHRadius.md, style: .continuous)
+          .strokeBorder(DSHTheme.fieldStroke.opacity(0.34), lineWidth: 1)
+      }
     case .image(let alt, let path):
       markdownImage(alt: alt, path: path)
     }
   }
 
   private var paragraphFont: Font {
-    presentation == .document ? .system(size: 14, design: .rounded) : .system(.body, design: .rounded)
+    presentation == .document
+      ? .system(size: 15, weight: .regular)
+      : DSHType.bodyLarge
   }
 
   private func headingFont(_ level: Int) -> Font {
-    let transcriptSizes: [CGFloat] = [17, 15.5, 14.5, 13.5, 13, 13]
-    let documentSizes: [CGFloat] = [24, 19, 16, 14.5, 14, 14]
+    let transcriptSizes: [CGFloat] = [19, 17.5, 16, 15, 14.5, 14.5]
+    let documentSizes: [CGFloat] = [25, 20, 17, 15.5, 15, 15]
     let sizes = presentation == .document ? documentSizes : transcriptSizes
-    return .system(size: sizes[min(level, 6) - 1], weight: .semibold, design: .rounded)
+    return .system(size: sizes[min(level, 6) - 1], weight: .semibold)
   }
 
   @ViewBuilder private func markdownImage(alt: String, path: String) -> some View {
@@ -355,19 +385,51 @@ struct CollapsibleCodeBlock: View {
   var body: some View {
     let lines = content.components(separatedBy: "\n")
     let collapsible = collapsesLongContent && lines.count > Self.collapseThreshold
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 9) {
+      HStack(spacing: 7) {
+        Image(systemName: "chevron.left.forwardslash.chevron.right")
+          .font(.system(size: 10.5, weight: .semibold))
+          .foregroundStyle(DSHTheme.accent)
+        Text("代码")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(DSHTheme.inkSoft)
+        Spacer()
+        Text("\(lines.count) 行")
+          .font(.system(size: 10.5, design: .monospaced))
+          .foregroundStyle(DSHTheme.inkFaint)
+        Button(action: copy) {
+          Image(systemName: "doc.on.doc")
+            .font(.system(size: 10.5, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(DSHTheme.inkFaint)
+        .help("复制代码")
+      }
       Text(collapsible && !expanded ? lines.prefix(Self.previewLines).joined(separator: "\n") : content)
-        .font(.system(size: 12, design: .monospaced)).foregroundStyle(DSHTheme.ink)
+        .font(.system(size: 13, design: .monospaced))
+        .foregroundStyle(DSHTheme.ink)
+        .lineSpacing(3.5)
         .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
       if collapsible {
         Button(action: { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }) {
-          Text(expanded ? "收起" : "… 展开全部 \(lines.count) 行")
-            .font(.system(size: 11, design: .monospaced)).foregroundStyle(DSHTheme.accent)
+          Label(expanded ? "收起代码" : "展开全部 \(lines.count) 行", systemImage: expanded ? "chevron.up" : "chevron.down")
+            .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+            .foregroundStyle(DSHTheme.accent)
         }.buttonStyle(.plain)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(10)
-    .background(DSHTheme.surfaceTint, in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
+    .padding(12)
+    .background(DSHTheme.surfaceTint2, in: RoundedRectangle(cornerRadius: DSHRadius.md, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: DSHRadius.md, style: .continuous)
+        .strokeBorder(DSHTheme.fieldStroke.opacity(0.38), lineWidth: 1)
+    }
+  }
+
+  private func copy() {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(content, forType: .string)
   }
 }

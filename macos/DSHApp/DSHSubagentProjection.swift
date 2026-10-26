@@ -74,6 +74,12 @@ extension HarnessController {
     return subagentPresentationState.contexts[sessionID]?.tools ?? []
   }
 
+  var displayedIsLoadingHistory: Bool {
+    subagentTranscript?.isLoadingHistory
+      ?? displayedSession?.isLoadingHistory
+      ?? false
+  }
+
   var displayedTodos: [DSHTodoItem] {
     guard let sessionID = displayedSubagentSessionID else { return todos }
     return subagentPresentationState.contexts[sessionID]?.todos ?? []
@@ -204,7 +210,7 @@ extension HarnessController {
     return state.catalogGeneration == generation && state.catalogParentID == parentSessionID
   }
 
-  /// A workflow row first resolves the member through `subagent.list`.
+  /// A workflow row first resolves the member through `subagentCatalog`.
   /// Reuse the navigation generation so an old catalog cannot force the
   /// interface back to a root session after the user has navigated away.
   @discardableResult
@@ -285,45 +291,47 @@ extension HarnessController {
       let sequence = toolSequences[tool.callId, default: -1]
       guard sequence >= context.toolSequences[tool.callId, default: -1] else { continue }
       if let index = context.tools.lastIndex(where: { $0.callId == tool.callId }) {
-        context.tools[index] = tool
+        context.tools[index] = DSHToolActivityMerge.merging(
+          incoming: tool,
+          previous: context.tools[index])
       } else {
         context.tools.append(tool)
       }
       context.toolSequences[tool.callId] = sequence
     }
-    if let projections {
+    if let projections, let projectionSeq = projections.asOfSeq {
       if shouldApplySubagentProjectionBaseline(
         key: "todos",
         rawValue: projections.rawValues["todos"],
         typedValuePresent: projections.values.todos != nil,
-        seq: projections.asOfSeq,
+        seq: projectionSeq,
         context: context
       ) {
         if case .null? = projections.rawValues["todos"] { context.todos = [] }
         else { context.todos = projections.values.todos ?? [] }
-        context.projectionSequences["todos"] = projections.asOfSeq
+        context.projectionSequences["todos"] = projectionSeq
       }
       if shouldApplySubagentProjectionBaseline(
         key: "goal",
         rawValue: projections.rawValues["goal"],
         typedValuePresent: projections.values.goal != nil,
-        seq: projections.asOfSeq,
+        seq: projectionSeq,
         context: context
       ) {
         if case .null? = projections.rawValues["goal"] { context.goal = nil }
         else { context.goal = projections.values.goal }
-        context.projectionSequences["goal"] = projections.asOfSeq
+        context.projectionSequences["goal"] = projectionSeq
       }
       if shouldApplySubagentProjectionBaseline(
         key: "plan",
         rawValue: projections.rawValues["plan"],
         typedValuePresent: projections.values.plan != nil,
-        seq: projections.asOfSeq,
+        seq: projectionSeq,
         context: context
       ) {
         if case .null? = projections.rawValues["plan"] { context.planActive = false }
         else { context.planActive = projections.values.plan?.active ?? false }
-        context.projectionSequences["plan"] = projections.asOfSeq
+        context.projectionSequences["plan"] = projectionSeq
       }
     }
     subagentPresentationState.contexts[sessionID] = context
@@ -446,9 +454,7 @@ extension HarnessController {
     for job in jobs {
       guard let id = job["id"] as? String else { continue }
       let status = (job["status"] as? String ?? "running").lowercased()
-      let state: ToolActivity.State =
-        status == "failed" ? .failed :
-        ["running", "pending", "in-progress", "in_progress"].contains(status) ? .running : .succeeded
+      let state = DSHToolJobState.resolve(status)
       if let index = context.tools.lastIndex(where: { $0.callId == id }) {
         context.tools[index].state = state
         if let detail = job["detail"] as? String { context.tools[index].summary = detail }

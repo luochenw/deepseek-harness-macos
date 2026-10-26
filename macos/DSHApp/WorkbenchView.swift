@@ -229,9 +229,11 @@ private struct WorkbenchTabItem: View {
     HStack(spacing: 6) {
       Button(action: { harness.selectWorkbenchTab(tab.id) }) {
         HStack(spacing: 6) {
-          Image(systemName: tab.systemImage).font(.system(size: 11))
-          Text(tab.title).font(.system(size: 11.5, weight: selected ? .medium : .regular)).lineLimit(1)
-          if tab.preview { Image(systemName: "circle.dashed").font(.system(size: 8)) }
+          Image(systemName: tab.systemImage).font(DSHType.caption)
+          Text(tab.title)
+            .font(DSHType.caption.weight(selected ? .medium : .regular))
+            .lineLimit(1)
+          if tab.preview { Image(systemName: "circle.dashed").font(.system(size: 9)) }
         }
         .foregroundStyle(selected ? DSHTheme.ink : DSHTheme.inkSoft)
         .contentShape(Rectangle())
@@ -291,7 +293,10 @@ private struct WorkbenchToolDetail: View {
     VStack(spacing: 0) {
       HStack(spacing: DSHSpace.s2) {
         Image(systemName: "wrench.and.screwdriver").foregroundStyle(DSHTheme.inkSoft)
-        Text(tab.title).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(DSHTheme.ink).lineLimit(1)
+        Text(tab.title)
+          .font(DSHType.label.weight(.semibold))
+          .foregroundStyle(DSHTheme.ink)
+          .lineLimit(1)
         Spacer()
         if tab.preview {
           Button(action: { harness.pinWorkbenchTab(tab.id) }) { Image(systemName: "pin") }

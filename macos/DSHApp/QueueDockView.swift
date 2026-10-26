@@ -2,13 +2,14 @@ import SwiftUI
 
 struct QueueDockView: View {
   @EnvironmentObject var harness: HarnessController
+  let items: [DSHQueueItem]
   @State private var editing: DSHQueueItem?
   @State private var text = ""
   var body: some View {
-    if !harness.displayedQueuedItems.isEmpty {
+    if !items.isEmpty {
       VStack(alignment: .leading, spacing: DSHSpace.s2) {
         Label("排队消息", systemImage: "list.number").font(.caption.weight(.bold)).foregroundStyle(DSHTheme.ink)
-        ForEach(harness.displayedQueuedItems) { item in
+        ForEach(items) { item in
           HStack(spacing: DSHSpace.s2) {
             DSHBadge(text: "Queue", tone: .neutral)
             Text(item.displayText).font(.caption).foregroundStyle(DSHTheme.inkSoft).lineLimit(2)

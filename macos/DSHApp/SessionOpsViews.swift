@@ -7,10 +7,8 @@ import SwiftUI
 // of the app's ocean-toned chrome — see WorkspaceManagerView.swift and
 // DSHSettingsEditor.swift for the sheet/list conventions this file follows.
 
-/// Archived sessions from workspace.list's registry-global archive set. The
-/// Host protocol registers no unarchive method (rpc-map.d.ts lists only
-/// workspace.archiveSession), so this view offers open/export instead of
-/// restore and says so explicitly.
+/// Archived sessions from the workspace follow stream's registry-global
+/// archive set. DSH 0.2 exposes both archive and unarchive mutations.
 struct ArchivedSessionsView: View {
   @EnvironmentObject var harness: HarnessController
   @Environment(\.dismiss) private var dismiss
@@ -41,7 +39,7 @@ struct ArchivedSessionsView: View {
           }
         }
       }
-      Label("Host 暂不支持恢复归档：协议仅提供 workspace.archiveSession，没有 unarchive 方法。归档会话仍可打开查看或导出日志。", systemImage: "info.circle")
+      Label("恢复后会话会重新出现在侧边栏；磁盘日志不会因归档或恢复被删除。", systemImage: "info.circle")
         .font(.caption).foregroundStyle(DSHTheme.inkFaint)
       HStack { Spacer(); Button("关闭") { dismiss() }.buttonStyle(.dshSecondary).keyboardShortcut(.cancelAction) }
     }
@@ -80,6 +78,7 @@ private struct ArchivedSessionRowView: View {
         }
       }
       Spacer()
+      Button("恢复") { harness.unarchiveSession(row.sessionId); dismiss() }.buttonStyle(.dshSecondary)
       Button("打开") { harness.openHostSessionID(row.sessionId); dismiss() }.buttonStyle(.dshSecondary)
       Button("导出 ZIP") { harness.exportSessionLog(sessionId: row.sessionId) }.buttonStyle(.dshSecondary)
     }

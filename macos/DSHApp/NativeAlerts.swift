@@ -54,6 +54,7 @@ final class NativeAlerts: NSObject {
   }
 
   private func post(id: String, title: String, body: String) {
+    guard Bundle.main.bundleURL.pathExtension == "app" else { return }
     let content = UNMutableNotificationContent()
     content.title = title
     content.body = body

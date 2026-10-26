@@ -70,18 +70,9 @@ extension DSHHostClient {
     as valueType: Value.Type,
   ) async throws -> Value? {
     let endpoint = "\(ns)/\(method)"
-    var request = URLRequest(url: baseURL.appendingPathComponent("api/\(endpoint)"))
-    request.httpMethod = "POST"
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue(baseURL.host.map { host in
-      baseURL.port.map { "\(host):\($0)" } ?? host
-    } ?? "127.0.0.1", forHTTPHeaderField: "Host")
-    request.httpBody = try JSONEncoder().encode(
+    let body = try JSONEncoder().encode(
       DSHRPCEnvelope(rpcId: UUID().uuidString, method: endpoint, payload: DSHTypertArgsEnvelope(args: args)))
-    let (data, response) = try await URLSession.shared.data(for: request)
-    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-      throw URLError(.badServerResponse)
-    }
+    let data = try await post(endpoint, body: body)
     let decoded = try JSONDecoder().decode(DSHTypertServerResponse<Value>.self, from: data)
     guard decoded.result.ok else {
       throw decoded.result.error ?? DSHTypertGatewayError(code: "internal", message: "\(endpoint) failed without an error envelope")
@@ -132,11 +123,7 @@ struct DSHCommandListArgs: Encodable { let agentId: String }
 struct DSHCommandExecuteArgs: Encodable {
   let agentId: String
   let line: String
-}
-struct DSHCommandExecuteArgsWithImages: Encodable {
-  let agentId: String
-  let line: String
-  let images: [DSHPromptContent]
+  let submittedAttachments: [DSHPromptContent]
 }
 
 extension DSHHostClient {
@@ -150,20 +137,11 @@ extension DSHHostClient {
   /// (the Host answers `undefined`, so the caller should fall back to
   /// treating the line as an ordinary prompt).
   func executeCommand(sessionId: String, line: String) async throws -> DSHCommandExecution? {
-    do {
-      return try await invokeOptional(
-        ns: "commands",
-        method: "execute",
-        args: DSHCommandExecuteArgsWithImages(agentId: sessionId, line: line, images: []),
-        as: DSHCommandExecution.self)
-    } catch let error as DSHTypertGatewayError
-      where error.message?.contains("unexpected \"images\"") == true {
-      return try await invokeOptional(
-        ns: "commands",
-        method: "execute",
-        args: DSHCommandExecuteArgs(agentId: sessionId, line: line),
-        as: DSHCommandExecution.self)
-    }
+    try await invokeOptional(
+      ns: "commands",
+      method: "execute",
+      args: DSHCommandExecuteArgs(agentId: sessionId, line: line, submittedAttachments: []),
+      as: DSHCommandExecution.self)
   }
 }
 

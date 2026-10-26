@@ -4,6 +4,7 @@ struct SettingsView: View {
   private enum Section: String, CaseIterable, Identifiable {
     case general = "通用"
     case models = "模型"
+    case usage = "用量"
     case plugins = "插件"
     case voice = "语音"
     case presets = "Agent 预设"
@@ -14,6 +15,7 @@ struct SettingsView: View {
       switch self {
       case .general: "gearshape"
       case .models: "cpu"
+      case .usage: "chart.bar.xaxis"
       case .plugins: "puzzlepiece"
       case .voice: "waveform"
       case .presets: "square.stack.3d.up"
@@ -29,7 +31,7 @@ struct SettingsView: View {
       sidebar
       VStack(alignment: .leading, spacing: DSHSpace.s4) {
         Text(section.rawValue)
-          .font(.system(size: 18, weight: .semibold))
+          .font(DSHType.display)
           .foregroundStyle(DSHTheme.ink)
 
         ScrollView {
@@ -78,7 +80,7 @@ struct SettingsView: View {
       ForEach(Section.allCases) { item in
         Button(action: { section = item }) {
           Label(item.rawValue, systemImage: item.icon)
-            .font(.system(size: 12.5, weight: section == item ? .semibold : .regular))
+            .font(DSHType.label.weight(section == item ? .semibold : .regular))
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
@@ -103,6 +105,8 @@ struct SettingsView: View {
       GeneralSettingsSection()
     case .models:
       ModelSettingsSection()
+    case .usage:
+      ModelUsageSettingsSection()
     case .plugins:
       PluginSettingsSection()
     case .voice:
@@ -123,10 +127,10 @@ struct DSHToggleRow: View {
   var body: some View {
     HStack(alignment: .center, spacing: DSHSpace.s3) {
       VStack(alignment: .leading, spacing: 2) {
-        Text(title).font(.system(size: 13)).foregroundStyle(DSHTheme.ink)
+        Text(title).font(DSHType.body).foregroundStyle(DSHTheme.ink)
         if let caption {
           Text(caption)
-            .font(.system(size: 11))
+            .font(DSHType.caption)
             .foregroundStyle(DSHTheme.inkFaint)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -240,7 +244,7 @@ private struct ModelSettingsSection: View {
   /// Catalog groups that belong to custom (llm-pi-ai) configurations —
   /// everything else is official.
   private var customProviderIDs: Set<String> {
-    Set(harness.configurableProviders.map(\.provider))
+    DSHProviderClassification.customProviderIDs(from: harness.configurableProviders)
   }
   private var officialGroups: [DSHModelGroup] {
     harness.availableModels.filter { !customProviderIDs.contains($0.id) }
@@ -386,8 +390,9 @@ private struct CustomConfigurationSettingsSection: View {
   }
 
   private var configuredProviders: [DSHConfigurableProvider] {
-    harness.configurableProviders
-      .filter { $0.settingsNs == "llm-pi-ai" && $0.declared != false }
+    let customIDs = DSHProviderClassification.customProviderIDs(from: harness.configurableProviders)
+    return harness.configurableProviders
+      .filter { customIDs.contains($0.provider) }
       .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
   }
 
@@ -519,7 +524,9 @@ private struct CustomProviderRow: View {
       Text(id)
         .font(.system(size: 11, design: .monospaced))
         .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(isCurrent ? DSHTheme.accentSoft : DSHTheme.surfaceTint, in: Capsule())
+        .background(
+          isCurrent ? DSHTheme.accentSoft : DSHTheme.surfaceTint,
+          in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
         .foregroundStyle(isCurrent ? DSHTheme.accent : DSHTheme.inkSoft)
     }
     .buttonStyle(.plain)

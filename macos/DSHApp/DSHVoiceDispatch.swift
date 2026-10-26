@@ -36,7 +36,7 @@ extension HarnessController {
     if candidate != nil, cwd == nil {
       appendSystem("原工作区目录已不存在，语音任务改在默认目录执行。")
     }
-    let presetId = pendingHostPresetID ?? (preset == .creator ? "cordis" : preset.rawValue)
+    let presetId = pendingHostPresetID.map(Self.canonicalHostPresetID) ?? preset.hostPresetID
     let (chosenProvider, chosenModel) = (provider, model)
     let chosenEffort = advertisedEffort(provider: chosenProvider, model: chosenModel, requested: reasoningEffort)
     // 第二级判定交给执行任务的模型本身：附上文件夹清单，模型自行决定去

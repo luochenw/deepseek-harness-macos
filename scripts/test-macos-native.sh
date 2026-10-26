@@ -24,9 +24,8 @@ freeze (see CLAUDE.md/AGENTS.md): main.swift may only shrink, never grow past
 its recorded baseline.
 
 --smoke [APP_PATH] additionally starts the packaged DSH Host and verifies
-read/write settings, session creation without a workspace cwd, plus Agent
-Profile and Batch failure-isolation paths. Build the app first, or pass its
-path.
+token authentication, session/workspace/control streams, settings writes and
+Agent Profile CRUD. Build the app first, or pass its path.
 
 --unit additionally builds macos/DSHApp as a library (-enable-testing) and
 runs macos/DSHTests/*.swift against it via @testable import — no Xcode/
@@ -74,6 +73,7 @@ echo "main.swift size check: OK ($main_swift_lines/$MAIN_SWIFT_LINE_LIMIT lines)
 swiftc -target "$SWIFT_TARGET" -typecheck -parse-as-library "$ROOT"/macos/DSHApp/*.swift \
   -framework AppKit -framework SwiftUI -framework WebKit
 plutil -lint "$ROOT/macos/DSHApp/Info.plist" >/dev/null
+"$ROOT/scripts/test-design-system.sh"
 "$ROOT/scripts/test-settings-ui.sh"
 bash "$ROOT/scripts/test-agent-platform-ui.sh"
 bash "$ROOT/scripts/test-attachment-rail-ui.sh"
@@ -81,7 +81,8 @@ bash "$ROOT/scripts/test-tool-presentation-ui.sh"
 bash "$ROOT/scripts/test-subagent-context-ui.sh"
 bash "$ROOT/scripts/test-workbench-ui.sh"
 bash "$ROOT/scripts/test-permission-composer-ui.sh"
-bash "$ROOT/scripts/test-conversation-window-ui.sh"
+bash "$ROOT/scripts/test-conversation-history-ui.sh"
+bash "$ROOT/scripts/test-reasoning-ui.sh"
 echo "native-contract: OK"
 
 if [[ "$MODE" == "smoke" ]]; then

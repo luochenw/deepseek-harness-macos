@@ -10,9 +10,11 @@ enum DSHComposerSubmissionPolicy {
     running: Bool,
     accelerated: Bool,
     preferredBusyMode: DSHPromptMode,
-    steeringAvailable: Bool
+    steeringAvailable: Bool,
+    hasQueuedMessages: Bool
   ) -> DSHPromptMode {
     guard running, steeringAvailable else { return .queue }
+    guard hasQueuedMessages else { return .steer }
     guard accelerated else { return preferredBusyMode }
     return preferredBusyMode == .queue ? .steer : .queue
   }
@@ -40,13 +42,11 @@ extension DSHPromptMode {
 }
 
 extension HarnessController {
-  func clearAcceptedComposerDraft(originalText: String, originalImageID: UUID?) {
+  func clearAcceptedComposerDraft(originalText: String, originalImageIDs: Set<UUID>) {
     if let remainder = Self.acceptedRunningDraftRemainder(current: draft, submitted: originalText) {
       draft = remainder
     }
-    if draftImage?.id == originalImageID {
-      draftImage = nil
-    }
+    draftImages.removeAll { originalImageIDs.contains($0.id) }
   }
 
   func submitSubagentComposerDraft(
@@ -55,8 +55,8 @@ extension HarnessController {
   ) {
     let originalText = draft
     let text = originalText.trimmingCharacters(in: .whitespacesAndNewlines)
-    let image = draftImage
-    guard !text.isEmpty || image != nil else { return }
+    let images = draftImages
+    guard !text.isEmpty || !images.isEmpty else { return }
     guard address.mode == "continuable",
           !Self.isRootOnlySubagentSlashCommand(text) else {
       status = "子代理不支持 /goal、/plan 等根会话命令"
@@ -64,18 +64,13 @@ extension HarnessController {
     }
     guard let hostClient else { return }
     var content: [DSHPromptContent] = text.isEmpty ? [] : [.text(text)]
-    if let image {
-      do {
-        let bytes = try Data(contentsOf: image.url)
-        content.append(.image(
-          data: bytes.base64EncodedString(),
-          mediaType: image.mediaType,
-          name: image.url.lastPathComponent))
-      } catch {
-        status = "读取图片失败：\(error.localizedDescription)"
-        return
-      }
+    do {
+      content.append(contentsOf: try imagePromptContents(images))
+    } catch {
+      status = "读取图片失败：\(error.localizedDescription)"
+      return
     }
+    let originalImageIDs = Set(images.map(\.id))
     let submissionID = address.childSessionId
     let localSessionID = selectedSessionID
     guard beginComposerSubmission(sessionID: submissionID) else { return }
@@ -90,7 +85,7 @@ extension HarnessController {
           if self.activeSubagentAddress == address { self.status = successStatus }
           self.clearAcceptedComposerDraft(
             originalText: originalText,
-            originalImageID: image?.id)
+            originalImageIDs: originalImageIDs)
         }
       } catch {
         await MainActor.run {
@@ -141,7 +136,7 @@ extension HarnessController {
   }
 
   var canSubmitRunningDraft: Bool {
-    let hasContent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draftImage != nil
+    let hasContent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty
     return displayedIsRunning && hasContent && !isViewingReadOnlySubagent
       && composerAgentProfileID == nil
       && hostClient != nil && hostCurrentSessionID != nil
@@ -185,8 +180,9 @@ extension HarnessController {
       running: true,
       accelerated: accelerated,
       preferredBusyMode: busyEnterMode,
-      steeringAvailable: activeSubagentAddress == nil)
-    let hasContent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draftImage != nil
+      steeringAvailable: activeSubagentAddress == nil,
+      hasQueuedMessages: !displayedQueuedItems.isEmpty)
+    let hasContent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty
     if !hasContent {
       if DSHComposerSubmissionPolicy.shouldSteerQueuedMessages(hasContent: false, mode: mode),
          canSteerQueuedMessages {

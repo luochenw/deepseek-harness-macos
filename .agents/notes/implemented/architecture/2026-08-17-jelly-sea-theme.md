@@ -1,6 +1,6 @@
 # Agent Note: 果冻海主题 —— 透明清亮 + 恢复深色外观
 
-Status: implemented — 用户澄清真正想要的是"果冻海"质感（透明清亮），且"可以有深色"
+Status: implemented — superseded by [Native workbench design system](2026-10-23-native-workbench-design-system.md)
 
 ## Problem
 

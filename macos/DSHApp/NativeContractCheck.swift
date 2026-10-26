@@ -10,11 +10,17 @@ struct NativeDSHContractCheck {
     DSHAttachmentRef(attachmentId: "fixture", mediaType: "image/png", bytes: 1, width: 1, height: 1, name: "fixture.png")
   }
 
-  static func promptEnvelope() -> DSHRPCEnvelope<DSHPromptPayload> {
+  static func promptEnvelope() -> DSHRPCEnvelope<DSHArgsPayload<DSHRequestArgsPayload<DSHPromptPayload>>> {
     DSHRPCEnvelope(
       rpcId: "native-contract-fixture",
-      method: "session.prompt",
-      payload: DSHPromptPayload(sessionId: "session-fixture", mode: .queue, content: [.text("hello")])
+      method: "session/prompt",
+      payload: DSHArgsPayload(
+        args: DSHRequestArgsPayload(
+          request: DSHPromptPayload(
+            requestId: "request-fixture",
+            sessionId: "session-fixture",
+            mode: .queue,
+            content: [.text("hello")])))
     )
   }
 
@@ -28,7 +34,7 @@ struct NativeDSHContractCheck {
   static func settingsEnvelope() -> DSHRPCEnvelope<DSHSettingsUpdatePayload> {
     DSHRPCEnvelope(
       rpcId: "native-contract-fixture",
-      method: "settings.update",
+      method: "settings/update",
       payload: DSHSettingsUpdatePayload(
         ns: "profile",
         patch: DSHJSONPatch(values: ["enabled": true, "retries": 2, "labels": ["one", "two"]]),

@@ -38,7 +38,12 @@ struct PermissionComposerSnapshotCheck {
     harness.selectedSessionID = session.id
     harness.hostCurrentSessionID = "session-running"
     harness.isRunning = true
+    harness.availableModels = try modelCatalog()
+    harness.provider = "xpa"
+    harness.model = "DeepSeek-V4.1-Flash"
+    harness.reasoningEffort = "max"
     harness.draft = "补充：完成后运行全部测试"
+    harness.draftImages = try draftImages(in: output)
     harness.queueItems = [
       DSHQueueItem(id: "queued-1", placement: "queued", text: "再检查发布说明"),
       DSHQueueItem(id: "steering-1", placement: "steering", text: "先保证菜单与原生样式一致"),
@@ -57,16 +62,62 @@ struct PermissionComposerSnapshotCheck {
 
     try render(
       "composer-running",
-      size: CGSize(width: 720, height: 360),
+      size: CGSize(width: 720, height: 450),
       output: output,
       content: Composer().environmentObject(harness))
+    try render(
+      "draft-image-lightbox",
+      size: CGSize(width: 640, height: 520),
+      output: output,
+      content: DraftImageLightbox(image: harness.draftImages[0]))
     try render(
       "settings-general",
       size: CGSize(width: 810, height: 580),
       output: output,
       content: SettingsView().environmentObject(harness))
+    try render(
+      "model-picker-panel",
+      size: CGSize(width: 340, height: 560),
+      output: output,
+      content: ModelPickerPanel().environmentObject(harness))
 
     print("permission-composer-snapshots: \(output.path)")
+  }
+
+  private static func draftImages(in output: URL) throws -> [HarnessController.DraftImage] {
+    try ["reference-a.png", "reference-b.png"].enumerated().map { index, name in
+      guard let bitmap = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: 96,
+        pixelsHigh: 72,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ) else {
+        throw PermissionComposerSnapshotFailure.invalid("could not create draft image")
+      }
+      for y in 0..<bitmap.pixelsHigh {
+        for x in 0..<bitmap.pixelsWide {
+          let red = CGFloat(x) / CGFloat(bitmap.pixelsWide)
+          let green = CGFloat(y) / CGFloat(bitmap.pixelsHigh)
+          let blue = index == 0 ? CGFloat(0.8) : CGFloat(0.35)
+          bitmap.setColor(
+            NSColor(calibratedRed: red, green: green, blue: blue, alpha: 1),
+            atX: x,
+            y: y)
+        }
+      }
+      guard let png = bitmap.representation(using: .png, properties: [:]) else {
+        throw PermissionComposerSnapshotFailure.invalid("could not encode draft image")
+      }
+      let url = output.appendingPathComponent(name)
+      try png.write(to: url)
+      return HarnessController.DraftImage(url: url, mediaType: "image/png")
+    }
   }
 
   private static func settingsDescription() throws -> DSHSettingsDescription {
@@ -103,6 +154,36 @@ struct PermissionComposerSnapshotCheck {
     }
     """.utf8)
     return try JSONDecoder().decode(DSHSettingsDescription.self, from: data)
+  }
+
+  private static func modelCatalog() throws -> [DSHModelGroup] {
+    let data = Data("""
+    [
+      {
+        "id":"xpa",
+        "name":"XPA Relay",
+        "models":[
+          {
+            "id":"DeepSeek-V4.1-Flash",
+            "name":"DeepSeek-V4.1-Flash",
+            "reasoning":{
+              "efforts":[
+                {"id":"off","name":"Off"},
+                {"id":"low","name":"Low"},
+                {"id":"medium","name":"Medium"},
+                {"id":"high","name":"High"},
+                {"id":"xhigh","name":"Xhigh"},
+                {"id":"max","name":"Max"}
+              ],
+              "defaultEffort":"high"
+            }
+          },
+          {"id":"DeepSeek-V4-Pro","name":"DeepSeek-V4-Pro"}
+        ]
+      }
+    ]
+    """.utf8)
+    return try JSONDecoder().decode([DSHModelGroup].self, from: data)
   }
 
   @MainActor
