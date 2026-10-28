@@ -31,6 +31,7 @@ grep -q 'DSHRadius.sm' "$VIEW" || { echo "workbench-ui: tabs must use the shared
 grep -q 'let webView: WKWebView' "$BROWSER" || { echo "workbench-ui: browser runtime must own a stable WKWebView" >&2; exit 1; }
 grep -q 'DispatchSource.makeFileSystemObjectSource' "$MARKDOWN" || { echo "workbench-ui: Markdown must monitor external writes" >&2; exit 1; }
 grep -q 'NSAllowsLocalNetworking' "$ROOT/macos/DSHApp/Info.plist" || { echo "workbench-ui: local HTTP navigation is not allowed by Info.plist" >&2; exit 1; }
+grep -q 'cachedParse' "$ROOT/macos/DSHApp/NativeMarkdownText.swift" || { echo "workbench-ui: Markdown parsing is not cached for scrolling" >&2; exit 1; }
 grep -q 'consumeModelWorkbenchEvent' "$EVENTS" || { echo "workbench-ui: live tool results do not reach the native workbench" >&2; exit 1; }
 grep -q 'case "tool/code-dispatch"' "$STATE" || { echo "workbench-ui: Code Mode workbench calls are not handled" >&2; exit 1; }
 grep -Rq 'open_workbench_browser' "$(dirname "$RUNTIME_TOOL")" || { echo "workbench-ui: browser tool is not model-callable" >&2; exit 1; }

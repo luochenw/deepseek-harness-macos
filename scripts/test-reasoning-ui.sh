@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
 VIEW="$ROOT/macos/DSHApp/ConversationView.swift"
+STREAMING="$ROOT/macos/DSHApp/StreamingAssistantText.swift"
 COMPOSER="$ROOT/macos/DSHApp/ComposerView.swift"
 FIXTURE="$ROOT/scripts/fixtures/reasoning-snapshot-check.swift"
 BUILD="$(mktemp -d)"
@@ -19,6 +20,22 @@ grep -q 'turnTrace' "$VIEW" || {
 }
 grep -q 'reasoning-' "$VIEW" || {
   echo "reasoning-ui: reasoning rows must carry a type-prefixed identity" >&2
+  exit 1
+}
+# The 「N 段」 label is gone (the collapsed row is a bare status line), so the
+# old guard would pass vacuously. Assert the row really shows no segment count
+# in any form, and that the dead `segments` bookkeeping stays gone.
+if grep -Eq 'segments.*段|段.*segments' "$VIEW"; then
+  echo "reasoning-ui: collapsed reasoning status must not expose segment counts" >&2
+  exit 1
+fi
+if grep -q 'value: pulse' "$VIEW" \
+  || grep -q 'repeatForever' "$STREAMING"; then
+  echo "reasoning-ui: completed rows must not retain repeating motion" >&2
+  exit 1
+fi
+grep -q 'harness.displayedIsRunning' "$VIEW" || {
+  echo "reasoning-ui: streaming text must be gated by the active turn state" >&2
   exit 1
 }
 grep -q 'enum DSHConversationLayout' "$VIEW" || {

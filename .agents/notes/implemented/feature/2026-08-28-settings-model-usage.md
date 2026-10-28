@@ -14,6 +14,9 @@ Host 的 token-meter 只提供当前会话的累计 provider usage 与上下文�
 - 上下文进度使用 Host 的 `projectedTokens`（回退 `pressureTokens`）与 `contextWindow`；没有 Host 数据时解释为尚未完成可计量请求，而不是显示零。
 - 添加仅影响原生 Composer 的本地开关，用于显示或隐藏其紧凑会话用量摘要。偏好保存在 `UserDefaults`，因为它不改变 Host 设置、模型路由或计费。
 - 从 Composer 中复用同一格式化和语义定义，避免两个表面把缓存或上下文解释成不同含义。
+- 兼容 token-meter 的新旧投影 schema：既接受扁平 usage，也接受当前
+  `{totals,last}` 包装；打开已有会话时额外读取一次 exact projections，
+  避免 sidebar list 快照陈旧导致数据缺失。
 
 ## Alternatives considered
 
@@ -38,3 +41,7 @@ Host 的 token-meter 只提供当前会话的累计 provider usage 与上下文�
 - Composer 与设置页共用同一套用量格式化和语义，只展示 Host 实际提供的当前会话数据。
 - 设置页提供完整拆分；Composer 顶部只是一条可关闭的紧凑摘要。
 - 未知用量显示空态，不伪装成零，也不推断账户余额或费用。
+- 上下文和缓存命中使用同一套动画比例条；数值变化使用数字滚动，运行中的
+  上下文摘要显示低强度活动波形，并遵循 macOS Reduce Motion。
+- 上下文依次回退 `projectedTokens`、`pressureTokens` 和新版
+  `surfaceTokens`；指标文字使用高对比前景，浅海蓝只承担图标和比例条。

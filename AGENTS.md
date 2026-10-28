@@ -23,7 +23,10 @@ macos/DSHApp/       All Swift sources — flat directory, no Xcode project (see 
   NativeContractCheck.swift   Compile-time fixture exercising RPC envelope,
                               prompt, settings-patch, queue and attachment wire types
   Info.plist
-scripts/             build-macos-app.sh, test-macos-native.sh, verify-native-host-api.sh
+scripts/             build-macos-app.sh, test-macos-native.sh, verify-native-host-api.sh,
+                     ds-agent (send a task to the running App's DSH Host, or headless)
+docs/driving-dsh-from-agents.md   How another model delegates work to the local
+                     DSH/DeepSeek and supervises it (brief, monitor, accept)
 .agents/notes/       Agent Notes — decision records; see CLAUDE.md
 dist/                Build output (git-ignored, produced locally)
 ```
@@ -104,6 +107,62 @@ When adding a feature:
 - `guard let ... else { return }` early exits over nested `if let`.
 - No force-unwraps (`!`) outside of values that are structurally guaranteed
   (e.g. `Bundle.main.resourceURL!`); prefer `guard let` / `??`.
+
+## Rules for code changes (every agent, every change)
+
+Reviewers check every rule below; a violation is a blocker. They come from
+review findings on agent-written changes in this repo, plus widely used agent
+rule sets (Karpathy-style "simplicity first / surgical changes", AGENTS.md
+boundary tiers).
+
+**Before coding**
+- **Evidence first.** For a bug, reproduce it before changing code: a failing
+  test, a log line, a crash-report fact. A suspect named in the task is a
+  hypothesis to test, not a conclusion. If the request is ambiguous, state the
+  reading you chose in your report.
+
+**While coding**
+- **Simplicity first.** Write the minimum code that solves the task. No
+  speculative options, no one-use abstractions, no handling for impossible
+  cases.
+- **Surgical.** Every changed line traces back to the task. Don't reformat
+  or "improve" neighbouring code; list unrelated problems in the report.
+- **Delete before you add.** When you replace logic, remove the old path and
+  anything your change orphaned. No parallel versions (`Foo2`, `legacyFoo`)
+  and no second copy of a table.
+- **No debug leftovers** in production code: probes, override flags,
+  `print`, `/tmp` writes. Test hooks live in `macos/DSHTests` or behind
+  `#if DEBUG`.
+- **Comments match the file.** Most files here are under 10% comment lines.
+  A comment says *why*, once. No session narratives, no local paths.
+- **No machine-specific data** in sources, tests or fixtures: no
+  `/Users/<name>`, ports, tokens, emails or agent prompts. Sanitize to
+  `/Users/developer` and `127.0.0.1:0000`.
+- **Concurrency.** UI state lives on `@MainActor`. Prefer `Task`/`async`
+  over new `DispatchQueue.main` hops. No `@unchecked Sendable` or
+  `nonisolated(unsafe)` without a written reason. Guard AppKit and
+  AVFoundation calls that can raise ObjC exceptions (`installTap`,
+  `inputNode`, window/panel ops, KVC) *before* the call: an exception that
+  unwinds through a main-actor job corrupts the Swift runtime and crashes the
+  app later, somewhere unrelated.
+- **Defensive code must not crash.** Never call `Int(_:)` on a `Double`
+  that may be NaN, ∞ or huge. No force casts or force unwraps. Check empty,
+  nil, first call, repeated call and off-main-thread.
+
+**Before reporting done**
+- **Regression tests have teeth.** Run the new test on the pre-fix code and
+  keep the failing output. Every assertion must be able to fail. Resolve
+  fixture paths from the repo root.
+- **Run the checks.** `./scripts/test-macos-native.sh`, and `--unit` when
+  tests changed.
+- **Report verified and unverified separately.** Verified means the command
+  and its output. Don't claim "root cause", "never" or "fully covered"
+  without evidence.
+
+**Never do these; ask the user instead.** Commit or push. Launch the
+installed app or a copy of it. Kill processes you didn't start. Modify
+`/Applications`. Read, print or copy credentials (`DSH_HOME`,
+`.credentials.yaml`, tokens). Delete or skip failing tests.
 
 ## Build & test commands
 

@@ -18,6 +18,7 @@ struct SidebarSessionGroupView: View {
   let showsHeader: Bool
   @Binding var collapsedGroups: Set<String>
   @Binding var expandedGroups: Set<String>
+  @State private var headerHovering = false
 
   private var isCollapsed: Bool { collapsedGroups.contains(group.id) }
   private var isExpanded: Bool { expandedGroups.contains(group.id) }
@@ -38,31 +39,43 @@ struct SidebarSessionGroupView: View {
         Button(action: toggleCollapsed) {
           HStack(spacing: DSHSpace.s2) {
             Image(systemName: "chevron.right")
-              .font(.system(size: 8, weight: .bold))
+              .font(DSHType.micro.weight(.bold))
               .rotationEffect(.degrees(isCollapsed ? 0 : 90))
               .foregroundStyle(DSHTheme.inkFaint)
             Image(systemName: "folder")
-              .font(.system(size: 11.5, weight: .medium))
+              .font(DSHType.caption.weight(.medium))
               .foregroundStyle(DSHTheme.inkSoft)
             Text(group.title)
-              .font(.system(size: 11.5, weight: .semibold))
+              .font(DSHType.label.weight(.semibold))
               .foregroundStyle(DSHTheme.inkSoft)
               .lineLimit(1)
             Text("\(group.sessions.count)")
-              .font(.system(size: 10.5, design: .monospaced))
-              .foregroundStyle(DSHTheme.inkFaint)
+              .font(DSHType.micro.monospacedDigit())
+              .foregroundStyle(DSHTheme.inkSoft)
+              .padding(.horizontal, 5)
+              .padding(.vertical, 1)
+              .background(
+                DSHTheme.surfaceTint2,
+                in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             Spacer(minLength: 0)
           }
-          .padding(.horizontal, 2)
+          .padding(.horizontal, DSHSpace.s2)
+          .padding(.vertical, 5)
+          .background(
+            headerHovering ? DSHTheme.surfaceTint2 : Color.clear,
+            in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { headerHovering = $0 }
+        .animation(.easeOut(duration: 0.14), value: headerHovering)
         .help(isCollapsed ? "展开项目" : "折叠项目")
       }
 
       if !isCollapsed {
         ForEach(Array(group.sessions.prefix(visibleCount))) { session in
           SidebarSessionRow(session: session)
+            .padding(.leading, showsHeader ? DSHSpace.s3 : 0)
         }
         if group.sessions.count > DSHSidebarSessionPaging.defaultVisibleCount {
           Button(action: toggleExpanded) {
@@ -73,7 +86,7 @@ struct SidebarSessionGroupView: View {
                 .font(.system(size: 11.5, weight: .medium))
             }
             .foregroundStyle(DSHTheme.inkFaint)
-            .padding(.leading, showsHeader ? 28 : 10)
+            .padding(.leading, showsHeader ? 38 : 10)
             .padding(.vertical, 4)
             .contentShape(Rectangle())
           }

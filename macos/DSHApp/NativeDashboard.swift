@@ -4,7 +4,7 @@ struct NativeDashboard: View {
   @EnvironmentObject var harness: HarnessController
   var body: some View {
     VStack(alignment: .leading, spacing: DSHSpace.s4) {
-      if harness.hostClient == nil || DSHSidebarHostStatus.visible(harness.hostStatus) != nil { Button("重新连接 Host", action: harness.reconnectHostStreams).buttonStyle(.dshPrimary).frame(maxWidth: .infinity) }
+      if harness.hostClient == nil || DSHSidebarHostStatus.visible(harness.hostStatus) != nil { Button("重新连接 Host", action: harness.manualHostReconnect).buttonStyle(.dshPrimary).frame(maxWidth: .infinity) }
       if let retry = harness.retryNotice { RetryNoticeCard(text: retry) }
       if let notice = harness.runNotice { RunNoticeCard(text: notice) }
       if !harness.displayedTodos.isEmpty { TodoCard(items: harness.displayedTodos) }

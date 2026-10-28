@@ -10,12 +10,70 @@ struct DSHTokenUsage: Decodable {
   let cacheReadTokens: Int
   let cacheWriteTokens: Int
   var totalInputTokens: Int { uncachedInputTokens + cacheReadTokens + cacheWriteTokens }
+
+  init(
+    uncachedInputTokens: Int,
+    outputTokens: Int,
+    cacheReadTokens: Int,
+    cacheWriteTokens: Int
+  ) {
+    self.uncachedInputTokens = uncachedInputTokens
+    self.outputTokens = outputTokens
+    self.cacheReadTokens = cacheReadTokens
+    self.cacheWriteTokens = cacheWriteTokens
+  }
+
+  private struct Totals: Decodable {
+    let uncachedInputTokens: Int
+    let outputTokens: Int
+    let cacheReadTokens: Int
+    let cacheWriteTokens: Int
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case uncachedInputTokens
+    case outputTokens
+    case cacheReadTokens
+    case cacheWriteTokens
+    case totals
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    if let totals = try container.decodeIfPresent(Totals.self, forKey: .totals) {
+      uncachedInputTokens = totals.uncachedInputTokens
+      outputTokens = totals.outputTokens
+      cacheReadTokens = totals.cacheReadTokens
+      cacheWriteTokens = totals.cacheWriteTokens
+      return
+    }
+    uncachedInputTokens = try container.decode(Int.self, forKey: .uncachedInputTokens)
+    outputTokens = try container.decode(Int.self, forKey: .outputTokens)
+    cacheReadTokens = try container.decode(Int.self, forKey: .cacheReadTokens)
+    cacheWriteTokens = try container.decode(Int.self, forKey: .cacheWriteTokens)
+  }
 }
 
 struct DSHContextPressure: Decodable {
   let pressureTokens: Int?
   let projectedTokens: Int?
   let contextWindow: Int?
+  let surfaceTokens: Int?
+  let sampledSurfaceTokens: Int?
+
+  init(
+    pressureTokens: Int?,
+    projectedTokens: Int?,
+    contextWindow: Int?,
+    surfaceTokens: Int? = nil,
+    sampledSurfaceTokens: Int? = nil
+  ) {
+    self.pressureTokens = pressureTokens
+    self.projectedTokens = projectedTokens
+    self.contextWindow = contextWindow
+    self.surfaceTokens = surfaceTokens
+    self.sampledSurfaceTokens = sampledSurfaceTokens
+  }
 }
 
 struct DSHSessionStats: Decodable {

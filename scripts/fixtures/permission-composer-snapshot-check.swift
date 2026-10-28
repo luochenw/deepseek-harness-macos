@@ -38,6 +38,20 @@ struct PermissionComposerSnapshotCheck {
     harness.selectedSessionID = session.id
     harness.hostCurrentSessionID = "session-running"
     harness.isRunning = true
+    harness.contextPressure = DSHContextPressure(
+      pressureTokens: 410_000,
+      projectedTokens: 452_000,
+      contextWindow: 1_000_000)
+    harness.tokenUsage = DSHTokenUsage(
+      uncachedInputTokens: 120_000,
+      outputTokens: 48_000,
+      cacheReadTokens: 280_000,
+      cacheWriteTokens: 12_000)
+    harness.sessionStats = DSHSessionStats(
+      turns: 20,
+      steps: 902,
+      llmMs: 840_000,
+      toolMs: 290_000)
     harness.availableModels = try modelCatalog()
     harness.provider = "xpa"
     harness.model = "DeepSeek-V4.1-Flash"

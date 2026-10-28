@@ -2,6 +2,8 @@
 
 Status: implemented - every tool now collapses to one latest-command status row
 
+Superseded in part by: [Stabilize live-session repair and execution feedback](2026-10-26-live-repair-tool-state-scroll.md).
+
 ## Problem
 
 Tool execution presentation was split across two visual languages. Consecutive

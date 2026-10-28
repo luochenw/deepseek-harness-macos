@@ -469,29 +469,127 @@ private struct StatusStrip: View {
   @EnvironmentObject var harness: HarnessController
   var body: some View {
     if AppPrefs.showComposerUsage && harness.hasCurrentSessionUsage {
-      HStack(spacing: DSHSpace.s3) {
+      HStack(spacing: 6) {
         if let pressure = harness.contextPressure, let occupied = DSHModelUsagePresentation.contextTokens(pressure) {
-          Text("上下文 \(DSHModelUsagePresentation.compact(occupied))\(pressure.contextWindow.map { "/\(DSHModelUsagePresentation.compact($0))" } ?? "")")
-            .foregroundStyle(DSHModelUsagePresentation.contextFraction(pressure).map { $0 >= 0.8 } == true ? DSHTheme.coral : DSHTheme.inkFaint)
-            .help("下一次请求的预计上下文占用 / 模型窗口")
+          let fraction = DSHModelUsagePresentation.contextFraction(pressure)
+          let tint = Self.contextTint(fraction)
+          let foreground = Self.contextForeground(fraction)
+          let value = [
+            "\(DSHModelUsagePresentation.compact(occupied))\(pressure.contextWindow.map { "/\(DSHModelUsagePresentation.compact($0))" } ?? "")",
+            DSHModelUsagePresentation.contextPercent(pressure).map { "\($0)%" },
+          ]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+          ComposerMetricChip(
+            icon: "gauge.with.dots.needle.50percent",
+            label: "上下文",
+            value: value,
+            tint: tint,
+            foreground: foreground,
+            fraction: fraction,
+            live: harness.displayedIsRunning,
+            help: "下一次请求的预计上下文占用 / 模型窗口")
         }
         if let usage = harness.tokenUsage {
-          Text("↑\(DSHModelUsagePresentation.compact(usage.totalInputTokens)) ↓\(DSHModelUsagePresentation.compact(usage.outputTokens))")
-            .foregroundStyle(DSHTheme.inkFaint)
-            .help("会话累计 token：输入（含缓存读写）↑ / 输出 ↓")
+          ComposerMetricChip(
+            icon: "arrow.up.arrow.down",
+            value: "↑\(DSHModelUsagePresentation.compact(usage.totalInputTokens)) ↓\(DSHModelUsagePresentation.compact(usage.outputTokens))",
+            tint: DSHTheme.inkSoft,
+            foreground: DSHTheme.ink,
+            help: "会话累计 token：输入（含缓存读写）↑ / 输出 ↓")
           if let hitRate = DSHModelUsagePresentation.cacheHitRate(usage) {
-            Text("命中 \(hitRate)%")
-              .foregroundStyle(DSHTheme.inkFaint)
-              .help("提示缓存命中率：缓存读 \(DSHModelUsagePresentation.compact(usage.cacheReadTokens)) / 总输入 \(DSHModelUsagePresentation.compact(usage.totalInputTokens))")
+            ComposerMetricChip(
+              icon: "bolt.horizontal.circle",
+              label: "命中",
+              value: "\(hitRate)%",
+              tint: hitRate >= 50 ? DSHTheme.accent : DSHTheme.inkSoft,
+              foreground: hitRate >= 50 ? DSHTheme.sessionSelectedForeground : DSHTheme.inkSoft,
+              fraction: Double(hitRate) / 100,
+              help: "提示缓存命中率：缓存读 \(DSHModelUsagePresentation.compact(usage.cacheReadTokens)) / 总输入 \(DSHModelUsagePresentation.compact(usage.totalInputTokens))")
           }
         }
         if let stats = harness.sessionStats, stats.turns > 0 {
-          Text("\(stats.turns) 轮 · \(stats.steps) 步")
-            .foregroundStyle(DSHTheme.inkFaint)
-            .help("整个会话的回合与步骤计数（LLM \(Int(stats.llmMs / 1000))s · 工具 \(Int(stats.toolMs / 1000))s）")
+          ComposerMetricChip(
+            icon: "repeat",
+            value: "\(stats.turns) 轮 · \(stats.steps) 步",
+            tint: DSHTheme.inkFaint,
+            foreground: DSHTheme.inkSoft,
+            help: "整个会话的回合与步骤计数（LLM \(Int(stats.llmMs / 1000))s · 工具 \(Int(stats.toolMs / 1000))s）")
         }
       }
-      .font(DSHType.mono)
     }
+  }
+
+  private static func contextTint(_ fraction: Double?) -> Color {
+    guard let fraction else { return DSHTheme.inkFaint }
+    if fraction >= 0.8 { return DSHTheme.coral }
+    if fraction >= 0.65 { return DSHTheme.warm }
+    return DSHTheme.accent
+  }
+
+  private static func contextForeground(_ fraction: Double?) -> Color {
+    guard let fraction else { return DSHTheme.inkSoft }
+    if fraction >= 0.8 { return DSHTheme.coral }
+    if fraction >= 0.65 { return DSHTheme.warm }
+    return DSHTheme.sessionSelectedForeground
+  }
+}
+
+private struct ComposerMetricChip: View {
+  let icon: String
+  var label: String?
+  let value: String
+  let tint: Color
+  var foreground: Color = DSHTheme.inkSoft
+  var fraction: Double?
+  var live = false
+  var help: String?
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var hovering = false
+
+  var body: some View {
+    HStack(spacing: 5) {
+      if live {
+        DSHRunningBars(color: foreground, height: 8)
+      } else {
+        Image(systemName: icon)
+          .font(DSHType.micro)
+          .foregroundStyle(foreground)
+      }
+      if let label {
+        Text(label)
+          .font(DSHType.micro)
+          .foregroundStyle(DSHTheme.inkFaint)
+      }
+      Text(value)
+        .font(DSHType.caption.monospacedDigit())
+        .foregroundStyle(foreground)
+        .contentTransition(reduceMotion ? .opacity : .numericText())
+        .lineLimit(1)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: value)
+    }
+    .padding(.horizontal, 7)
+    .padding(.vertical, 4)
+    .background(
+      hovering ? DSHTheme.surfaceTint2 : tint.opacity(0.08),
+      in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous)
+        .strokeBorder(DSHTheme.fieldStroke.opacity(hovering ? 0.62 : 0.38), lineWidth: 1)
+    }
+    .overlay(alignment: .bottom) {
+      if let fraction {
+        DSHAnimatedProgressBar(
+          fraction: fraction,
+          tint: foreground,
+          height: 2)
+        .padding(.horizontal, 5)
+      }
+    }
+    .clipShape(RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
+    .fixedSize(horizontal: true, vertical: false)
+    .onHover { hovering = $0 }
+    .help(help ?? "")
+    .accessibilityLabel([label, value].compactMap { $0 }.joined(separator: "，"))
   }
 }

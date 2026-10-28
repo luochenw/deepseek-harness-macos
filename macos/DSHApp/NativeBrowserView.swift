@@ -39,6 +39,15 @@ final class DSHBrowserRuntime: NSObject, ObservableObject {
     observeWebView()
   }
 
+  /// `stop()` invalidates the observations, but a runtime torn down without it
+  /// (a tab closed while its view is being rebuilt) would leave them registered
+  /// on a `WKWebView` that may deallocate first — KVO then raises "an instance
+  /// was deallocated while observers were still registered", and a raise on the
+  /// main thread is the exception shape that corrupts executor tracking.
+  deinit {
+    observations.forEach { $0.invalidate() }
+  }
+
   nonisolated static func normalizedURL(from rawAddress: String) -> URL? {
     let trimmed = rawAddress.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }

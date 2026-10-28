@@ -1,0 +1,27 @@
+{
+  "dshVersion": "0.2.1-rc.2",
+  "piAiVersion": "1.3.0",
+  "piTelemetryVersion": "1.3.0",
+  "patchedFiles": [
+    {
+      "path": "node_modules/@earendil-works/pi-ai/dist/api/transform-messages.js",
+      "pristineSha256": "5654d81fdacdf3f3e9ca9eb89c4dfa71b742b852163ecd49ba38307f876db63e"
+    },
+    {
+      "path": "node_modules/@deepseek-ai/dsh-token-meter/lib/index.js",
+      "pristineSha256": "b76a27f84d1f733c4a760e36fcc0491f807b32d51055703feb0fed1643cc2e05"
+    },
+    {
+      "path": "node_modules/@deepseek-ai/dsh-token-meter/lib/types/usage-projection.js",
+      "pristineSha256": "30a766b7b43553dc0dce46a38bdb2c87ca06bad46af86b39fa42eaa2cfe8871b"
+    },
+    {
+      "path": "node_modules/@deepseek-ai/dsh-llm/lib/index.js",
+      "pristineSha256": "d18d8ae4c8d961e628708c1e4698e09716a0ebb80e55a672e0bde1029bec1155"
+    },
+    {
+      "path": "node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js",
+      "pristineSha256": "99b5c20830a52f69641df8a18a39206079b0c725201958cce2c4a934f1d4f7cd"
+    }
+  ]
+}

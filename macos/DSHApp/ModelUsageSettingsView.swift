@@ -4,6 +4,7 @@ import SwiftUI
 /// 已确认的会话累计 token 与上下文参考值，不把未知数据伪装成“剩余配额”。
 struct ModelUsageSettingsSection: View {
   @EnvironmentObject private var harness: HarnessController
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage(AppPrefs.showComposerUsageKey) private var showComposerUsage = true
 
   private var hasUsage: Bool { harness.hasCurrentSessionUsage }
@@ -73,8 +74,10 @@ struct ModelUsageSettingsSection: View {
             if let percent { DSHBadge(text: "\(percent)%", tone: percent >= 80 ? .coral : .accent) }
           }
           if let fraction = DSHModelUsagePresentation.contextFraction(pressure) {
-            ProgressView(value: fraction)
-              .tint(fraction >= 0.8 ? DSHTheme.coral : DSHTheme.accent)
+            DSHAnimatedProgressBar(
+              fraction: fraction,
+              tint: fraction >= 0.8 ? DSHTheme.coral : DSHTheme.accent,
+              height: 4)
           }
           Text("下一次请求的预计提示词占用；以 Host 的 projected tokens 为准，尚无预测时回退到最近请求的实际 prompt。")
             .font(.system(size: 11))
@@ -119,7 +122,15 @@ struct ModelUsageSettingsSection: View {
               Text("\(hitRate)%")
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 .foregroundStyle(DSHTheme.accent)
+                .contentTransition(reduceMotion ? .opacity : .numericText())
+                .animation(
+                  reduceMotion ? nil : .easeOut(duration: 0.22),
+                  value: hitRate)
             }
+            DSHAnimatedProgressBar(
+              fraction: Double(hitRate) / 100,
+              tint: DSHTheme.accent,
+              height: 3)
           }
         }
       } else {

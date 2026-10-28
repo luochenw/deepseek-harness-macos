@@ -47,7 +47,17 @@ while ! mkdir "$LOCK_DIR" 2>/dev/null; do
 done
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
+# `prepare` never mutates a caller-supplied DSH_SOURCE: it patches a cache copy
+# and prints that copy's path. The bundled runtime is therefore always the
+# patched copy, and the original tree is left byte-identical (important because
+# DSH_SOURCE may point inside a signed .app).
+REQUESTED_DSH_SOURCE="${DSH_SOURCE:-}"
 DSH_SOURCE="$(DSH_RUNTIME_VERIFY_LATEST="${DSH_RUNTIME_VERIFY_LATEST:-1}" "$ROOT/scripts/prepare-dsh-runtime.sh")"
+if [[ -n "$REQUESTED_DSH_SOURCE" && "$DSH_SOURCE" != "$REQUESTED_DSH_SOURCE" ]]; then
+  echo "Bundling the patched copy of DSH_SOURCE: $DSH_SOURCE (source left untouched: $REQUESTED_DSH_SOURCE)" >&2
+elif [[ -n "$REQUESTED_DSH_SOURCE" ]]; then
+  echo "Bundling DSH_SOURCE: $DSH_SOURCE" >&2
+fi
 
 # Each run's STAGE dir has a fresh random suffix, so a run that gets killed or
 # crashes mid-build leaves its stage dir (and a dangling "$APP.previous" from

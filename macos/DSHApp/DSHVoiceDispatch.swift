@@ -111,8 +111,9 @@ extension HarnessController {
     case "turn/end":
       voiceTaskSessions[sessionID] = nil
       if sessionID != hostCurrentSessionID {
+        // Recomputes from the session-wide facts; a finished voice task is not
+        // by itself a reason to raise the "!" badge.
         nativeAlerts.notifyTurnFinished(summary: "语音任务完成：\(label)。点击查看会话列表。")
-        nativeAlerts.setBadge(running: !voiceTaskSessions.isEmpty, needsAttention: true)
       }
       refreshHostSnapshots()
     default:

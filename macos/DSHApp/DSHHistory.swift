@@ -54,6 +54,27 @@ enum DSHHistoryLoadingPolicy {
   static let watchdogNanoseconds: UInt64 = 15_000_000_000
 }
 
+struct DSHHistoryCacheVersion: Equatable {
+  let sequence: Int?
+  let updatedAt: Double?
+}
+
+enum DSHHistoryCachePolicy {
+  static func canReuse(
+    cached: DSHHistoryCacheVersion?,
+    hostSequence: Int?,
+    hostUpdatedAt: Double,
+    hasMessages: Bool
+  ) -> Bool {
+    guard hasMessages, let cached else { return false }
+    if let sequence = cached.sequence, let hostSequence {
+      return sequence >= hostSequence
+    }
+    guard let updatedAt = cached.updatedAt else { return false }
+    return updatedAt >= hostUpdatedAt
+  }
+}
+
 enum DSHHistoryPageMerge {
   static func prepend(
     _ olderMessages: [HarnessController.Message],
@@ -62,6 +83,84 @@ enum DSHHistoryPageMerge {
     guard !olderMessages.isEmpty else { return currentMessages }
     let currentIDs = Set(currentMessages.map(\.id))
     return olderMessages.filter { !currentIDs.contains($0.id) } + currentMessages
+  }
+
+  /// Merge a follow snapshot's recent tail into an already visible transcript.
+  /// Existing row UUIDs are retained so LazyVStack identities and scroll
+  /// anchors stay stable while reconnect repair runs in the background.
+  static func mergeTail(
+    _ incomingMessages: [HarnessController.Message],
+    into currentMessages: [HarnessController.Message]
+  ) -> [HarnessController.Message] {
+    var merged = currentMessages
+    for incoming in incomingMessages {
+      if let index = merged.firstIndex(where: { sameRow($0, incoming) }) {
+        var updated = merged[index]
+        updated.text = incoming.text
+        updated.timestamp = incoming.timestamp
+        if let attachment = incoming.attachment { updated.attachment = attachment }
+        if let reasoning = incoming.reasoning { updated.reasoning = reasoning }
+        if let hostMessageId = incoming.hostMessageId { updated.hostMessageId = hostMessageId }
+        if let toolCallId = incoming.toolCallId { updated.toolCallId = toolCallId }
+        updated.isRelayMessage = incoming.isRelayMessage
+        merged[index] = updated
+      } else {
+        merged.append(incoming)
+      }
+    }
+    return merged
+  }
+
+  private static func sameRow(
+    _ existing: HarnessController.Message,
+    _ incoming: HarnessController.Message
+  ) -> Bool {
+    if let existingKey = durableKey(existing),
+       let incomingKey = durableKey(incoming) {
+      return existingKey == incomingKey
+    }
+    if matchesPendingEcho(existing, incoming) || matchesPendingEcho(incoming, existing) {
+      return true
+    }
+    return contentKey(existing) == contentKey(incoming)
+  }
+
+  private static func durableKey(_ message: HarnessController.Message) -> String? {
+    if let hostID = message.hostMessageId {
+      if hostID == DSHTranscriptMessageMarker.streamingAssistantHostMessageID {
+        return "streaming-assistant"
+      }
+      if hostID == DSHTranscriptMessageMarker.pendingLocalUserHostMessageID {
+        return nil
+      }
+      if !hostID.isEmpty { return "host:\(hostID)" }
+    }
+    if let callID = message.toolCallId, !callID.isEmpty {
+      return "tool:\(callID)"
+    }
+    return nil
+  }
+
+  private static func matchesPendingEcho(
+    _ pending: HarnessController.Message,
+    _ durable: HarnessController.Message
+  ) -> Bool {
+    pending.hostMessageId == DSHTranscriptMessageMarker.pendingLocalUserHostMessageID
+      && pending.role == .user
+      && durable.role == .user
+      && pending.text == durable.text
+      && pending.attachment?.attachmentId == durable.attachment?.attachmentId
+  }
+
+  private static func contentKey(_ message: HarnessController.Message) -> String {
+    let millis = Int((message.timestamp.timeIntervalSince1970 * 1_000).rounded())
+    return [
+      String(describing: message.role),
+      message.text,
+      message.attachment?.attachmentId ?? "",
+      message.toolCallId ?? "",
+      String(millis),
+    ].joined(separator: "\u{1f}")
   }
 }
 
@@ -274,11 +373,27 @@ extension HarnessController {
     }
   }
 
-  func loadHistory(sessionId: String, localSessionID: UUID) {
+  func loadHistory(summary: DSHSessionSummary, localSessionID: UUID) {
+    let sessionId = summary.sessionId
+    let cached = cachedRootHistoryVersion(sessionID: sessionId)
+    let hasMessages = sessions.first(where: { $0.id == localSessionID })
+      .map { !$0.messages.isEmpty } ?? false
+    let reuseCache = DSHHistoryCachePolicy.canReuse(
+      cached: cached,
+      hostSequence: summary.projections?.asOfSeq,
+      hostUpdatedAt: summary.updatedAt,
+      hasMessages: hasMessages)
     if let index = sessions.firstIndex(where: { $0.id == localSessionID }) {
-      sessions[index].isLoadingHistory = true
+      sessions[index].isLoadingHistory = !reuseCache
     }
-    startRootSessionFollow(sessionID: sessionId, localSessionID: localSessionID)
+    if reuseCache {
+      activeTools = cachedRootHistoryTools(sessionID: sessionId) ?? []
+      status = "已从本地缓存恢复会话"
+    }
+    startRootSessionFollow(
+      sessionID: sessionId,
+      localSessionID: localSessionID,
+      preservingCachedHistory: reuseCache)
     scheduleHistoryPageFallback(sessionId: sessionId, localSessionID: localSessionID)
   }
 
@@ -339,6 +454,7 @@ extension HarnessController {
           localSessionID: localSessionID,
           generation: generation)
           && self.rootSessionFollowCursor == nil
+          && !self.isPreservingCachedRootHistory(sessionID: sessionId)
       }
       guard shouldLoad else { return }
       do {
@@ -372,6 +488,11 @@ extension HarnessController {
           self.status = page.hasMore
             ? "已载入 \(folded.messages.count) 条消息，正在补齐完整历史"
             : "已载入完整会话历史"
+          if !page.hasMore {
+            self.markRootHistoryComplete(
+              sessionID: sessionId,
+              throughSeq: throughSeq)
+          }
           self.refreshHostSnapshots()
           if page.hasMore {
             guard let oldest else {
@@ -407,11 +528,15 @@ extension HarnessController {
     sessionID sessionId: String,
     localSessionID: UUID,
     throughSeq: Int,
-    beforeSeq: Int
+    beforeSeq: Int,
+    showsProgress: Bool = true,
+    replaceVisibleOnCompletion: Bool = false,
+    replacementSeed: [Message] = [],
+    replacementTools: [ToolActivity] = []
   ) {
     guard let hostClient else { return }
     if let index = sessions.firstIndex(where: { $0.id == localSessionID }) {
-      sessions[index].isLoadingHistory = true
+      sessions[index].isLoadingHistory = showsProgress
     }
     let generation = beginRootHistoryRequest(
       sessionID: sessionId,
@@ -423,6 +548,8 @@ extension HarnessController {
     Task {
       var before = beforeSeq
       var hasMore = true
+      var repairedMessages = replacementSeed
+      var repairedTools = replacementTools
       do {
         while hasMore {
           let page = try await hostClient.sessionPage(
@@ -461,14 +588,22 @@ extension HarnessController {
               generation: generation),
               let index = self.sessions.firstIndex(where: { $0.id == localSessionID })
             else { return false }
-            self.sessions[index].messages = DSHHistoryPageMerge.prepend(
-              older.messages,
-              to: self.sessions[index].messages)
-            for tool in older.tools
-            where !self.activeTools.contains(where: { $0.callId == tool.callId }) {
-              self.activeTools.append(tool)
+            if replaceVisibleOnCompletion {
+              repairedMessages = DSHHistoryPageMerge.prepend(
+                older.messages,
+                to: repairedMessages)
+              repairedTools.append(contentsOf: older.tools)
+            } else {
+              self.sessions[index].messages = DSHHistoryPageMerge.prepend(
+                older.messages,
+                to: self.sessions[index].messages)
+              for tool in older.tools
+              where !self.activeTools.contains(where: { $0.callId == tool.callId }) {
+                self.activeTools.append(tool)
+              }
             }
-            self.sessions[index].isLoadingHistory = page.hasMore
+            self.sessions[index].isLoadingHistory =
+              showsProgress && !replaceVisibleOnCompletion && page.hasMore
             self.status = page.hasMore
               ? "已显示最近内容，正在继续补齐更早历史"
               : "已载入完整会话历史"
@@ -485,13 +620,24 @@ extension HarnessController {
             generation: generation)
           else { return }
           guard let index = self.sessions.firstIndex(where: { $0.id == localSessionID }) else { return }
-          if self.sessions[index].messages.isEmpty {
+          if replaceVisibleOnCompletion, !repairedMessages.isEmpty {
+            self.sessions[index].messages = DSHHistoryPageMerge.mergeTail(
+              self.sessions[index].messages,
+              into: repairedMessages)
+            for tool in repairedTools
+            where !self.activeTools.contains(where: { $0.callId == tool.callId }) {
+              self.activeTools.append(tool)
+            }
+          } else if self.sessions[index].messages.isEmpty {
             self.sessions[index].messages = [
               Message(role: .system, text: "这个会话还没有可显示的消息。")
             ]
           }
           self.sessions[index].isLoadingHistory = false
           self.status = "已载入完整会话历史"
+          self.markRootHistoryComplete(
+            sessionID: sessionId,
+            throughSeq: throughSeq)
         }
       } catch {
         await MainActor.run {

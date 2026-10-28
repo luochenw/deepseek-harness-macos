@@ -1,0 +1,431 @@
+#!/usr/bin/env node
+// ds-agent — run one task through DeepSeek Harness.
+//
+// When the DeepSeek Harness.app is running, its packaged Host is reused so the
+// Session shows up in the App sidebar and the user can watch the run. When the
+// App is not running (or cannot be reached) the task falls back to the bundled
+// headless runtime, exactly like before.
+//
+//   ds-agent "task"                     answer one task, print the final message
+//   echo "task" | ds-agent -            read the task from stdin
+//   ds-agent --json "task"              newline-delimited run events
+//   ds-agent --session-id <id> "more"   continue an existing Session
+//   ds-agent --host "task"              require the App Host (error if absent)
+//   ds-agent --headless "task"          force the bundled headless runtime
+//   ds-agent --timeout 30m "task"       give up waiting after 30 minutes
+//   ds-agent --attach <session> "…"     follow a Session without prompting
+//   ds-agent --attach <session> --request-id <id>
+//
+// Waiting is unbounded by default: a model turn ends when it ends. `--timeout`
+// (`90s` / `30m` / `2h`, or a plain millisecond count) makes the CLI stop
+// waiting, print how to re-attach, and leave the turn running on the Host.
+//
+// Env overrides: DS_PROVIDER, DS_MODEL, DS_EFFORT, DSH_APP, DSH_HOME,
+// DS_AGENT_POLL_INTERVAL_MS, DS_AGENT_TIMEOUT_MS (headless ignores the last two).
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  HostTimeoutError,
+  HostUnavailableError,
+  abortOwnTurn,
+  attachToTurn,
+  parseDuration,
+  resolveDSHHome,
+  runHostTask,
+  selectMode,
+} from './ds-agent-host.mjs';
+
+const DEFAULT_POLL_INTERVAL_MS = 500;
+/// 0 = wait for as long as the turn takes; see the module header.
+const DEFAULT_TIMEOUT_MS = 0;
+
+const HELP = `用法：ds-agent [选项] "任务"
+      ds-agent [选项] -           从标准输入读任务
+      ds-agent --attach <会话 id> [--request-id <id>]
+
+选项：
+  --json                逐行输出运行事件（首行 session，末行 final；中间可能有
+                        prompt 等事件行，消费方不要按行号取结果）
+  --host                必须走 App 的 Host，不可用时报错而不是回退
+  --headless            强制使用打包的 headless 运行时
+  --session-id <id>     接着已有会话跑
+  --timeout <时长>       最多等待多久，例如 90s / 30m / 2h 或毫秒数（默认不限）
+  --attach <id>         不发送新任务，跟随该会话的回合并输出其回复（只走 Host）
+  --request-id <id>     --attach 时精确接回某一次 prompt 的回合
+  -h, --help            显示本帮助
+
+环境变量：DSH_HOME、DSH_APP、DS_PROVIDER、DS_MODEL、DS_EFFORT、
+         DS_AGENT_POLL_INTERVAL_MS、DS_AGENT_TIMEOUT_MS
+`;
+
+
+class UsageError extends Error {}
+
+function envNumber(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+/** Split argv into our flags and the task text. */
+function parseArgs(argv) {
+  const options = {
+    json: false,
+    help: false,
+    host: false,
+    headless: false,
+    attach: false,
+    requestId: undefined,
+    timeoutMs: undefined,
+    sessionId: undefined,
+    taskParts: [],
+    readStdin: false,
+    // dsh-only flags. They are replayed verbatim (with their values) on the
+    // headless path; Host mode has no equivalent and rejects them.
+    unknownFlags: [],
+    // Raw argv is replayed verbatim on the headless path so a dsh flag with a
+    // separate value keeps working exactly as before this bridge existed.
+    rawArgs: argv,
+  };
+  let positionalOnly = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (positionalOnly) {
+      options.taskParts.push(arg);
+      continue;
+    }
+    if (arg === '--') {
+      positionalOnly = true;
+      continue;
+    }
+    if (arg === '-') {
+      options.readStdin = true;
+      continue;
+    }
+    if (arg === '--json') {
+      options.json = true;
+      continue;
+    }
+    if (arg === '--host') {
+      options.host = true;
+      continue;
+    }
+    if (arg === '--headless') {
+      options.headless = true;
+      continue;
+    }
+    if (arg === '-h' || arg === '--help') {
+      options.help = true;
+      continue;
+    }
+    if (arg === '--attach' || arg.startsWith('--attach=')) {
+      const value = arg === '--attach' ? argv[++index] : arg.slice('--attach='.length);
+      if (value === undefined || value === '' || value.startsWith('--')) {
+        throw new UsageError('--attach 需要一个会话 id');
+      }
+      options.attach = true;
+      options.sessionId = value;
+      continue;
+    }
+    if (arg === '--request-id' || arg.startsWith('--request-id=')) {
+      const value = arg === '--request-id' ? argv[++index] : arg.slice('--request-id='.length);
+      if (value === undefined || value === '' || value.startsWith('--')) {
+        throw new UsageError('--request-id 需要一个 id');
+      }
+      options.requestId = value;
+      continue;
+    }
+    if (arg === '--timeout' || arg.startsWith('--timeout=')) {
+      const value = arg === '--timeout' ? argv[++index] : arg.slice('--timeout='.length);
+      const parsed = parseDuration(value);
+      if (parsed === null) {
+        throw new UsageError(`--timeout 需要时长（如 90s / 30m / 2h），收到 ${JSON.stringify(value)}`);
+      }
+      options.timeoutMs = parsed;
+      continue;
+    }
+    if (arg === '--session-id' || arg.startsWith('--session-id=')) {
+      const value = arg === '--session-id' ? argv[++index] : arg.slice('--session-id='.length);
+      if (value === undefined || value === '' || value.startsWith('--')) {
+        throw new UsageError('--session-id 需要一个会话 id');
+      }
+      options.sessionId = value;
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      options.unknownFlags.push(arg);
+      continue;
+    }
+    options.taskParts.push(arg);
+  }
+  if (options.host && options.headless) throw new UsageError('--host 与 --headless 不能同时使用');
+  if (options.requestId !== undefined && !options.attach) {
+    throw new UsageError('--request-id 只能配合 --attach 使用');
+  }
+  if (options.attach && options.headless) throw new UsageError('--attach 只支持 Host 模式');
+  if (options.attach && options.taskParts.length > 0) {
+    throw new UsageError('--attach 不接受任务文本（它不发送新 prompt）');
+  }
+  if (options.attach && options.readStdin) {
+    throw new UsageError('--attach 不接受标准输入（它不发送新 prompt）');
+  }
+  return options;
+}
+
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function writeJson(event) {
+  process.stdout.write(`${JSON.stringify(event)}\n`);
+}
+
+function log(message) {
+  process.stderr.write(`ds-agent: ${message}\n`);
+}
+
+/** Headless fallback: unchanged behaviour from the pre-bridge ds-agent. */
+async function runHeadless(options) {
+  const app = process.env.DSH_APP ?? '/Applications/DeepSeek Harness.app';
+  const node = join(app, 'Contents/MacOS/node');
+  const runtime = join(app, 'Contents/Resources/Runtime/dsh');
+  const home = resolveDSHHome();
+  if (!existsSync(node) || !existsSync(join(runtime, 'lib/bin.js'))) {
+    console.error(`ds-agent: no bundled runtime under ${app}`);
+    process.exit(127);
+  }
+  const YAML = createRequire(join(runtime, 'package.json'))('yaml');
+  const readYaml = (file, fallback) => (existsSync(file) ? YAML.parse(readFileSync(file, 'utf8')) : null) ?? fallback;
+
+  // dsh-headless disables the interactive credential store and resolves keys
+  // from the launch environment, so lift the app's stored refs into the child.
+  const env = { ...process.env, DSH_HOME: home, PATH: `${process.env.PATH}:${join(app, 'Contents/MacOS')}` };
+  for (const [ref, value] of Object.entries(readYaml(join(home, '.credentials.yaml'), {}).refs ?? {})) {
+    if (typeof value === 'string' && !env[ref]) env[ref] = value;
+  }
+
+  // Follow the model picked in the app (its web profile) unless overridden.
+  const picked = readYaml(join(home, 'profiles/web/cordis.patch.yml'), [])
+    .find((entry) => entry?.id === 'agent-default-model')?.config ?? {};
+  const model = {
+    ...picked,
+    ...(process.env.DS_PROVIDER && { provider: process.env.DS_PROVIDER }),
+    ...(process.env.DS_MODEL && { model: process.env.DS_MODEL }),
+    ...(process.env.DS_EFFORT && { reasoningEffort: process.env.DS_EFFORT }),
+  };
+  const overlayDir = mkdtempSync(join(tmpdir(), 'ds-agent-'));
+  const overlay = join(overlayDir, 'model.patch.yml');
+  writeFileSync(overlay, YAML.stringify([{ id: 'agent-default-model', config: model }]));
+
+  const forwarded = options.rawArgs.filter((arg) => arg !== '--host' && arg !== '--headless');
+  const child = spawn(
+    node,
+    [join(runtime, 'lib/bin.js'), '--profile', 'headless', '--patch', overlay, ...forwarded],
+    { env, stdio: 'inherit' },
+  );
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => child.kill(signal));
+  child.on('exit', (code, signal) => {
+    rmSync(overlayDir, { recursive: true, force: true });
+    process.exit(code ?? (signal ? 128 : 1));
+  });
+}
+
+/** Host mode: create/continue a Session on the App-owned Host, print the reply. */
+async function runHost(options, client) {
+  const task = options.readStdin ? await readStdin() : options.taskParts.join(' ');
+  if (task.trim() === '') throw new UsageError('任务不能为空');
+  const json = options.json;
+
+  let cancelled = false;
+  let activeSessionId;
+  // Minted here, not inside `client.prompt()`: Ctrl-C can land while that
+  // request is still in flight, and the handler must already know which turn to
+  // withdraw. The same id is handed to `runHostTask`, which sends it with the
+  // prompt and announces it once the Host accepted it.
+  const requestId = randomUUID();
+  const cancel = (signal) => {
+    if (cancelled) return;
+    cancelled = true;
+    const code = signal === 'SIGTERM' ? 143 : 130;
+    if (!activeSessionId) {
+      process.exit(code);
+      return;
+    }
+    // Withdraw only THIS run's work: a prompt still queued behind another
+    // client's turn is removed from the inbox, and `session/cancel` is issued
+    // only when the open turn is provably ours. Cancelling the Session blindly
+    // would kill whoever else is running.
+    abortOwnTurn(client, { sessionId: activeSessionId, requestId })
+      .then((outcome) => {
+        if (outcome.action === 'none') {
+          log('已退出；这一轮仍在 Host 上排队或运行，可用 --attach 接回');
+        }
+        process.exit(code);
+      })
+      .catch(() => process.exit(code));
+    setTimeout(() => process.exit(code), 2000).unref();
+  };
+  process.on('SIGINT', () => cancel('SIGINT'));
+  process.on('SIGTERM', () => cancel('SIGTERM'));
+
+  let result;
+  try {
+    result = await runHostTask(client, {
+      task,
+      cwd: process.cwd(),
+      sessionId: options.sessionId,
+      requestId,
+      pollIntervalMs: envNumber('DS_AGENT_POLL_INTERVAL_MS', DEFAULT_POLL_INTERVAL_MS),
+      timeoutMs: resolveTimeoutMs(options),
+      onSession: (session) => {
+        activeSessionId = session.sessionId;
+        if (json) writeJson({ type: 'session', ...session });
+      },
+      // Announced once the Host accepted the prompt: the `session` line has to
+      // come first, but the id itself already existed before the request.
+      onPrompt: (announced) => {
+        if (json) writeJson({ type: 'prompt', ...announced });
+      },
+      onEvent: (event) => {
+        if (json) writeJson(event);
+      },
+      onWarning: (message) => log(message),
+    });
+  } catch (error) {
+    reportUnfinishedWait(error, { sessionId: activeSessionId, requestId: options.attach ? options.requestId : requestId });
+    throw error;
+  }
+  activeSessionId = result.sessionId;
+  emitFinal(options, result);
+}
+
+/** `--attach`: follow an existing Session, print the same first/last lines. */
+async function runAttach(options, client) {
+  const json = options.json;
+  if (json) writeJson({ type: 'session', sessionId: options.sessionId, requestId: options.requestId, via: 'host', attach: true });
+  let result;
+  try {
+    result = await attachToTurn(client, {
+      sessionId: options.sessionId,
+      requestId: options.requestId,
+      pollIntervalMs: envNumber('DS_AGENT_POLL_INTERVAL_MS', DEFAULT_POLL_INTERVAL_MS),
+      timeoutMs: resolveTimeoutMs(options),
+      onWarning: (message) => log(message),
+    });
+  } catch (error) {
+    reportUnfinishedWait(error, { sessionId: options.sessionId, requestId: options.requestId });
+    throw error;
+  }
+  emitFinal(options, result);
+}
+
+/**
+ * A wait that gave up leaves the turn running — tell the user exactly which
+ * turn, and give them a command they can paste to pick the answer up later.
+ */
+function reportUnfinishedWait(error, { sessionId, requestId }) {
+  if (!(error instanceof HostTimeoutError)) return;
+  if (sessionId) log(`会话 ${sessionId} 可能仍在 Host 上运行`);
+  if (requestId) log(`requestId ${requestId}`);
+  if (sessionId) {
+    const attach = requestId
+      ? `ds-agent --attach ${sessionId} --request-id ${requestId}`
+      : `ds-agent --attach ${sessionId}`;
+    log(`接回这一轮：${attach}`);
+  }
+}
+
+function emitFinal(options, result) {
+  if (options.json) {
+    writeJson({ type: 'final', text: result.text, requestId: result.requestId ?? null });
+  } else {
+    process.stdout.write(`${result.text}\n`);
+  }
+  if (result.reason && result.reason !== 'completed') {
+    log(`本轮结束原因：${result.reason}`);
+    process.exitCode = 1;
+  }
+}
+
+/** Explicit `--timeout` beats `DS_AGENT_TIMEOUT_MS`; unset means no limit. */
+function resolveTimeoutMs(options) {
+  if (typeof options.timeoutMs === 'number') return options.timeoutMs;
+  return envNumber('DS_AGENT_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
+}
+
+async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    process.stdout.write(HELP);
+    return;
+  }
+  const home = resolveDSHHome();
+  // dsh-only flags have no Host equivalent. Forced Host mode rejects them; the
+  // automatic path falls back to headless so an existing invocation keeps
+  // working exactly as it did before the bridge existed.
+  const hostOnlyConflict = options.unknownFlags.length > 0;
+  if (options.host && hostOnlyConflict) {
+    throw new UsageError(`Host 模式不支持这些参数：${options.unknownFlags.join(' ')}`);
+  }
+  if (!options.host && hostOnlyConflict && !options.headless) {
+    log(`检测到 dsh 专有参数（${options.unknownFlags.join(' ')}），使用 headless 模式`);
+  }
+
+  let selection;
+  try {
+    selection = await selectMode({
+      // `--attach` can only work against a live Host: falling back to a fresh
+      // headless runtime would report somebody else's Session as this run's.
+      forceHost: options.host || options.attach,
+      forceHeadless: options.headless || hostOnlyConflict,
+      home,
+    });
+  } catch (error) {
+    if (error instanceof HostUnavailableError) {
+      log(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
+
+  if (selection.mode === 'headless') {
+    // Say WHY the Host was skipped when the file existed but was unusable —
+    // silent fallback hid a mistyped/hostile baseURL before.
+    if (selection.reason === 'handshake-failed') {
+      log(`App Host 不可用（${selection.error?.message ?? '握手失败'}），回退 headless`);
+    } else if (selection.reason === 'invalid-host-file') {
+      log(`host.json 不可用（${selection.detail ?? '格式无效'}），回退 headless`);
+    }
+    await runHeadless(options);
+    return;
+  }
+
+  if (selection.reason !== 'forced-headless') {
+    log(`经由 App Host ${selection.record.baseURL} 执行（pid ${selection.record.appPid}）`);
+  }
+  if (options.attach) {
+    await runAttach(options, selection.client);
+    return;
+  }
+  await runHost(options, selection.client);
+}
+
+try {
+  await main();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof UsageError) {
+    log(message);
+    process.exit(2);
+  }
+  if (process.argv.includes('--json')) writeJson({ type: 'error', message });
+  log(`失败：${message}`);
+  process.exit(1);
+}

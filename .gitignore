@@ -16,6 +16,15 @@
 .DS_Store
 *.swp
 
+# Local-only fixture redaction words (machine/company specific, never committed).
+/macos/DSHTests/Fixtures/scrub-local.txt
+
+# Real-session transcript fixtures: captured from this machine's Host, never
+# committed (several MB of session content). README.md / scrub-fixtures.py stay
+# tracked; the tests that need a fixture skip, visibly, when it is absent.
+/macos/DSHTests/Fixtures/*.json
+/scripts/fixtures/transcript-interrupted-turn19.json
+
 # Swift build artifacts if a future SwiftPM/Xcode project is added
 .build/
 .swiftpm/

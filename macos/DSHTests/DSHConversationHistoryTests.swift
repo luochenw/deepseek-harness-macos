@@ -54,12 +54,89 @@ private func testConversationTranscript_keepsRootAndChildContextsIndependent() t
   }
 }
 
+private func testConversationTailFollowing_ignoresOlderPagePrepends() throws {
+  let current = DSHConversationMessageToken(
+    contextKey: "root:session",
+    count: 500,
+    firstID: UUID(uuidString: "00000000-0000-0000-0000-000000000000"),
+    lastID: UUID(uuidString: "00000000-0000-0000-0000-000000000001"),
+    lastTextBytes: 120,
+    lastReasoningBytes: 40,
+    lastAttachmentID: nil)
+  let afterPrepend = DSHConversationMessageToken(
+    contextKey: "root:session",
+    count: 1_000,
+    firstID: UUID(uuidString: "00000000-0000-0000-0000-000000000002"),
+    lastID: current.lastID,
+    lastTextBytes: current.lastTextBytes,
+    lastReasoningBytes: current.lastReasoningBytes,
+    lastAttachmentID: nil)
+  let streaming = DSHConversationMessageToken(
+    contextKey: "root:session",
+    count: 500,
+    firstID: current.firstID,
+    lastID: current.lastID,
+    lastTextBytes: 160,
+    lastReasoningBytes: current.lastReasoningBytes,
+    lastAttachmentID: nil)
+  let switched = DSHConversationMessageToken(
+    contextKey: "root:other",
+    count: 500,
+    firstID: current.firstID,
+    lastID: current.lastID,
+    lastTextBytes: current.lastTextBytes,
+    lastReasoningBytes: current.lastReasoningBytes,
+    lastAttachmentID: nil)
+
+  try expect(!afterPrepend.shouldFollowTail(comparedTo: current))
+  try expect(streaming.shouldFollowTail(comparedTo: current))
+  try expect(switched.shouldFollowTail(comparedTo: current))
+}
+
 private func testHistoryPagination_advancesOnlyTowardOlderSequences() throws {
   try expectEqual(DSHHistoryPagination.pageSize, 500)
   try expect(DSHHistoryPagination.advances(currentOldest: 900, pageOldest: 400))
   try expect(!DSHHistoryPagination.advances(currentOldest: 400, pageOldest: 400))
   try expect(!DSHHistoryPagination.advances(currentOldest: 400, pageOldest: 500))
   try expect(!DSHHistoryPagination.advances(currentOldest: 400, pageOldest: nil))
+}
+
+private func testHistoryCache_reusesOnlyUnchangedCompleteSnapshots() throws {
+  try expect(!DSHHistoryCachePolicy.canReuse(
+    cached: DSHHistoryCacheVersion(sequence: 100, updatedAt: 2_000),
+    hostSequence: 100,
+    hostUpdatedAt: 2_000,
+    hasMessages: false))
+  try expect(DSHHistoryCachePolicy.canReuse(
+    cached: DSHHistoryCacheVersion(sequence: 100, updatedAt: 1_000),
+    hostSequence: 100,
+    hostUpdatedAt: 2_000,
+    hasMessages: true))
+  try expect(!DSHHistoryCachePolicy.canReuse(
+    cached: DSHHistoryCacheVersion(sequence: 99, updatedAt: 2_000),
+    hostSequence: 100,
+    hostUpdatedAt: 2_000,
+    hasMessages: true))
+  try expect(DSHHistoryCachePolicy.canReuse(
+    cached: DSHHistoryCacheVersion(sequence: 101, updatedAt: 1_000),
+    hostSequence: 100,
+    hostUpdatedAt: 2_000,
+    hasMessages: true))
+  try expect(DSHHistoryCachePolicy.canReuse(
+    cached: DSHHistoryCacheVersion(sequence: nil, updatedAt: 2_000),
+    hostSequence: nil,
+    hostUpdatedAt: 2_000,
+    hasMessages: true))
+  try expect(!DSHHistoryCachePolicy.canReuse(
+    cached: DSHHistoryCacheVersion(sequence: nil, updatedAt: 1_999),
+    hostSequence: nil,
+    hostUpdatedAt: 2_000,
+    hasMessages: true))
+  try expect(!DSHHistoryCachePolicy.canReuse(
+    cached: nil,
+    hostSequence: nil,
+    hostUpdatedAt: 2_000,
+    hasMessages: true))
 }
 
 private func testConversationHistoryLoading_keepsLoadedMessagesVisible() throws {
@@ -78,6 +155,25 @@ private func testConversationHistoryLoading_keepsLoadedMessagesVisible() throws 
       isLoading: false,
       hasMessages: true),
     nil)
+  try expectEqual(
+    DSHConversationHistoryLoadingPresentation.resolve(
+      isLoading: true,
+      hasMessages: true,
+      running: true),
+    nil)
+  try expectEqual(
+    DSHConversationHistoryLoadingPresentation.resolve(
+      isLoading: true,
+      hasMessages: false,
+      running: true),
+    .placeholder)
+}
+
+private func testConversationFollow_reengagesOnlyNearTheBottom() throws {
+  try expect(DSHConversationScrollFollow.isNearBottom(-12))
+  try expect(DSHConversationScrollFollow.isNearBottom(119))
+  try expect(!DSHConversationScrollFollow.isNearBottom(120))
+  try expect(!DSHConversationScrollFollow.isNearBottom(400))
 }
 
 private func testLiveActivity_followsReasoningTextAndRunningTool() throws {
@@ -184,6 +280,43 @@ private func testHistoryPageMerge_prependsOlderMessagesWithoutDuplicates() throw
     ["recent"])
 }
 
+private func testHistorySnapshotMerge_preservesVisibleRowIdentity() throws {
+  let user = HarnessController.Message(
+    role: .user,
+    text: "run",
+    hostMessageId: "host-user")
+  var assistant = HarnessController.Message(
+    role: .assistant,
+    text: "partial",
+    hostMessageId: DSHTranscriptMessageMarker.streamingAssistantHostMessageID)
+  assistant.reasoning = "before"
+  let existing = [user, assistant]
+
+  let incomingUser = HarnessController.Message(
+    role: .user,
+    text: "run",
+    timestamp: user.timestamp.addingTimeInterval(1),
+    hostMessageId: "host-user")
+  let incomingAssistant = HarnessController.Message(
+    role: .assistant,
+    text: "complete",
+    timestamp: assistant.timestamp.addingTimeInterval(1),
+    hostMessageId: DSHTranscriptMessageMarker.streamingAssistantHostMessageID)
+  let tool = HarnessController.Message(
+    role: .tool,
+    text: "run_code",
+    toolCallId: "tool-1")
+  let merged = DSHHistoryPageMerge.mergeTail(
+    [incomingUser, incomingAssistant, tool],
+    into: existing)
+
+  try expectEqual(merged.count, 3)
+  try expectEqual(merged[0].id, user.id)
+  try expectEqual(merged[1].id, assistant.id)
+  try expectEqual(merged[1].text, "complete")
+  try expectEqual(merged[2].toolCallId, "tool-1")
+}
+
 private func testHistoryLoadingWatchdog_releasesOnlyCurrentLoad() throws {
   try MainActor.assumeIsolated {
     let harness = HarnessController(startRuntime: false)
@@ -248,13 +381,17 @@ private func testConversationFold_groupsConsecutiveRunCodeCalls() throws {
 let dshConversationHistoryTests: [NamedTest] = [
   ("Conversation transcript exposes every loaded message", testConversationTranscript_exposesEveryLoadedMessage),
   ("Conversation transcript keeps root and child contexts independent", testConversationTranscript_keepsRootAndChildContextsIndependent),
+  ("Conversation tail following ignores older-page prepends", testConversationTailFollowing_ignoresOlderPagePrepends),
   ("History pagination advances toward older sequences", testHistoryPagination_advancesOnlyTowardOlderSequences),
+  ("History cache reuses only unchanged complete snapshots", testHistoryCache_reusesOnlyUnchangedCompleteSnapshots),
   ("Conversation history loading keeps loaded messages visible", testConversationHistoryLoading_keepsLoadedMessagesVisible),
+  ("Conversation follow re-engages only near the bottom", testConversationFollow_reengagesOnlyNearTheBottom),
   ("Live activity follows reasoning, text, and running tools", testLiveActivity_followsReasoningTextAndRunningTool),
   ("Reasoning fold keeps the current turn status live", testReasoningFold_keepsCurrentTurnStatusLiveAfterBodyAndTools),
   ("Reasoning layout caps only long expanded content", testReasoningLayout_capsOnlyLongExpandedContent),
   ("Tool details layout caps only long expanded content", testToolDetailsLayout_capsOnlyLongExpandedContent),
   ("History page merge prepends older messages without duplicates", testHistoryPageMerge_prependsOlderMessagesWithoutDuplicates),
+  ("History snapshot merge preserves visible row identity", testHistorySnapshotMerge_preservesVisibleRowIdentity),
   ("History loading watchdog releases only the current load", testHistoryLoadingWatchdog_releasesOnlyCurrentLoad),
   ("Conversation fold groups consecutive run_code calls", testConversationFold_groupsConsecutiveRunCodeCalls),
 ]

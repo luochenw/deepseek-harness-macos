@@ -10,6 +10,7 @@ let presetKey = "dsh.preset"
 
 @main
 struct DSHNativeApp: App {
+  @NSApplicationDelegateAdaptor(DSHAppDelegate.self) private var appDelegate
   @StateObject private var controller = HarnessController()
 
   var body: some Scene {
@@ -269,7 +270,7 @@ final class HarnessController: ObservableObject {
   /// `/model` 的原生落点：composer 模型选择 popover（SwiftUI Menu 无法编程打开）。
   @Published var showModelPicker = false
   @Published var isRunning = false {
-    didSet { nativeAlerts.setRunning(isRunning) }
+    willSet { if newValue != isRunning { nativeAlerts.setRunning(newValue) } }
   }
   @Published var status = "准备就绪"
   @Published var workspace: URL?
@@ -361,7 +362,7 @@ final class HarnessController: ObservableObject {
       reasoningEffort = UserDefaults.standard.string(forKey: reasoningEffortKey) ?? "high"
       preset = Preset(rawValue: UserDefaults.standard.string(forKey: presetKey) ?? Preset.code.rawValue) ?? .code
       seedConfigurationFromUserDSHIfNeeded()
-      nativeAlerts.attach()
+      DSHAppLifecycle.install(nativeAlerts, terminationOwner: self)
       startPersistentHost()
     }
   }

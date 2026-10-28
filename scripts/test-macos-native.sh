@@ -68,6 +68,62 @@ if (( main_swift_lines > MAIN_SWIFT_LINE_LIMIT )); then
 fi
 echo "main.swift size check: OK ($main_swift_lines/$MAIN_SWIFT_LINE_LIMIT lines)"
 
+# AGENTS.md "Rules for code changes" gates: sanitized home paths only, no new
+# `print(` in production sources, and no parallel `Foo2` types. The account is
+# read from $USER/$HOME so this script never hardcodes a real user name.
+HOME_PREFIX="/Users"
+HOME_USER_PATTERN="$HOME_PREFIX/([A-Za-z0-9._-]+)"
+PRINT_BASELINE=0
+
+check_home_paths() {
+  local bad=0 entry file line rest text name account
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    file="${entry%%:*}"; rest="${entry#*:}"
+    line="${rest%%:*}"; text="${rest#*:}"
+    while [[ "$text" =~ $HOME_USER_PATTERN ]]; do
+      name="${BASH_REMATCH[1]}"
+      text="${text#*"$HOME_PREFIX/$name"}"
+      [[ "$name" == "developer" ]] && continue
+      account=""
+      [[ "$name" == "${USER:-}" || "$name" == "${HOME##*/}" ]] && account=" (local account)"
+      echo "  ${file#"$ROOT"/}:$line: $HOME_PREFIX/$name$account"
+      bad=1
+    done
+  done < <(grep -rInE --include='*.swift' --include='*.sh' --include='*.md' --include='*.mjs' --include='*.py' \
+             -- "$HOME_PREFIX/" "$ROOT/macos" "$ROOT/scripts" "$ROOT/docs" \
+             "$ROOT/AGENTS.md" "$ROOT/CLAUDE.md" 2>/dev/null || true)
+  (( bad == 0 ))
+}
+
+check_prints() {
+  local count
+  count="$(grep -ho 'print(' "$ROOT"/macos/DSHApp/*.swift 2>/dev/null | wc -l | tr -d ' ')"
+  (( count > PRINT_BASELINE )) || return 0
+  echo "  macos/DSHApp/*.swift: $count print( call(s), baseline $PRINT_BASELINE"
+  grep -Hn 'print(' "$ROOT"/macos/DSHApp/*.swift | sed "s|$ROOT/|  |"
+  return 1
+}
+
+check_parallel_types() {
+  local hits
+  hits="$(grep -rnE '(^|[^A-Za-z0-9_])(enum|struct|class|actor|protocol|typealias)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*2([^A-Za-z0-9_]|$)' \
+    "$ROOT/macos" "$ROOT/scripts" "$ROOT/docs" 2>/dev/null || true)"
+  [[ -z "$hits" ]] && return 0
+  printf '%s\n' "$hits" | sed "s|$ROOT/|  |"
+  return 1
+}
+
+style_issues=0
+check_home_paths || style_issues=$((style_issues + 1))
+check_prints || style_issues=$((style_issues + 1))
+check_parallel_types || style_issues=$((style_issues + 1))
+if (( style_issues > 0 )); then
+  echo "style gates: $style_issues check(s) failed (see 文件:行 above); see AGENTS.md 'Rules for code changes'." >&2
+  exit 1
+fi
+echo "style gates: OK (0 issues)"
+
 # The production build compiles this exact glob; keeping the command here avoids
 # a second source list or a synthetic test project that could drift from builds.
 swiftc -target "$SWIFT_TARGET" -typecheck -parse-as-library "$ROOT"/macos/DSHApp/*.swift \
@@ -112,7 +168,10 @@ if [[ "$MODE" == "unit" ]]; then
   # instead of an app executable — main.swift's own @main entry point never
   # gets linked into an executable here, so it can't collide with the test
   # runner's @main below.
-  swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
+  # -D DEBUG keeps the probe counters and their switches settable. The shipping
+  # build does NOT define it, so `DSHTranscriptPerf.isEnabled`/`forceRowFrames`
+  # are `let false` there and nothing can turn measurement on in production.
+  swiftc -target "$SWIFT_TARGET" -parse-as-library -D DEBUG -enable-testing -emit-library -emit-module -module-name DSHAppLib \
     -o "$UNIT_DIR/libDSHAppLib.dylib" -module-link-name DSHAppLib \
     "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
   swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$UNIT_DIR" -L "$UNIT_DIR" -lDSHAppLib \

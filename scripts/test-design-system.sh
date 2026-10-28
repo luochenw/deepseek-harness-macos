@@ -23,15 +23,17 @@ grep -q '0xA2 / 255, 0xE4 / 255, 0xE0 / 255' "$THEME" || {
   echo "design-system: the original logo background color is missing" >&2
   exit 1
 }
-grep -q 'static let sessionSelected = DSHBrandPalette.logoPrimary' "$THEME" \
-  && grep -q 'isActive ? DSHTheme.sessionSelected' "$SIDEBAR" || {
-  echo "design-system: selected sessions must use the same logo background color" >&2
+grep -q 'sessionSelectedBackground' "$THEME" \
+  && grep -q 'withAlpha(DSHBrandPalette.logoPrimaryRGBA' "$THEME" \
+  && grep -q 'isActive' "$SIDEBAR" \
+  && grep -q 'DSHActivityLine' "$SIDEBAR" \
+  && grep -q 'accessibilityReduceMotion' "$SIDEBAR" || {
+  echo "design-system: selected and running sessions need distinct lightweight treatments" >&2
   exit 1
 }
-grep -q 'struct DSHRunningBars' "$THEME" \
-  && grep -q 'DSHRunningBars(' "$SIDEBAR" \
-  && grep -q 'Text("运行中")' "$SIDEBAR" || {
-  echo "design-system: running sessions need non-color activity feedback" >&2
+grep -q 'struct DSHActivityLine' "$THEME" \
+  && grep -q 'repeatForever(autoreverses: true)' "$THEME" || {
+  echo "design-system: running sessions need a moving activity line" >&2
   exit 1
 }
 grep -q 'static let accentBright = DSHBrandPalette.logoPrimary' "$THEME" || {

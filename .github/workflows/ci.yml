@@ -24,6 +24,8 @@ jobs:
         run: echo "DSH_SOURCE=$(DSH_RUNTIME_VERIFY_LATEST=1 ./scripts/prepare-dsh-runtime.sh)" >> "$GITHUB_ENV"
       - name: Agent Platform runtime contracts
         run: ./scripts/test-agent-platform-runtime-script.sh && ./scripts/test-agent-platform-runtime.sh
+      - name: LLM runtime patch contracts (B image placement + C per-route pressure)
+        run: ./scripts/test-llm-runtime.sh
       - name: Build DeepSeek Harness.app
         run: ./scripts/build-macos-app.sh
       - name: Smoke test the packaged Host (read + write RPC paths)

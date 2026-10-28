@@ -30,6 +30,11 @@ grep -Fq 'ModelUsageSettingsSection()' "$VIEW" || { echo "settings-ui: model usa
 grep -Fq 'contextPressure' "$USAGE" || { echo "settings-ui: model usage does not show context projections" >&2; exit 1; }
 grep -Fq 'tokenUsage' "$USAGE" || { echo "settings-ui: model usage does not show token projections" >&2; exit 1; }
 grep -Fq 'showComposerUsageKey' "$USAGE" || { echo "settings-ui: model usage display preference is missing" >&2; exit 1; }
+grep -Fq 'DSHAnimatedProgressBar(' "$USAGE" \
+  && grep -Fq 'contentTransition(reduceMotion ? .opacity : .numericText())' "$USAGE" || {
+  echo "settings-ui: context and cache metrics lack animated proportional feedback" >&2
+  exit 1
+}
 ! grep -Eq 'Relay（本机）|provider == "relay" \? "RELAY_API_KEY"' "$MAIN" || {
   echo "settings-ui: Relay-specific model entry remains" >&2
   exit 1

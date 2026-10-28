@@ -27,12 +27,18 @@ EXPECTED_DSH_VERSION="$(tr -d '[:space:]' < "$ROOT/scripts/dsh-runtime-version.t
 DSH_HOME="$HOME_DIR" "$NODE" "$DSH" web --host 127.0.0.1 --port 0 --no-open >"$LOG" 2>&1 &
 PID=$!
 
-for _ in $(seq 1 50); do
+# 30s, not 5s: on a loaded machine (load ~65) the Host can take well over five
+# seconds to print its address, and this check then reported a false failure.
+for _ in $(seq 1 300); do
   LAUNCH_URL="$(sed -n "s/^dsh web: //p" "$LOG" | head -1 || true)"
   [[ -n "$LAUNCH_URL" ]] && break
   sleep 0.1
 done
-[[ -n "${LAUNCH_URL:-}" ]] || { cat "$LOG" >&2; exit 1; }
+[[ -n "${LAUNCH_URL:-}" ]] || {
+  echo "verify-native-host-api: Host did not print its launch URL within 30s; tail of host.log:" >&2
+  tail -40 "$LOG" >&2
+  exit 1
+}
 read -r BASE_URL PORT COOKIE <<EOF
 $(LAUNCH_URL="$LAUNCH_URL" "$NODE" -e '
   const u = new URL(process.env.LAUNCH_URL);

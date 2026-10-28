@@ -29,12 +29,19 @@ Last audited against DSH `0.2.1-rc.2`, its Host API, and the web bundle composit
 Not every native feature is "catching up" to the web client — some native
 capability is only possible because this is a native app:
 
-- **Menu bar presence + system notifications**: a persistent `NSStatusItem`
-  reflects idle/running/needs-attention state; local notifications fire for
-  approval requests, agent questions, and top-level turn completion whenever
-  the app isn't frontmost, with a Dock-bounce attention request and a
-  click-to-activate path back into the app. See
-  [native-menu-bar-and-notifications](../.agents/notes/implemented/feature/2026-08-14-native-menu-bar-and-notifications.md).
+- **Dock badge + system notifications**: the Dock icon badge reflects
+  idle / running ("•") / needs-attention ("!", any session) state; local
+  notifications fire for approval requests, agent questions, and top-level turn
+  completion whenever the app isn't frontmost, with a Dock-bounce attention
+  request and a click-to-activate path back into the app. Dock reopen restores
+  the window after it was closed. The earlier `NSStatusItem` was removed after
+  macOS 27 beta crashes. See
+  [native-menu-bar-and-notifications](../.agents/notes/implemented/feature/2026-08-14-native-menu-bar-and-notifications.md)
+  and [dock-badge-replaces-menu-bar](../.agents/notes/implemented/bug-fix/2026-10-27-dock-badge-replaces-menu-bar.md).
+- **External agent bridge**: the app publishes its Host (`host.json`, mode
+  0600) and supervises it (auto-restart, exits with the app); `scripts/ds-agent`
+  runs tasks on that Host so they stream live in the sidebar. See
+  [external-agent-bridge](../.agents/notes/implemented/feature/2026-10-27-external-agent-bridge.md).
 
 - **Cross-session relay** (experimental, off by default): a Settings toggle
   mounts a host-plane cordis plugin (`macos/Runtime-extras/dsh-tool-session-relay/`)

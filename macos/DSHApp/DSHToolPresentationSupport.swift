@@ -187,9 +187,17 @@ enum DSHSubcallDecoder {
     guard let arguments else {
       return meaningfulFallback(fallback)
     }
+    if let friendly = DSHJobToolCopy.title(for: name) {
+      return friendly
+    }
     switch name {
-    case "bash":
-      return (arguments["command"] as? String)?.nonEmpty
+    case "bash", "shell", "sh", "zsh":
+      guard let command = (arguments["command"] as? String)?
+        .trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty else {
+        // No command at all: still never blank — say what ran, not nothing.
+        return meaningfulFallback(fallback) ?? "运行命令"
+      }
+      return DSHCommandTitle.summarize(command).title
     case "read", "write", "edit", "read_image":
       return ((arguments["file_path"] as? String)
         ?? (arguments["path"] as? String))?.nonEmpty
@@ -399,6 +407,16 @@ enum DSHToolGroupStatus {
   }
 
   static func instructionTitle(for activity: HarnessController.ToolActivity) -> String? {
+    // Shell rows are summarized from the whole command string, not its first
+    // line: a `cd … && python3 - <<'PY'` heredoc has no readable first line
+    // (it is a directory change), which is what produced blank-looking rows.
+    if DSHToolCallShape.isShellTool(activity.name),
+       let command = shellCommand(for: activity) {
+      return DSHCommandTitle.summarize(command).title
+    }
+    if let friendly = DSHJobToolCopy.title(for: activity.name) {
+      return friendly
+    }
     let presentation = activity.presentation
     let directCandidates = [
       activity.children.last.flatMap { instructionTitle(for: $0) },
@@ -430,12 +448,22 @@ enum DSHToolGroupStatus {
     }
 
     if presentation?.card == "code" {
-      return codeInstruction(from: presentation?.description)
+      if let instruction = codeInstruction(from: presentation?.description) {
+        return instruction
+      }
     }
-    return nil
+    // Never return nil for a command tool: an unanswered title is exactly what
+    // rendered as an empty terminal row.
+    return DSHToolCallShape.isCommandTool(activity.name)
+      ? DSHToolCallShape.fallbackTitle(for: activity.name)
+      : nil
   }
 
   static func instructionTitle(for child: DSHToolChildActivity) -> String? {
+    if DSHToolCallShape.isShellTool(child.name),
+       let command = commandString(from: child.arguments) {
+      return DSHCommandTitle.summarize(command).title
+    }
     if let title = meaningfulText(child.title),
        title.caseInsensitiveCompare(child.name) != .orderedSame {
       return title
@@ -443,6 +471,29 @@ enum DSHToolGroupStatus {
     return DSHSubcallDecoder.instructionTitle(
       name: child.name,
       arguments: child.arguments)
+  }
+
+  /// The raw shell command for an activity: the argument payload when the App
+  /// kept it, otherwise the Host-projected `presentation.title` (the bash tool
+  /// projects its full `command` there).
+  static func shellCommand(for activity: HarnessController.ToolActivity) -> String? {
+    if let command = commandString(from: activity.arguments) { return command }
+    guard let title = activity.presentation?.title,
+          !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return nil
+    }
+    return title
+  }
+
+  static func commandString(from arguments: String?) -> String? {
+    guard let arguments,
+          let data = arguments.data(using: .utf8),
+          let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+          let command = object["command"] as? String,
+          !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return nil
+    }
+    return command
   }
 
   private static func meaningfulText(_ value: String?) -> String? {
@@ -493,6 +544,8 @@ struct DSHToolInstruction: Identifiable {
   let state: HarnessController.ToolActivity.State
   let output: String
   let source: Source
+  /// Mutating calls paint their row in the theme accent and get a pencil.
+  var mutating: Bool = false
 }
 
 enum DSHToolInstructionFlatten {
@@ -514,7 +567,8 @@ enum DSHToolInstructionFlatten {
             title: title,
             state: activity.state,
             output: activity.output,
-            source: .activity(activity)))
+            source: .activity(activity),
+            mutating: activity.callKind.isMutating))
         }
         continue
       }
@@ -531,7 +585,10 @@ enum DSHToolInstructionFlatten {
           title: title,
           state: child.state,
           output: child.output,
-          source: .child(child)))
+          source: .child(child),
+          mutating: DSHToolCallClassifier
+            .kind(name: child.name, arguments: child.arguments)
+            .isMutating))
       }
       if instructions.count == instructionCountBeforeChildren,
          let title = DSHToolGroupStatus.instructionTitle(for: activity) {
@@ -542,7 +599,8 @@ enum DSHToolInstructionFlatten {
             title: title,
             state: activity.state,
             output: activity.output,
-            source: .activity(activity)))
+            source: .activity(activity),
+            mutating: activity.callKind.isMutating))
         }
       }
     }

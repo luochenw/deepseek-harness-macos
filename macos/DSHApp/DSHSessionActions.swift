@@ -162,7 +162,7 @@ extension HarnessController {
       // wins over the snapshot: mux turn events keep it fresher.
       syncSessionScopedState(from: summary, rowRunning: sessions[existing].isRunning)
       status = summary.running ? "持久会话正在运行" : "正在同步持久会话"
-      loadHistory(sessionId: summary.sessionId, localSessionID: localSessionID)
+      loadHistory(summary: summary, localSessionID: localSessionID)
       return
     }
     let local = Session(
@@ -177,7 +177,7 @@ extension HarnessController {
     selectedSessionID = local.id
     syncSessionScopedState(from: summary, rowRunning: summary.running)
     status = summary.running ? "持久会话正在运行" : "正在载入持久会话"
-    loadHistory(sessionId: summary.sessionId, localSessionID: local.id)
+    loadHistory(summary: summary, localSessionID: local.id)
   }
 
   /// Session-scoped globals follow the displayed session. Attaching to a
@@ -205,5 +205,36 @@ extension HarnessController {
     loadCommands(sessionId: summary.sessionId)
     loadMessageFeedback(sessionId: summary.sessionId)
     refreshAgentBatches(rootSessionId: summary.sessionId)
+    refreshExactSessionProjections(sessionID: summary.sessionId)
+  }
+
+  private func refreshExactSessionProjections(sessionID: String) {
+    guard let hostClient else { return }
+    Task {
+      guard let projections = try? await hostClient.sessionProjections(sessionId: sessionID) else {
+        return
+      }
+      await MainActor.run {
+        self.applyExactSessionProjections(projections, sessionID: sessionID)
+      }
+    }
+  }
+
+  /// Exact projection reads fill the session-scoped usage state immediately
+  /// after navigation, even when the sidebar's list snapshot is stale.
+  func applyExactSessionProjections(
+    _ projections: DSHSessionProjections?,
+    sessionID: String
+  ) {
+    guard hostCurrentSessionID == sessionID, let projections else { return }
+    tokenUsage = projections.values.tokenUsage
+    contextPressure = projections.values.contextPressure
+    sessionStats = projections.values.sessionStats
+    if let permissions = projections.values.permissions {
+      rememberPermissionSelection(
+        permissions,
+        sessionID: sessionID,
+        seq: projections.asOfSeq ?? -1)
+    }
   }
 }

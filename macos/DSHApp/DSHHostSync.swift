@@ -205,7 +205,20 @@ extension HarnessController {
     openSessionControl()
     openWorkspaceFollow()
     if let sessionID = hostCurrentSessionID, let localSessionID = selectedSessionID {
-      startRootSessionFollow(sessionID: sessionID, localSessionID: localSessionID)
+      let messages = sessions.first(where: { $0.id == localSessionID })?.messages ?? []
+      let summary = hostSessions.first(where: { $0.sessionId == sessionID })
+      let reuseCache = summary.map {
+        DSHHistoryCachePolicy.canReuse(
+          cached: cachedRootHistoryVersion(sessionID: sessionID),
+          hostSequence: $0.projections?.asOfSeq,
+          hostUpdatedAt: $0.updatedAt,
+          hasMessages: !messages.isEmpty)
+      } ?? false
+      startRootSessionFollow(
+        sessionID: sessionID,
+        localSessionID: localSessionID,
+        preservingCachedHistory: reuseCache,
+        retainingVisibleHistory: true)
     }
     hostStatus = "Host 事件流已重新连接"
     refreshHostSnapshots()

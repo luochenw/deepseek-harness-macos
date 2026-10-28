@@ -110,6 +110,36 @@ enum DSHSidebarHostStatus {
   }
 }
 
+enum DSHSidebarSessionTimestamp {
+  static func compact(
+    _ date: Date,
+    now: Date = Date(),
+    calendar: Calendar = .current
+  ) -> String {
+    let interval = now.timeIntervalSince(date)
+    if interval >= 0, interval < 60 { return "刚刚" }
+    if interval >= 60, interval < 3_600 { return "\(Int(interval / 60)) 分钟前" }
+
+    let time = String(
+      format: "%02d:%02d",
+      calendar.component(.hour, from: date),
+      calendar.component(.minute, from: date))
+    if calendar.isDate(date, inSameDayAs: now) { return time }
+    if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+       calendar.isDate(date, inSameDayAs: yesterday) {
+      return "昨天 \(time)"
+    }
+
+    let month = calendar.component(.month, from: date)
+    let day = calendar.component(.day, from: date)
+    let year = calendar.component(.year, from: date)
+    if year == calendar.component(.year, from: now) {
+      return "\(month)月\(day)日"
+    }
+    return "\(year)年\(month)月\(day)日"
+  }
+}
+
 /// Shared chrome for a sidebar session row — both the Host-backed list and
 /// the local fallback list render through this so their layout/selection
 /// treatment can't drift apart.
@@ -125,45 +155,32 @@ private struct SidebarRowChrome: View {
   /// moment the cursor reaches the button.
   var forceHover: Bool = false
   @State private var hovering = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private var hoverActive: Bool { hovering || forceHover }
   var body: some View {
     Button(action: action) {
       HStack(spacing: DSHSpace.s2) {
-        if statusKind == .live {
-          DSHRunningBars(
-            color: isActive ? DSHTheme.sessionSelectedForeground : DSHTheme.accent,
-            height: 11)
-        } else if isActive {
-          Circle()
-            .fill(DSHTheme.sessionSelectedForeground)
-            .frame(width: 7, height: 7)
-        } else {
-          DSHStatusDot(kind: statusKind)
+        ZStack {
+          if statusKind == .unread {
+            DSHStatusDot(kind: statusKind)
+          }
         }
+        .frame(width: 13, height: 13)
         VStack(alignment: .leading, spacing: 2) {
           Text(title)
-            .font(DSHType.body)
+            .font(isActive ? DSHType.label.weight(.semibold) : DSHType.label)
             .foregroundStyle(isActive ? DSHTheme.sessionSelectedForeground : DSHTheme.ink)
             .lineLimit(1)
-          Text(Self.compactTime(date))
-            .font(DSHType.caption)
+          Text(DSHSidebarSessionTimestamp.compact(date))
+            .font(DSHType.micro)
             .foregroundStyle(
               isActive
                 ? DSHTheme.sessionSelectedForeground.opacity(0.72)
                 : DSHTheme.inkFaint)
         }
         Spacer(minLength: 0)
-        if statusKind == .live {
-          Text("运行中")
-            .font(DSHType.micro)
-            .foregroundStyle(
-              isActive
-                ? DSHTheme.sessionSelectedForeground.opacity(0.76)
-                : DSHTheme.accent)
-            .fixedSize()
-        }
       }
-      .padding(.horizontal, DSHSpace.s2).padding(.vertical, 7)
+      .padding(.horizontal, DSHSpace.s2).padding(.vertical, 6)
       .frame(maxWidth: .infinity, alignment: .leading)
       // contentShape makes the whole row hit-testable — a plain-style Button
       // only responds where content draws, so the trailing blank half of the
@@ -172,22 +189,28 @@ private struct SidebarRowChrome: View {
       // Hover is structure feedback, not state — neutral wash; only the
       // selected row keeps the accent-tinted background.
       .background(
-        isActive ? DSHTheme.sessionSelected : hoverActive ? DSHTheme.surfaceTint2 : .clear,
+        isActive
+          ? DSHTheme.sessionSelectedBackground
+          : hoverActive ? DSHTheme.surfaceTint2 : .clear,
         in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
+      .overlay(alignment: .bottomLeading) {
+        if statusKind == .live {
+          DSHActivityLine(active: true)
+            .padding(.horizontal, DSHSpace.s2)
+            .padding(.bottom, 1)
+            .allowsHitTesting(false)
+        }
+      }
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
     .animation(.easeOut(duration: 0.12), value: hoverActive)
-  }
-  /// Minute-granularity timestamp — `Text(_, style: .relative)` ticks with
-  /// seconds, which reads as visual noise in a static list.
-  private static func compactTime(_ date: Date) -> String {
-    let interval = Date().timeIntervalSince(date)
-    if interval < 60 { return "刚刚" }
-    if interval < 3600 { return "\(Int(interval / 60)) 分钟前" }
-    if Calendar.current.isDateInToday(date) { return date.formatted(date: .omitted, time: .shortened) }
-    if Calendar.current.isDateInYesterday(date) { return "昨天 " + date.formatted(date: .omitted, time: .shortened) }
-    return date.formatted(.dateTime.month().day())
+    .animation(
+      reduceMotion ? nil : .easeOut(duration: 0.22),
+      value: isActive)
+    .accessibilityAddTraits(isActive ? .isSelected : [])
+    .help(statusKind == .live ? "运行中" : "")
+    .accessibilityValue(statusKind == .live ? "运行中" : "")
   }
 }
 

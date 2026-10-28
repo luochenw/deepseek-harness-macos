@@ -62,6 +62,12 @@ grep -q 'DraftImageLightbox(image:' "$COMPOSER" || {
   echo "permission-composer-ui: draft images have no enlarged preview" >&2
   exit 1
 }
+grep -q 'struct ComposerMetricChip' "$COMPOSER" \
+  && grep -q 'contentTransition(reduceMotion ? .opacity : .numericText())' "$COMPOSER" \
+  && grep -q 'DSHRunningBars(color: foreground, height: 8)' "$COMPOSER" || {
+  echo "permission-composer-ui: usage projections lack styled animated metrics" >&2
+  exit 1
+}
 grep -q 'BusyEnterSettingsRow()' "$SETTINGS" || {
   echo "permission-composer-ui: busy Enter setting is missing" >&2
   exit 1

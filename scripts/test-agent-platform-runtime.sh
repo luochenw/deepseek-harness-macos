@@ -57,4 +57,6 @@ if [[ -n "$DSH_SOURCE" && -f "$DSH_SOURCE/package.json" ]]; then
 else
   "$NODE" "$ROOT/scripts/test-agent-platform-runtime-patch.mjs"
 fi
+# The LLM runtime patch (B image placement + C per-route pressure) shares this
+# prepared runtime; CI runs its contracts in the dedicated llm-runtime step.
 echo "agent-platform-runtime: OK"

@@ -219,7 +219,18 @@ extension HarnessController {
   }
   /// The bundled Host is a long-lived child process, not per-message — this
   /// is the only place it's asked to stop. `deinit` firing is not reliable
-  /// for a GUI app's actual quit path, so `applicationWillTerminate` (wired
-  /// in DSHNativeApp) calls this explicitly.
-  func stopForTermination() { shutdownWorkbench(); hostRuntime?.stop() }
+  /// for a GUI app's actual quit path, so `DSHAppDelegate.applicationWillTerminate`
+  /// calls this explicitly; the view-level `.onReceive` may call it too, hence
+  /// the one-shot guard inside.
+  /// Returns false when it already ran (the other quit path got here first).
+  @discardableResult
+  func stopForTermination() -> Bool {
+    guard DSHAppLifecycle.claimTermination(self) else { return false }
+    // Order matters: mark the supervisor inert first so the terminate() below
+    // cannot be mistaken for a crash and trigger an automatic restart.
+    stopHostSupervisorForTermination()
+    removeExternalAgentHostFile()
+    nativeAlerts.detach(); shutdownWorkbench(); hostRuntime?.stop()
+    return true
+  }
 }

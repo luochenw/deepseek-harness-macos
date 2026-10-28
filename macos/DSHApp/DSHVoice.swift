@@ -64,6 +64,136 @@ enum VoiceEngineError: LocalizedError {
   }
 }
 
+// MARK: - Audio tap gate (exception-free install path)
+
+/// Decides whether a tap can be installed on bus 0 before AVAudioEngine is touched.
+enum VoiceTapGate {
+  struct Plan: Equatable {
+    let sampleRate: Double
+    let channels: Int
+    let bufferSize: Int
+  }
+
+  enum Decision: Equatable {
+    case install(Plan)
+    case skip(String)
+  }
+
+  static let sampleRateRange: ClosedRange<Double> = 8_000...192_000
+  static let channelRange: ClosedRange<Int> = 1...8
+  /// AVAudioNode.h documents a 100–400 ms tap buffer.
+  static let bufferMillisecondsRange: ClosedRange<Int> = 100...400
+
+  static func formatIsUsable(sampleRate: Double, channels: Int) -> Bool {
+    sampleRate.isFinite
+      && sampleRateRange.contains(sampleRate)
+      && channelRange.contains(channels)
+  }
+
+  static func frames(forMilliseconds ms: Int, sampleRate: Double) -> Int {
+    let clamped = min(max(ms, bufferMillisecondsRange.lowerBound), bufferMillisecondsRange.upperBound)
+    guard sampleRate.isFinite, sampleRate > 0 else { return clamped }
+    let raw = sampleRate * Double(clamped) / 1000
+    guard raw.isFinite, raw > 0, raw < Double(Int.max / 2) else { return clamped }
+    return max(1, Int(raw.rounded()))
+  }
+
+  static func milliseconds(forFrames frames: Int, sampleRate: Double) -> Int {
+    guard sampleRate.isFinite, sampleRate > 0, frames > 0 else {
+      return bufferMillisecondsRange.lowerBound
+    }
+    let raw = Double(frames) / sampleRate * 1000
+    guard raw.isFinite, raw < Double(Int.max / 2) else { return bufferMillisecondsRange.upperBound }
+    return Int(raw.rounded())
+  }
+
+  /// Formats a sample rate without an integer conversion (Int(NaN) traps).
+  static func describeSampleRate(_ sampleRate: Double) -> String {
+    sampleRate.isFinite ? String(format: "%.0f", sampleRate) : "\(sampleRate)"
+  }
+
+  static func decide(sampleRate: Double, channels: Int, engineIsRunning: Bool, bufferSize: Int) -> Decision {
+    _ = engineIsRunning
+    guard formatIsUsable(sampleRate: sampleRate, channels: channels) else {
+      return .skip("音频输入格式不可用（\(describeSampleRate(sampleRate))Hz / \(channels) 声道）")
+    }
+    let frames = frames(
+      forMilliseconds: milliseconds(forFrames: bufferSize, sampleRate: sampleRate),
+      sampleRate: sampleRate)
+    return .install(Plan(sampleRate: sampleRate, channels: channels, bufferSize: frames))
+  }
+
+  /// Backoff from the failure streak, so a broken listener cannot reinstall on a fixed cadence.
+  static func restartDelay(failures: Int, base: TimeInterval, cap: TimeInterval) -> TimeInterval {
+    guard failures > 0 else { return base }
+    if failures >= 8 { return cap }
+    return min(base * pow(2, Double(failures)), cap)
+  }
+}
+
+func voiceInputDeviceAvailable() -> Bool {
+  var address = AudioObjectPropertyAddress(
+    mSelector: kAudioHardwarePropertyDefaultInputDevice,
+    mScope: kAudioObjectPropertyScopeGlobal,
+    mElement: kAudioObjectPropertyElementMain)
+  var deviceID = AudioDeviceID(0)
+  var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+  let status = AudioObjectGetPropertyData(
+    AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
+  return status == noErr && deviceID != 0
+}
+
+func voiceInputFormat(_ engine: AVAudioEngine) -> AVAudioFormat? {
+  guard voiceInputDeviceAvailable() else { return nil }
+  return engine.inputNode.outputFormat(forBus: 0)
+}
+
+func removeVoiceTap(_ engine: AVAudioEngine, installed: Bool) {
+  if engine.isRunning { engine.stop() }
+  guard installed else { return }
+  engine.inputNode.removeTap(onBus: 0)
+}
+
+@discardableResult
+func installVoiceTap(
+  _ engine: AVAudioEngine,
+  bufferSize: Int,
+  format suppliedFormat: AVAudioFormat? = nil,
+  wasInstalled: Bool = false,
+  onSkip: (String) -> Void,
+  block: @escaping AVAudioNodeTapBlock
+) -> Bool {
+  let format: AVAudioFormat
+  if let suppliedFormat {
+    format = suppliedFormat
+  } else if let read = voiceInputFormat(engine) {
+    format = read
+  } else {
+    voiceDiag("[tap] skipped: no default input device")
+    onSkip("未检测到音频输入设备")
+    return false
+  }
+  switch VoiceTapGate.decide(
+    sampleRate: format.sampleRate,
+    channels: Int(format.channelCount),
+    engineIsRunning: engine.isRunning,
+    bufferSize: bufferSize
+  ) {
+  case .skip(let reason):
+    voiceDiag("[tap] skipped: \(reason)")
+    onSkip(reason)
+    return false
+  case .install(let plan):
+    // A running engine with a tap still installed is exactly what raises: tear it down.
+    removeVoiceTap(engine, installed: wasInstalled)
+    let input = engine.inputNode
+    input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(plan.bufferSize), format: format) { buffer, when in
+      block(buffer, when)
+    }
+    return true
+  }
+}
+
 // MARK: - User settings (UserDefaults-backed; edited in VoiceSettingsView)
 
 /// Voice feature settings. Plain UserDefaults rather than the Host's revisioned
@@ -254,6 +384,7 @@ final class AppleSpeechTranscriber: VoiceTranscriber {
   private var retriedOnline = false
   /// 诊断：确认音频是否真的流进了识别请求（空定稿的头号嫌疑是无声输入）。
   private var tapBufferCount = 0
+  private var tapInstalled = false
 
   func startStreaming() throws {
     retriedOnline = false
@@ -287,12 +418,11 @@ final class AppleSpeechTranscriber: VoiceTranscriber {
       engineNote = "在线识别（本机无离线中文模型）"
     }
     self.request = request
-    let input = audioEngine.inputNode
-    let format = input.outputFormat(forBus: 0)
-    voiceDiag("[stt] start mode=\(engineNote) format=\(Int(format.sampleRate))Hz ch=\(format.channelCount)")
+    voiceDiag("[stt] start mode=\(engineNote)")
     tapBufferCount = 0
-    input.removeTap(onBus: 0)
-    input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+    let installed = installVoiceTap(audioEngine, bufferSize: 1024, wasInstalled: tapInstalled, onSkip: { reason in
+      voiceDiag("[stt] tap not installed: \(reason)")
+    }) { [weak self] buffer, _ in
       request.append(buffer)
       guard let self else { return }
       self.tapBufferCount += 1
@@ -304,8 +434,17 @@ final class AppleSpeechTranscriber: VoiceTranscriber {
         voiceDiag("[stt] buffer#\(self.tapBufferCount) peak=\(peak)")
       }
     }
+    guard installed else {
+      tapInstalled = false
+      throw VoiceEngineError.audioFormatUnavailable
+    }
+    tapInstalled = true
     audioEngine.prepare()
-    try audioEngine.start()
+    do { try audioEngine.start() } catch {
+      removeVoiceTap(audioEngine, installed: tapInstalled)
+      tapInstalled = false
+      throw error
+    }
     task = recognizer.recognitionTask(with: request) { [weak self] result, error in
       DispatchQueue.main.async {
         guard let self, !self.finalized, self.request === request else { return }
@@ -366,8 +505,8 @@ final class AppleSpeechTranscriber: VoiceTranscriber {
   }
 
   private func stopCapture() {
-    audioEngine.inputNode.removeTap(onBus: 0)
-    audioEngine.stop()
+    removeVoiceTap(audioEngine, installed: tapInstalled)
+    tapInstalled = false
   }
 
   /// Main-queue only (recognition callback and finalize fallback both hop there).
@@ -418,6 +557,7 @@ final class LocalServerTranscriber: NSObject, VoiceTranscriber {
   private var pcmSamples = Data()
   private var uploadTask: URLSessionDataTask?
   private var finalized = false
+  private var tapInstalled = false
   private static let targetSampleRate: Double = 16000
 
   init(endpoint: URL) {
@@ -428,20 +568,26 @@ final class LocalServerTranscriber: NSObject, VoiceTranscriber {
   func startStreaming() throws {
     finalized = false
     sampleLock.lock(); pcmSamples = Data(); sampleLock.unlock()
-    let input = audioEngine.inputNode
-    let format = input.outputFormat(forBus: 0)
-    guard format.sampleRate > 0,
+    guard let format = voiceInputFormat(audioEngine),
           let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Self.targetSampleRate, channels: 1, interleaved: true),
           let converter = AVAudioConverter(from: format, to: target) else {
       throw VoiceEngineError.audioFormatUnavailable
     }
-    input.removeTap(onBus: 0)
-    input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+    // Reuse the format just read: a second read could see a different device.
+    let installed = installVoiceTap(audioEngine, bufferSize: 2048, format: format, wasInstalled: tapInstalled, onSkip: { reason in
+      voiceDiag("[stt-local] tap not installed: \(reason)")
+    }) { [weak self] buffer, _ in
       self?.appendSamples(from: buffer, using: converter, target: target)
     }
+    guard installed else {
+      tapInstalled = false
+      throw VoiceEngineError.audioFormatUnavailable
+    }
+    tapInstalled = true
     audioEngine.prepare()
     do { try audioEngine.start() } catch {
-      input.removeTap(onBus: 0)
+      removeVoiceTap(audioEngine, installed: tapInstalled)
+      tapInstalled = false
       throw error
     }
   }
@@ -464,8 +610,8 @@ final class LocalServerTranscriber: NSObject, VoiceTranscriber {
   }
 
   private func stopCapture() {
-    audioEngine.inputNode.removeTap(onBus: 0)
-    audioEngine.stop()
+    removeVoiceTap(audioEngine, installed: tapInstalled)
+    tapInstalled = false
   }
 
   /// Audio-thread tap: rate-convert this buffer to 16kHz mono Int16 and append.
@@ -974,17 +1120,39 @@ final class WakeWordListener: NSObject, ObservableObject {
   /// SFSpeechRecognizer caps a streaming task at ~1 minute; restart under it.
   private let taskRestartInterval: TimeInterval = 50
   private let errorRecoveryDelay: TimeInterval = 1.5
-  /// Instant-failure streak feeding the circuit breaker in the task handler.
+  /// Consecutive *real* failures (install / start / isRunning / task error).
   private var consecutiveFailures = 0
+  /// Set while we tear a task down, so its own `cancel()` echo is not counted.
+  private var isTearingDown = false
+  /// Above this streak the listener stops rescheduling; the wake switch re-arms it.
+  static let failureBreakerLimit = 5
+  static let restartCap: TimeInterval = 300
+  private var tapInstalled = false
+  /// Injectable clock seam so the restart policy is testable without timers.
+  var restartScheduler: (@MainActor (TimeInterval) -> Void)?
 
   private override init() {
     super.init()
+  }
+
+  /// Policy seam: delay before the next attempt, or nil once the breaker tripped.
+  nonisolated static func nextRestartDelay(
+    failures: Int,
+    regularInterval: TimeInterval,
+    failureBase: TimeInterval,
+    cap: TimeInterval
+  ) -> TimeInterval? {
+    guard failures < failureBreakerLimit else { return nil }
+    guard failures > 0 else { return regularInterval }
+    return min(failureBase * pow(2, Double(failures)), cap)
   }
 
   func start() {
     guard !enabled else { return }
     enabled = true
     suspended = false
+    // A manual toggle must genuinely re-arm, or only relaunching the app recovers.
+    consecutiveFailures = 0
     Task { [weak self] in
       let permissions = await VoicePermissionCoordinator.shared.request()
       guard let self, self.enabled else { return }
@@ -1001,6 +1169,7 @@ final class WakeWordListener: NSObject, ObservableObject {
   func stop() {
     enabled = false
     suspended = false
+    consecutiveFailures = 0
     tearDownRecognition()
     statusNote = nil
   }
@@ -1026,7 +1195,8 @@ final class WakeWordListener: NSObject, ObservableObject {
     guard enabled, !suspended else { return }
     guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN")), recognizer.isAvailable else {
       statusNote = "中文语音识别不可用，唤醒词监听未运行"
-      scheduleRestart(after: errorRecoveryDelay * 4)
+      recordFailure()
+      scheduleRestart(regularInterval: nil)
       return
     }
     self.recognizer = recognizer
@@ -1041,45 +1211,77 @@ final class WakeWordListener: NSObject, ObservableObject {
       return
     }
     self.request = request
-    let input = audioEngine.inputNode
-    let format = input.outputFormat(forBus: 0)
-    input.removeTap(onBus: 0)
-    input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in request.append(buffer) }
+    let installed = installVoiceTap(audioEngine, bufferSize: 2048, onSkip: { [weak self] reason in
+      // A stale tap or unusable format is what would raise inside AVAudioEngine.
+      guard let self else { return }
+      self.statusNote = "唤醒词监听未启动：\(reason)"
+      voiceDiag("[wake] tap not installed: \(reason)")
+    }) { buffer, _ in request.append(buffer) }
+    guard installed else {
+      // A transient failure must not strand the listener in a false "active" state.
+      isActive = false
+      tapInstalled = false
+      recordFailure()
+      statusNote = statusNote ?? "唤醒词监听未启动，稍后重试"
+      scheduleRestart(regularInterval: nil)
+      return
+    }
+    tapInstalled = true
     audioEngine.prepare()
     do { try audioEngine.start() } catch {
-      input.removeTap(onBus: 0)
+      isActive = false
+      recordFailure()
+      removeVoiceTap(audioEngine, installed: tapInstalled)
+      tapInstalled = false
       statusNote = "唤醒词监听启动失败：\(error.localizedDescription)"
+      scheduleRestart(regularInterval: nil)
+      return
+    }
+    guard audioEngine.isRunning else {
+      // Graph not live: leaving the tap installed makes the next install a double-install.
+      isActive = false
+      recordFailure()
+      removeVoiceTap(audioEngine, installed: tapInstalled)
+      tapInstalled = false
+      statusNote = "唤醒词监听启动后引擎未运行，已清理并重试"
+      scheduleRestart(regularInterval: nil)
       return
     }
     isActive = true
     statusNote = nil
+    // Clear the streak: an earlier episode must not scale the 50 s rotation.
+    consecutiveFailures = 0
     task = recognizer.recognitionTask(with: request) { [weak self] result, error in
       Task { @MainActor in
         guard let self, self.request === request else { return } // stale task
+        if self.isTearingDown {
+          // Our own endAudio()/cancel() produced this callback; counting it trips the breaker.
+          voiceDiag("[wake] task error during teardown, ignored: \(error?.localizedDescription ?? "nil")")
+          return
+        }
         if let result {
           self.consecutiveFailures = 0
           self.handlePartial(result.bestTranscription.formattedString)
         } else if let error {
-          // Circuit breaker: a fixed 1.5s retry used to thrash forever when
-          // the local speech daemon was unhealthy — restarting ~40×/min,
-          // grabbing the mic each time, and killing any manual talk session
-          // it raced ("一闪而过"). Failures now back off exponentially and
-          // give up loudly after a streak; the reason is shown, not
-          // swallowed.
-          self.consecutiveFailures += 1
+          // Breaker: a fixed 1.5 s retry restarted ~40×/min and killed manual talk sessions.
+          self.recordFailure()
           self.tearDownRecognition()
           let reason = Self.friendlyFailureReason(error)
           if reason.contains("听写") { self.needsDictationSetup = true }
-          if self.consecutiveFailures >= 5 {
+          if self.consecutiveFailures >= Self.failureBreakerLimit {
             self.statusNote = "唤醒词监听连续失败已暂停：\(reason)。重开唤醒词开关可重试。"
           } else {
             self.statusNote = "唤醒词监听重试中：\(reason)"
-            self.scheduleRestart(after: self.errorRecoveryDelay * pow(2, Double(self.consecutiveFailures)))
           }
+          self.scheduleRestart(regularInterval: nil)
         }
       }
     }
-    scheduleRestart(after: taskRestartInterval)
+    scheduleRestart(regularInterval: taskRestartInterval)
+  }
+
+  private func recordFailure() {
+    consecutiveFailures += 1
   }
 
   private func handlePartial(_ transcript: String) {
@@ -1108,9 +1310,32 @@ final class WakeWordListener: NSObject, ObservableObject {
     return text
   }
 
-  private func scheduleRestart(after interval: TimeInterval) {
+  /// Backoff from the failure streak, never from when the last restart fired.
+  private func scheduleRestart(regularInterval: TimeInterval?) {
     restartTimer?.invalidate()
-    restartTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+    restartTimer = nil
+    let delay: TimeInterval?
+    if let regularInterval {
+      delay = regularInterval
+    } else {
+      delay = Self.nextRestartDelay(
+        failures: consecutiveFailures,
+        regularInterval: taskRestartInterval,
+        failureBase: errorRecoveryDelay,
+        cap: Self.restartCap)
+    }
+    guard let delay else {
+      voiceDiag("[wake] restart suppressed: failures=\(consecutiveFailures)")
+      isActive = false
+      return
+    }
+    // One line per restart: crash reports only show the swallowed-exception marker.
+    voiceDiag("[wake] restart in \(String(format: "%.1f", delay))s failures=\(consecutiveFailures) regular=\(regularInterval != nil) active=\(isActive)")
+    if let restartScheduler {
+      restartScheduler(delay)
+      return
+    }
+    restartTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
       Task { @MainActor in self?.beginRecognition() }
     }
   }
@@ -1118,13 +1343,18 @@ final class WakeWordListener: NSObject, ObservableObject {
   private func tearDownRecognition() {
     restartTimer?.invalidate()
     restartTimer = nil
-    audioEngine.inputNode.removeTap(onBus: 0)
-    audioEngine.stop()
+    // Mark the window where endAudio()/cancel() echoes are expected, not failures.
+    isTearingDown = true
+    removeVoiceTap(audioEngine, installed: tapInstalled)
+    tapInstalled = false
     request?.endAudio()
     task?.cancel()
     request = nil
     task = nil
     recognizer = nil
     isActive = false
+    DispatchQueue.main.async { [weak self] in
+      self?.isTearingDown = false
+    }
   }
 }

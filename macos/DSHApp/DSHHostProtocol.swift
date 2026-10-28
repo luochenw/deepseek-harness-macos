@@ -654,24 +654,79 @@ struct DSHSettingsUpdatePayload: Encodable {
 /// protocol instead of launching one headless process per prompt.
 final class DSHHostRuntime {
   private static let startupTimeout: TimeInterval = 20
+  /// How long a terminated Host gets before `stop()` escalates to SIGKILL.
+  /// Mutable so tests can shorten the wait; the App never writes it.
+  static var terminateGracePeriod: TimeInterval = 8
+  /// The signal send `stop()`'s escalation performs. A seam so tests can
+  /// observe the escalation without depending on a real SIGKILL landing; the
+  /// default is exactly the production `kill(2)` call.
+  static var killProcess: (pid_t, Int32) -> Int32 = { Darwin.kill($0, $1) }
 
   private let node: URL
   private let dsh: URL
   private let home: URL
   private var process: Process?
   private var output = ""
+  /// Base URL this launch printed, recorded on the main queue as soon as the
+  /// launch line parses and read there by the termination callback. Recorded
+  /// before the handshake so a Host that boots then dies immediately still
+  /// reports which record it owns.
+  private var resolvedBaseURL: URL?
 
-  init(node: URL, dsh: URL, home: URL) {
+  /// `process` is injectable only for tests: production always starts with no
+  /// child and lets `start()` create it.
+  init(node: URL, dsh: URL, home: URL, process: Process? = nil) {
     self.node = node
     self.dsh = dsh
     self.home = home
+    self.process = process
+  }
+
+  /// Injected with `node --import` ahead of the Host entry point. The App's
+  /// crash handlers are not reliable for a GUI process (today's
+  /// system-framework crashes left the Host orphaned with ppid 1, holding the
+  /// session writer lock and fighting the next App's Host), so the child
+  /// watches its own parent instead: when the parent pid changes, nothing will
+  /// ever talk to this Host again and it asks itself to stop. SIGTERM goes
+  /// through dsh's own shutdown path so the session lock is released; the timer
+  /// is the fallback for a wedged Host. Every timer is `unref()`'d so this
+  /// module alone never keeps the process alive.
+  ///
+  /// The interval is cleared before the first SIGTERM: dsh treats a signal that
+  /// arrives while its shutdown is already in progress as "force exit now",
+  /// which skips `dispose` and can leave the session lock behind, so exactly one
+  /// SIGTERM may be sent. The 10s fallback sits after dsh's own 5s shutdown
+  /// timeout.
+  static let parentWatchdogSource = """
+  const p0 = process.ppid;
+  const timer = setInterval(() => {
+    if (process.ppid !== p0) {
+      clearInterval(timer);
+      process.kill(process.pid, 'SIGTERM');
+      setTimeout(() => process.exit(1), 10000).unref();
+    }
+  }, 1000);
+  timer.unref();
+  """
+
+  /// The `--import` value. Base64 keeps the JS source out of URL quoting rules
+  /// entirely (commas, quotes, `%`, `#` and newlines are all legal inside the
+  /// payload but would need escaping in a plain `data:` URL).
+  static var parentWatchdogImportArgument: String {
+    "data:text/javascript;base64,\(Data(parentWatchdogSource.utf8).base64EncodedString())"
   }
 
   static func launchArguments(dshPath: String) -> [String] {
-    [dshPath, "web", "--host", "127.0.0.1", "--port", "0", "--no-open"]
+    [
+      "--import", parentWatchdogImportArgument,
+      dshPath, "web", "--host", "127.0.0.1", "--port", "0", "--no-open",
+    ]
   }
 
-  func start(onReady: @escaping (Result<DSHHostConnection, Error>) -> Void) {
+  func start(
+    onReady: @escaping (Result<DSHHostConnection, Error>) -> Void,
+    onExit: @escaping (URL?) -> Void = { _ in }
+  ) {
     guard process == nil else { return }
     let process = Process()
     process.executableURL = node
@@ -708,6 +763,10 @@ final class DSHHostRuntime {
           let value = String(line)
           guard value.hasPrefix("dsh web: http://127.0.0.1:"),
                 let launch = DSHHostLaunch.parse(launchLine: value) else { continue }
+          // Recorded on the main queue (same queue that reads it in
+          // terminationHandler) so the process-exit callback knows which
+          // host.json this launch produced, even if the handshake then fails.
+          self.resolvedBaseURL = launch.baseURL
           Task {
             do {
               let cookie = try await DSHHostHandshake.authenticate(launch: launch)
@@ -720,14 +779,39 @@ final class DSHHostRuntime {
         }
       }
     }
-    process.terminationHandler = { ended in
-      if ended.terminationStatus != 0 { DispatchQueue.main.async { resolve(.failure(URLError(.cannotConnectToHost))) } }
+    // `terminationHandler` fires on a background queue and also runs for the
+    // terminate() issued by `stop()`; hop to main and hand the caller the base
+    // URL this launch actually served so it can retract only its own record.
+    process.terminationHandler = { [weak self] ended in
+      DispatchQueue.main.async {
+        let served = self?.resolvedBaseURL
+        self?.resolvedBaseURL = nil
+        self?.process = nil
+        if ended.terminationStatus != 0 { resolve(.failure(URLError(.cannotConnectToHost))) }
+        onExit(served)
+      }
     }
     do { try process.run() } catch { resolve(.failure(error)) }
   }
 
   func stop() {
     guard let process, process.isRunning else { return }
+    let pid = process.processIdentifier
     process.terminate()
+    // A wedged Host can ignore SIGTERM and keep the session lock while the
+    // supervisor already starts a replacement, so escalate once after a grace
+    // period. Capture the `Process` *itself*: the supervisor nils its runtime
+    // right after `stop()`, and the termination handler nils `self.process`, so
+    // neither `self` nor `self.process` can be trusted 8s later. The same
+    // `Process` object can only be running for the pid it was launched as, so
+    // `isRunning` plus the pid check rules out a recycled pid.
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.terminateGracePeriod) { [process] in
+      guard process.isRunning, process.processIdentifier == pid else { return }
+      _ = Self.killProcess(pid, SIGKILL)
+    }
   }
+
+  /// Whether the child is alive right now — the supervisor uses this to decide
+  /// between "keep the current Host" and "start a new one".
+  var isRunning: Bool { process?.isRunning == true }
 }

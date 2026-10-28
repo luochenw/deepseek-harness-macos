@@ -33,9 +33,16 @@ struct MarkdownText: View {
 
   private struct IdentifiedBlock: Identifiable { let id: Int; let block: Block }
 
+  @MainActor private static var parsedBlockCache: [String: [IdentifiedBlock]] = [:]
+  @MainActor private static var parsedBlockOrder: [String] = []
+  @MainActor private static var inlineCache: [String: AttributedString] = [:]
+  @MainActor private static var inlineOrder: [String] = []
+  private static let parsedBlockCacheLimit = 32
+  private static let inlineCacheLimit = 256
+
   var body: some View {
     VStack(alignment: .leading, spacing: presentation == .document ? DSHSpace.s4 : 10) {
-      ForEach(Self.parse(text)) { entry in
+      ForEach(Self.cachedParse(text)) { entry in
         blockView(entry.block)
       }
     }
@@ -44,12 +51,12 @@ struct MarkdownText: View {
   @ViewBuilder private func blockView(_ block: Block) -> some View {
     switch block {
     case .paragraph(let content):
-      Text(Self.inline(content))
+      Text(Self.cachedInline(content))
         .font(paragraphFont).foregroundStyle(DSHTheme.ink)
         .lineSpacing(presentation == .document ? 6 : 5)
         .textSelection(.enabled)
     case .heading(let level, let content, let anchor):
-      Text(Self.inline(content))
+      Text(Self.cachedInline(content))
         .font(headingFont(level))
         .foregroundStyle(DSHTheme.ink)
         .lineSpacing(4)
@@ -65,13 +72,13 @@ struct MarkdownText: View {
             if let task = Self.taskItem(item) {
               Image(systemName: task.checked ? "checkmark.square.fill" : "square")
                 .foregroundStyle(task.checked ? DSHTheme.accent : DSHTheme.inkFaint)
-              Text(Self.inline(task.text)).foregroundStyle(DSHTheme.ink).textSelection(.enabled)
+              Text(Self.cachedInline(task.text)).foregroundStyle(DSHTheme.ink).textSelection(.enabled)
             } else {
               Image(systemName: "circle.fill")
                 .font(.system(size: 4.5))
                 .foregroundStyle(DSHTheme.inkSoft)
                 .padding(.top, 7)
-              Text(Self.inline(item)).foregroundStyle(DSHTheme.ink).textSelection(.enabled)
+              Text(Self.cachedInline(item)).foregroundStyle(DSHTheme.ink).textSelection(.enabled)
             }
           }
           .font(paragraphFont)
@@ -83,7 +90,7 @@ struct MarkdownText: View {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
           HStack(alignment: .top, spacing: 9) {
             Text(item.marker).foregroundStyle(DSHTheme.inkSoft).monospacedDigit()
-            Text(Self.inline(item.text)).foregroundStyle(DSHTheme.ink).textSelection(.enabled)
+            Text(Self.cachedInline(item.text)).foregroundStyle(DSHTheme.ink).textSelection(.enabled)
           }
           .font(paragraphFont)
           .lineSpacing(5)
@@ -96,7 +103,7 @@ struct MarkdownText: View {
           .font(.system(size: 10.5, weight: .semibold))
           .foregroundStyle(DSHTheme.accent)
           .padding(.top, 3)
-        Text(Self.inline(content))
+        Text(Self.cachedInline(content))
           .font(paragraphFont)
           .foregroundStyle(DSHTheme.inkSoft)
           .lineSpacing(5)
@@ -120,7 +127,7 @@ struct MarkdownText: View {
             ForEach(Array(parsed.enumerated()), id: \.offset) { rowIndex, cells in
               GridRow {
                 ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
-                  Text(Self.inline(cell))
+                  Text(Self.cachedInline(cell))
                     .font(DSHType.body)
                     .fontWeight(rowIndex == 0 ? .semibold : .regular)
                     .foregroundStyle(rowIndex == 0 ? DSHTheme.ink : DSHTheme.inkSoft)
@@ -188,6 +195,34 @@ struct MarkdownText: View {
       markdown: string,
       options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
     )) ?? AttributedString(string)
+  }
+
+  @MainActor
+  private static func cachedParse(_ text: String) -> [IdentifiedBlock] {
+    if let cached = parsedBlockCache[text] { return cached }
+    let parsed = parse(text)
+    guard text.utf8.count <= 250_000 else { return parsed }
+    parsedBlockCache[text] = parsed
+    parsedBlockOrder.append(text)
+    while parsedBlockOrder.count > parsedBlockCacheLimit {
+      let evicted = parsedBlockOrder.removeFirst()
+      parsedBlockCache[evicted] = nil
+    }
+    return parsed
+  }
+
+  @MainActor
+  private static func cachedInline(_ string: String) -> AttributedString {
+    if let cached = inlineCache[string] { return cached }
+    let parsed = inline(string)
+    guard string.utf8.count <= 20_000 else { return parsed }
+    inlineCache[string] = parsed
+    inlineOrder.append(string)
+    while inlineOrder.count > inlineCacheLimit {
+      let evicted = inlineOrder.removeFirst()
+      inlineCache[evicted] = nil
+    }
+    return parsed
   }
 
   static func headings(in text: String) -> [DSHMarkdownHeading] {

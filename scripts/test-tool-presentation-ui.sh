@@ -32,18 +32,22 @@ grep -q 'struct ToolStatusHeader' "$CONVERSATION" || {
   echo "tool-presentation-ui: shared execution status header is missing" >&2
   exit 1
 }
-grep -q 'Text("运行中")' "$CONVERSATION" \
-  && grep -q 'Text("有失败")' "$CONVERSATION" \
+grep -q 'Text("执行中")' "$CONVERSATION" \
   && grep -q 'DSHRunningBars' "$CONVERSATION" \
+  && grep -q 'DSHActivityLine' "$CONVERSATION" \
   && grep -q 'accessibilityReduceMotion' "$THEME" || {
   echo "tool-presentation-ui: live tool state feedback or reduced-motion handling is missing" >&2
   exit 1
 }
+if grep -q 'Text("有失败")' "$CONVERSATION"; then
+  echo "tool-presentation-ui: instruction status must not surface failure labels" >&2
+  exit 1
+fi
 grep -q 'title: instruction.title' "$CONVERSATION" || {
   echo "tool-presentation-ui: collapsed status must show the concrete instruction directly" >&2
   exit 1
 }
-if grep -Eq 'Text\("(工具执行|执行记录|执行中|已完成|执行代码|终端命令|修改文件|读取文件|搜索文件|执行指令)"\)' "$CONVERSATION"; then
+if grep -Eq 'Text\("(工具执行|执行记录|已完成|执行代码|终端命令|修改文件|读取文件|搜索文件|执行指令)"\)' "$CONVERSATION"; then
   echo "tool-presentation-ui: instruction rows must not add generic execution or fallback labels" >&2
   exit 1
 fi

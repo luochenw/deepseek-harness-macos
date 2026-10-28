@@ -2,6 +2,8 @@
 
 Status: implemented — 一轮一条可展开的「思考过程」行（含段数），替掉每步一行的重复平铺，并修掉吞掉正文的重复行身份
 
+Superseded in part by: [Stabilize live-session repair and execution feedback](../bug-fix/2026-10-26-live-repair-tool-state-scroll.md).
+
 ## Problem
 
 DSH 的一轮对话里，每个 step 都会产出一条独立的 reasoning 块。原生客户端的 `ConversationView.foldTranscript` 只折叠同名工具行，不折叠思考行，于是：

@@ -5,9 +5,18 @@ import Foundation
 /// 推断账户配额、可用余额或费用。
 enum DSHModelUsagePresentation {
   static func compact(_ value: Int) -> String {
-    value >= 10_000
-      ? String(format: "%.0fk", Double(value) / 1_000)
-      : value >= 1_000 ? String(format: "%.1fk", Double(value) / 1_000) : "\(value)"
+    if value >= 1_000_000 {
+      return value >= 10_000_000
+        ? String(format: "%.0fm", Double(value) / 1_000_000)
+        : String(format: "%.1fm", Double(value) / 1_000_000)
+    }
+    if value >= 10_000 {
+      return String(format: "%.0fk", Double(value) / 1_000)
+    }
+    if value >= 1_000 {
+      return String(format: "%.1fk", Double(value) / 1_000)
+    }
+    return "\(value)"
   }
 
   static func duration(_ milliseconds: Double) -> String {
@@ -24,7 +33,12 @@ enum DSHModelUsagePresentation {
   }
 
   static func contextTokens(_ pressure: DSHContextPressure) -> Int? {
-    pressure.projectedTokens ?? pressure.pressureTokens
+    let candidates = [
+      pressure.projectedTokens,
+      pressure.pressureTokens,
+      pressure.surfaceTokens,
+    ].compactMap { $0 }
+    return candidates.first(where: { $0 > 0 }) ?? candidates.first
   }
 
   static func contextFraction(_ pressure: DSHContextPressure) -> Double? {

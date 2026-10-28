@@ -50,6 +50,8 @@ final class DSHEventSocket {
   private let session: URLSession
   private var task: URLSessionWebSocketTask?
   private var stopped = false
+  /// Set by `detach()`: `close()` stays silent from then on.
+  private var detached = false
   private var streams: [String: Stream] = [:]
   private var pendingOpens: [[String: Any]] = []
   private var eventClientID: String?
@@ -84,6 +86,16 @@ final class DSHEventSocket {
 
   nonisolated func stop() {
     Task { @MainActor [self] in self.stopStream() }
+  }
+
+  /// Stop reporting `onClosed` from here on. The supervisor calls this when the
+  /// Host *process* died: the exit already owns the user-visible status
+  /// ("Host 已退出，N 秒后自动重启" / the give-up copy), and the socket teardown
+  /// that follows would otherwise overwrite it with the generic
+  /// "消息流已断开" retry copy from `handleHostStreamClosed()`. Purely a latch —
+  /// `stop()` still performs the actual teardown.
+  func detach() {
+    detached = true
   }
 
   private func stopStream() {
@@ -187,6 +199,9 @@ final class DSHEventSocket {
     session.invalidateAndCancel()
     streams = [:]
     pendingOpens = []
+    // A detached socket was retired together with its Host process; the
+    // supervisor's exit path has already written the status that applies.
+    guard !detached else { return }
     onClosed?()
   }
 }
@@ -300,38 +315,6 @@ extension HarnessController {
       status = "已导入 ~/.dsh 的模型配置"
     } catch {
       status = "导入 ~/.dsh 配置失败：\(error.localizedDescription)"
-    }
-  }
-
-  func startPersistentHost() {
-    let runtime = DSHHostRuntime(node: bundledNode, dsh: bundledDSH, home: dshHome)
-    hostRuntime = runtime
-    runtime.start { [weak self] result in
-      guard let self else { return }
-      switch result {
-      case .success(let connection):
-        let client = DSHHostClient(connection: connection)
-        self.hostClient = client
-        self.hostEvents = DSHEventSocket(client: client, onClosed: { [weak self] in
-          self?.handleHostStreamClosed()
-        })
-        self.hostEvents?.start()
-        self.openRemoteEventStream()
-        self.openSessionControl()
-        self.openWorkspaceFollow()
-        self.hostStatus = "Host 已连接：\(client.baseURL.absoluteString)"
-        self.refreshHostSnapshots()
-        self.refreshModelConfiguration()
-        self.refreshSettings()
-        self.refreshPresets()
-        self.refreshPermissionCatalog()
-        self.refreshAgentPlatform()
-        // No session auto-creation on connect: the app sits on the default
-        // page until the first send lazily creates one (⌘N also just
-        // returns to the default page — see the lazy-first-session note).
-      case .failure(let error):
-        self.hostStatus = "Host 启动失败：\(error.localizedDescription)"
-      }
     }
   }
 

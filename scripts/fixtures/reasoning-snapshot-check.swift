@@ -54,11 +54,11 @@ struct ReasoningSnapshotCheck {
     guard reasoning.count == 2 else {
       throw ReasoningSnapshotFailure.invalid("expected 2 aggregated traces (one per turn), got \(reasoning.count)")
     }
-    guard reasoning[0].segments == 3, reasoning[1].segments == 1 else {
-      throw ReasoningSnapshotFailure.invalid(
-        "expected segment counts 3/1, got \(reasoning[0].segments)/\(reasoning[1].segments)")
-    }
-    guard reasoning[0].text.contains("步骤1") && reasoning[0].text.contains("步骤3") else {
+    // The aggregate carries every step's text (segment counts are no longer
+    // tracked: the collapsed row shows a bare status line).
+    let steps = (1...3).map { "步骤\($0) 的思考" }
+    guard steps.allSatisfy({ reasoning[0].text.contains($0) }),
+          reasoning[1].text.contains("单步思考") else {
       throw ReasoningSnapshotFailure.invalid("aggregated trace lost a step's text")
     }
     // Trace-only steps contribute no body row.

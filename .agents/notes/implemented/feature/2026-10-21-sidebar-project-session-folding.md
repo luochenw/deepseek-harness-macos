@@ -58,3 +58,9 @@ Render each project through a dedicated group view:
 - Project collapse and session expansion remain independent and survive stream
   updates for the current app session.
 - Restarting the app restores the compact five-session default.
+- Project headings have a dedicated hover surface and counted badge; sessions
+  are indented beneath the project with stronger selected-title weight.
+- Selected sessions use a very light logo-color background and stronger title
+  weight instead of an outline or side marker. A running session uses one
+  short bottom line as a slow left-right shuttle; hover remains a separate
+  neutral wash, and Reduce Motion leaves the running line stationary.

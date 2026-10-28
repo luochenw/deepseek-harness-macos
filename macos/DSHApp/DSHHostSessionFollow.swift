@@ -186,6 +186,10 @@ private final class DSHSessionFollowState {
   var assistantNextIndex: Int?
   var generation = 0
   var subagentStreams: [String: String] = [:]
+  var completedHistoryBySession: [String: DSHHistoryCacheVersion] = [:]
+  var completedHistoryToolsBySession: [String: [HarnessController.ToolActivity]] = [:]
+  var preservingCachedHistory = false
+  var retainingVisibleHistory = false
 
   init(controller: HarnessController) {
     self.controller = controller
@@ -216,6 +220,33 @@ extension HarnessController {
 
   var rootSessionFollowCursor: Int? { sessionFollowState.cursor }
 
+  func cachedRootHistoryVersion(sessionID: String) -> DSHHistoryCacheVersion? {
+    sessionFollowState.completedHistoryBySession[sessionID]
+  }
+
+  func cachedRootHistoryTools(sessionID: String) -> [HarnessController.ToolActivity]? {
+    sessionFollowState.completedHistoryToolsBySession[sessionID]
+  }
+
+  func isPreservingCachedRootHistory(sessionID: String) -> Bool {
+    let state = sessionFollowState
+    return state.preservingCachedHistory && state.sessionID == sessionID
+  }
+
+  func markRootHistoryComplete(sessionID: String, throughSeq: Int) {
+    let state = sessionFollowState
+    let existing = state.completedHistoryBySession[sessionID]
+    let summaryUpdatedAt = hostSessions.first(where: { $0.sessionId == sessionID })?.updatedAt
+    state.completedHistoryBySession[sessionID] = DSHHistoryCacheVersion(
+      sequence: max(existing?.sequence ?? throughSeq, throughSeq),
+      updatedAt: max(
+        existing?.updatedAt ?? 0,
+        summaryUpdatedAt ?? Date().timeIntervalSince1970 * 1_000))
+    if hostCurrentSessionID == sessionID {
+      state.completedHistoryToolsBySession[sessionID] = activeTools
+    }
+  }
+
   func cancelRootSessionFollow() {
     let state = sessionFollowState
     state.generation += 1
@@ -230,6 +261,8 @@ extension HarnessController {
     state.assistantRevision = nil
     state.assistantAttemptID = nil
     state.assistantNextIndex = nil
+    state.preservingCachedHistory = false
+    state.retainingVisibleHistory = false
     for streamID in state.subagentStreams.values { hostEvents?.cancel(streamID) }
     state.subagentStreams = [:]
   }
@@ -240,7 +273,12 @@ extension HarnessController {
     state.subagentStreams[childSessionID] = streamID
   }
 
-  func startRootSessionFollow(sessionID: String, localSessionID: UUID) {
+  func startRootSessionFollow(
+    sessionID: String,
+    localSessionID: UUID,
+    preservingCachedHistory: Bool = false,
+    retainingVisibleHistory: Bool = false
+  ) {
     guard let hostEvents else {
       if let index = sessions.firstIndex(where: { $0.id == localSessionID }) {
         sessions[index].isLoadingHistory = false
@@ -255,6 +293,8 @@ extension HarnessController {
     let generation = state.generation
     state.sessionID = sessionID
     state.localSessionID = localSessionID
+    state.preservingCachedHistory = preservingCachedHistory
+    state.retainingVisibleHistory = retainingVisibleHistory
     state.streamID = hostEvents.openSessionFollow(
       sessionID: sessionID,
       onItem: { [weak self] frame in
@@ -266,6 +306,8 @@ extension HarnessController {
       },
       onEnd: { [weak self] in
         guard let self, self.sessionFollowState.generation == generation else { return }
+        self.sessionFollowState.preservingCachedHistory = false
+        self.sessionFollowState.retainingVisibleHistory = false
         if let index = self.sessions.firstIndex(where: { $0.id == localSessionID }) {
           self.sessions[index].isLoadingHistory = false
         }
@@ -273,6 +315,8 @@ extension HarnessController {
       },
       onError: { [weak self] message in
         guard let self, self.sessionFollowState.generation == generation else { return }
+        self.sessionFollowState.preservingCachedHistory = false
+        self.sessionFollowState.retainingVisibleHistory = false
         if let index = self.sessions.firstIndex(where: { $0.id == localSessionID }) {
           self.sessions[index].isLoadingHistory = false
         }
@@ -337,20 +381,37 @@ extension HarnessController {
         if let index = sessions.firstIndex(where: { $0.id == localSessionID }) {
           sessions[index].isLoadingHistory = false
         }
+        state.preservingCachedHistory = false
+        state.retainingVisibleHistory = false
         hostStatus = "会话快照与请求的 Session 不匹配"
         hostEvents?.cancel(state.streamID)
         return
       }
       let folded = foldHistoryContent(snapshot.records)
-      sessions[index].messages = folded.messages.isEmpty && !snapshot.hasMore
-        ? [Message(role: .system, text: "这个会话还没有可显示的消息。")]
-        : folded.messages
+      let cached = state.completedHistoryBySession[sessionID]
+      let cachedSequence = cached?.sequence
+      let preserveCachedHistory = state.preservingCachedHistory
+        && !sessions[index].messages.isEmpty
+        && (cachedSequence.map { $0 >= snapshot.cursor } ?? (cached?.updatedAt != nil))
+      let retainVisibleHistory = state.retainingVisibleHistory
+        && !sessions[index].messages.isEmpty
+      if preserveCachedHistory || retainVisibleHistory {
+        sessions[index].messages = DSHHistoryPageMerge.mergeTail(
+          folded.messages,
+          into: sessions[index].messages)
+      } else {
+        sessions[index].messages = folded.messages.isEmpty && !snapshot.hasMore
+          ? [Message(role: .system, text: "这个会话还没有可显示的消息。")]
+          : folded.messages
+      }
       sessions[index].turnStartedAt = folded.activeTurnStartedAt
       reconcileRootSessionRunningState(
         sessionID: sessionID,
         localSessionID: localSessionID,
         running: folded.activeTurnStartedAt != nil)
-      sessions[index].isLoadingHistory = snapshot.hasMore
+      sessions[index].isLoadingHistory = preserveCachedHistory || retainVisibleHistory
+        ? false
+        : snapshot.hasMore
       activeTools = DSHToolActivityMerge.preservingDetails(
         incoming: folded.tools,
         previous: activeTools)
@@ -381,13 +442,18 @@ extension HarnessController {
           ],
         ])
       }
-      status = snapshot.hasMore
-        ? "已载入 \(folded.messages.count) 条消息，正在补齐完整历史"
-        : "已载入完整会话历史"
+      status = preserveCachedHistory
+        ? "已从本地缓存恢复完整会话"
+        : retainVisibleHistory
+          ? "已在后台校对会话历史"
+        : snapshot.hasMore
+          ? "已载入 \(folded.messages.count) 条消息，正在补齐完整历史"
+          : "已载入完整会话历史"
       refreshHostSnapshots()
-      if snapshot.hasMore {
+      if snapshot.hasMore, !preserveCachedHistory {
         guard let oldest else {
           sessions[index].isLoadingHistory = false
+          state.preservingCachedHistory = false
           hostStatus = DSHHistoryLoadError.cursorDidNotAdvance.localizedDescription
           return
         }
@@ -395,8 +461,18 @@ extension HarnessController {
           sessionID: sessionID,
           localSessionID: localSessionID,
           throughSeq: snapshot.cursor,
-          beforeSeq: oldest)
+          beforeSeq: oldest,
+          showsProgress: !retainVisibleHistory,
+          replaceVisibleOnCompletion: retainVisibleHistory && !preserveCachedHistory,
+          replacementSeed: folded.messages,
+          replacementTools: folded.tools)
+      } else {
+        markRootHistoryComplete(
+          sessionID: sessionID,
+          throughSeq: max(cached?.sequence ?? 0, snapshot.cursor))
       }
+      state.preservingCachedHistory = false
+      state.retainingVisibleHistory = false
     case "event":
       guard let eventFrame = DSHProjectionDecoder.decode(DSHSessionWireEventFrame.self, from: frame),
             let data = jsonObject(eventFrame.event.data)
@@ -408,7 +484,8 @@ extension HarnessController {
         // running state instead of leaving both permanently stale.
         startRootSessionFollow(
           sessionID: sessionID,
-          localSessionID: localSessionID)
+          localSessionID: localSessionID,
+          retainingVisibleHistory: true)
         return
       }
       state.nextSeq = eventFrame.event.seq + 1
@@ -424,6 +501,12 @@ extension HarnessController {
         ],
         "view": frame["view"] ?? [:],
       ])
+      if let cached = state.completedHistoryBySession[sessionID] {
+        state.completedHistoryBySession[sessionID] = DSHHistoryCacheVersion(
+          sequence: max(cached.sequence ?? eventFrame.event.seq, eventFrame.event.seq),
+          updatedAt: Date().timeIntervalSince1970 * 1_000)
+        state.completedHistoryToolsBySession[sessionID] = activeTools
+      }
     case "assistant-stream":
       guard let envelope = DSHProjectionDecoder.decode(DSHSessionAssistantStreamEnvelope.self, from: frame),
             let revision = envelope.frame["revision"]?.integer

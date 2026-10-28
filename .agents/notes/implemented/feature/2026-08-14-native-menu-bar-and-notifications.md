@@ -1,6 +1,6 @@
 # Agent Note: Menu bar presence + system notifications for approvals, questions, and turn completion
 
-Status: implemented
+Status: implemented — the menu-bar item was later replaced by a Dock badge after macOS 27 beta crashes; see [2026-10-27-dock-badge-replaces-menu-bar](../bug-fix/2026-10-27-dock-badge-replaces-menu-bar.md). Notifications are unchanged.
 
 ## Problem
 

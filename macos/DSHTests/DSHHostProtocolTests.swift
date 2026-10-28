@@ -170,12 +170,12 @@ private func testRPCServerResponse_decodesOkResult() throws {
 
 private func testHostDescription_decodesBundledRuntimeShape() throws {
   let description = try JSONDecoder().decode(DSHHostDescription.self, from: Data("""
-  {"version":"0.2.1-rc.2","cwd":"/tmp/project","attachedSessions":2,"home":"/Users/test","canOpenPath":true}
+  {"version":"0.2.1-rc.2","cwd":"/tmp/project","attachedSessions":2,"home":"/Users/developer","canOpenPath":true}
   """.utf8))
   try expectEqual(description.version, "0.2.1-rc.2")
   try expect(description.provider == nil)
   try expect(description.model == nil)
-  try expectEqual(description.home, "/Users/test")
+  try expectEqual(description.home, "/Users/developer")
 }
 
 private func testCreateSessionPayload_omitsNilWorkspace() throws {

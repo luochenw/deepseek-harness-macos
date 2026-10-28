@@ -34,7 +34,9 @@ Agent reasoning, tools, MCP, terminal, filesystem, and subagents are still provi
 - Subagent transcripts are a dedicated, live-streaming overlay on the conversation pane (not a synthetic top-level session), with a visible read-only/continuable distinction and breadcrumb navigation.
 - Reusable Agent Profiles dispatch DSH, Claude Code, Codex, and ZCode together from the composer, a manual run sheet, or an authorized Agent/Subagent tool call. The three external runtimes must be installed and authenticated separately on the Mac. Dedicated right-workbench tabs show durable Batches, member logs, stop/retry/discard actions, immutable runtime snapshots, and selective root-Agent integration.
 - Execution members require isolated Git worktrees. Each Batch freezes the initiating session's cwd, sandbox mode, model, tool surface, and Agent Preset; external CLIs run through DSH's sandbox provider, while continuable DSH contexts reuse their worktree until adoption or discard.
-- A persistent menu bar item and system notifications for approval requests, agent questions, and turn completion — capability a browser tab structurally can't provide.
+- A Dock icon badge and system notifications for approval requests, agent questions, and turn completion — capability a browser tab structurally can't provide. The badge shows "!" while any session waits on an approval or question, "•" while work is running, and nothing when idle; after closing the window, click the Dock icon to reopen it. (The menu bar item was removed to avoid a macOS 27 beta system crash.)
+- Consecutive tool calls in a turn fold into one row, "ran N commands · M modified files", which expands on click. Calls that modify files get a pencil icon, an accent bar and a "改" tag; multi-line scripts and heredocs show a readable summary (for example "Python script · modifies js/scene.js").
+- External agent bridge: while the app runs it publishes its local Host address, and `scripts/ds-agent` sends tasks to the app's Host so the session appears live in the sidebar; without the app it falls back to headless. The Host restarts automatically if it dies, and exits when the app quits or crashes.
 - Wake-word dictation routes by app context: it sends to the current conversation while the app is in front, dispatches a separate background session otherwise, and only fills the composer when auto-send is disabled.
 - Settings → Usage shows current-session context occupancy, cumulative input/output tokens, cache reads/writes and hit rate, plus LLM/tool timing. Figures come from live Host projections and never invent account balances, remaining quota, or costs.
 - Settings editor with inline, two-choice revision-conflict recovery (discard-and-reload or keep-edits-and-retry) instead of a silently stalled save.
@@ -138,7 +140,7 @@ Another live Host still owns the session's write handle. This is not log corrupt
 
 ### What does it do that the web UI can't?
 
-A persistent menu bar presence, system notifications for approvals/questions/completion while the app is in the background, live subagent overlays, Finder integration, and native windowing — things a browser tab structurally can't provide. The full feature-by-feature comparison lives in [macos/WEB_PARITY.md](macos/WEB_PARITY.md).
+A Dock badge, system notifications for approvals/questions/completion while the app is in the background, live subagent overlays, Finder integration, and native windowing — things a browser tab structurally can't provide. The full feature-by-feature comparison lives in [macos/WEB_PARITY.md](macos/WEB_PARITY.md).
 
 ## Contributing
 

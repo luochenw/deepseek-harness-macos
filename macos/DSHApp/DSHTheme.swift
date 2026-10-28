@@ -123,8 +123,12 @@ enum DSHTheme {
   static let onAccent = Color.white
   static let accentWash = DSHBrandPalette.logoPrimary.opacity(0.16)
   static let accentSoft = DSHBrandPalette.logoPrimary.opacity(0.11)
-  static let sessionSelected = DSHBrandPalette.logoPrimary
-  static let sessionSelectedForeground = DSHBrandPalette.logoNavy
+  static let sessionSelectedBackground = dynamic(
+    light: withAlpha(DSHBrandPalette.logoPrimaryRGBA, 0.10),
+    dark: withAlpha(DSHBrandPalette.logoPrimaryRGBA, 0.12))
+  static let sessionSelectedForeground = dynamic(
+    light: DSHBrandPalette.logoNavyRGBA,
+    dark: DSHBrandPalette.logoLightRGBA)
 
   // MARK: Semantic — attention / destructive, kept distinct from the accent hue.
 
@@ -145,16 +149,24 @@ enum DSHRadius {
 /// Shared macOS typography roles. Keep body/interface text on SF default;
 /// use monospaced type only for code, paths, counts, and terminal data.
 enum DSHType {
+  // Numeric sizes are exported so geometry code (transcript row height
+  // estimates) uses the same numbers as the rendered `Font`s — `Font` does not
+  // expose its metrics, and a hand-copied size silently drifts.
+  static let monoSize: CGFloat = 11.5
+  static let microSize: CGFloat = 10.5
+  static let labelSize: CGFloat = 12.5
+  static let captionSize: CGFloat = 11
+
   static let brand = Font.system(size: 14, weight: .semibold)
   static let display = Font.system(size: 20, weight: .semibold)
   static let pageTitle = Font.system(size: 17, weight: .semibold)
   static let sectionTitle = Font.system(size: 12, weight: .semibold)
   static let body = Font.system(size: 14)
   static let bodyLarge = Font.system(size: 14.5)
-  static let label = Font.system(size: 12.5, weight: .medium)
-  static let caption = Font.system(size: 11)
-  static let micro = Font.system(size: 10.5, weight: .medium)
-  static let mono = Font.system(size: 11.5, design: .monospaced)
+  static let label = Font.system(size: labelSize, weight: .medium)
+  static let caption = Font.system(size: captionSize)
+  static let micro = Font.system(size: microSize, weight: .medium)
+  static let mono = Font.system(size: monoSize, design: .monospaced)
   static let code = Font.system(size: 12, design: .monospaced)
 }
 
@@ -228,6 +240,76 @@ struct DSHRunningBars: View {
     .onChange(of: reduceMotion) { _, reduced in
       moving = !reduced
     }
+    .accessibilityHidden(true)
+  }
+}
+
+/// One compact moving line for a live process. Included only while work is
+/// active; Reduce Motion keeps the same indicator without the shuttle.
+struct DSHActivityLine: View {
+  let active: Bool
+  var color: Color = DSHTheme.accent
+  var height: CGFloat = 1.2
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var appeared = false
+  @State private var moving = false
+
+  var body: some View {
+    GeometryReader { geometry in
+      let segmentWidth = min(max(geometry.size.width * 0.26, 36), 68)
+      let travel = max(geometry.size.width - segmentWidth, 0)
+      Capsule()
+        .fill(color.opacity(0.72))
+        .frame(width: segmentWidth, height: height)
+        .scaleEffect(x: appeared ? 1 : 0, anchor: .leading)
+        .offset(x: active && !reduceMotion ? (moving ? travel : 0) : 0)
+        .animation(
+          reduceMotion
+            ? nil
+            : .easeInOut(duration: 1.8).repeatForever(autoreverses: true),
+          value: moving)
+        .animation(
+          reduceMotion ? nil : .easeOut(duration: 0.18),
+          value: appeared)
+        .onAppear {
+          appeared = true
+          moving = active && !reduceMotion
+        }
+        .onChange(of: active) { _, running in
+          moving = running && !reduceMotion
+        }
+        .onChange(of: reduceMotion) { _, reduced in
+          moving = active && !reduced
+        }
+    }
+    .frame(height: max(2, height))
+    .accessibilityHidden(true)
+  }
+}
+
+/// Animated proportional meter for context, cache, and other bounded metrics.
+/// Only the fill's transform changes, so updates never thrash row layout.
+struct DSHAnimatedProgressBar: View {
+  let fraction: Double
+  var tint: Color = DSHTheme.accent
+  var height: CGFloat = 3
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    GeometryReader { geometry in
+      ZStack(alignment: .leading) {
+        Capsule().fill(tint.opacity(0.16))
+        Capsule()
+          .fill(tint)
+          .scaleEffect(
+            x: min(max(fraction, 0), 1),
+            anchor: .leading)
+      }
+    }
+    .frame(height: height)
+    .animation(
+      reduceMotion ? nil : .easeOut(duration: 0.35),
+      value: fraction)
     .accessibilityHidden(true)
   }
 }
