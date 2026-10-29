@@ -195,7 +195,7 @@ private struct SidebarRowChrome: View {
         in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
       .overlay(alignment: .bottomLeading) {
         if statusKind == .live {
-          DSHActivityLine(active: true)
+          DSHActivityLine(active: true, color: DSHTheme.running)
             .padding(.horizontal, DSHSpace.s2)
             .padding(.bottom, 1)
             .allowsHitTesting(false)

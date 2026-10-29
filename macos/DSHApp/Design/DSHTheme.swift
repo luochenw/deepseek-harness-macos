@@ -109,7 +109,9 @@ enum DSHTheme {
   static let fieldFill = dynamic(light: (1.0, 1.0, 1.0, 0.99), dark: (0.126, 0.151, 0.184, 1))
   static let fieldStroke = dynamic(light: (0.640, 0.694, 0.772, 0.72), dark: (0.353, 0.412, 0.490, 0.82))
 
-  static let sidebarBg = dynamic(light: (0.929, 0.941, 0.961, 1), dark: (0.090, 0.105, 0.126, 1))
+  static let sidebarBgLightRGBA: (Double, Double, Double, Double) = (0.929, 0.941, 0.961, 1)
+  static let sidebarBgDarkRGBA: (Double, Double, Double, Double) = (0.090, 0.105, 0.126, 1)
+  static let sidebarBg = dynamic(light: sidebarBgLightRGBA, dark: sidebarBgDarkRGBA)
   static let sidebarSelected = dynamic(
     light: DSHBrandPalette.logoPrimaryRGBA,
     dark: DSHBrandPalette.logoNavyRGBA)
@@ -129,6 +131,12 @@ enum DSHTheme {
   static let sessionSelectedForeground = dynamic(
     light: DSHBrandPalette.logoNavyRGBA,
     dark: DSHBrandPalette.logoLightRGBA)
+  /// Running-session marker. The logo mint is only 1.25:1 against the light
+  /// sidebar, so light mode uses a darker teal; both sides clear 3:1 against
+  /// `sidebarBg` (asserted in `DSHSidebarTests`).
+  static let runningLightRGBA: (Double, Double, Double, Double) = (0.043, 0.400, 0.384, 1)
+  static let runningDarkRGBA: (Double, Double, Double, Double) = (0.541, 0.918, 0.890, 1)
+  static let running = dynamic(light: runningLightRGBA, dark: runningDarkRGBA)
 
   // MARK: Semantic — attention / destructive, kept distinct from the accent hue.
 

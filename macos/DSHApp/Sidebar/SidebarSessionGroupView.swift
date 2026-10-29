@@ -3,12 +3,59 @@ import SwiftUI
 enum DSHSidebarSessionPaging {
   static let defaultVisibleCount = 5
 
-  static func visibleCount(total: Int, expanded: Bool) -> Int {
-    expanded ? max(0, total) : min(max(0, total), defaultVisibleCount)
+  /// Rows a collapsed project renders. A running session is never folded away:
+  /// the preview keeps the newest `defaultVisibleCount` rows and then appends
+  /// every running session past them, in their original order.
+  static func visibleIndices(total: Int, running: [Bool], expanded: Bool) -> [Int] {
+    let total = max(0, total)
+    guard !expanded else { return Array(0..<total) }
+    let preview = min(total, defaultVisibleCount)
+    var indices = Array(0..<preview)
+    if total > preview {
+      indices += (preview..<total).filter { index in
+        index < running.count && running[index]
+      }
+    }
+    return indices
   }
 
-  static func hiddenCount(total: Int, expanded: Bool) -> Int {
-    max(0, total - visibleCount(total: total, expanded: expanded))
+  /// Rows the "展开其余 N 个" control would add — running rows never count, they
+  /// are already visible.
+  static func hiddenCount(total: Int, running: [Bool], expanded: Bool) -> Int {
+    max(0, max(0, total) - visibleIndices(total: total, running: running, expanded: expanded).count)
+  }
+
+  /// The rows a collapsed project renders, in order. Views iterate these
+  /// directly so SwiftUI keys them by session identity instead of by position.
+  static func visibleSessions(
+    _ sessions: [DSHSessionSummary],
+    expanded: Bool
+  ) -> [DSHSessionSummary] {
+    visibleIndices(
+      total: sessions.count,
+      running: sessions.map(\.running),
+      expanded: expanded
+    ).compactMap { index in
+      sessions.indices.contains(index) ? sessions[index] : nil
+    }
+  }
+
+  /// Whether the fold toggle would change anything. Collapsing is a no-op when
+  /// the rows past the preview are all running (they stay visible either way),
+  /// so the control is hidden instead of silently doing nothing.
+  static func showsFoldControl(total: Int, running: [Bool]) -> Bool {
+    visibleIndices(total: total, running: running, expanded: false).count
+      < visibleIndices(total: total, running: running, expanded: true).count
+  }
+
+  /// Label of the fold toggle. The collapsed count is what the row list would
+  /// hold after folding — never the current, fully expanded row count.
+  static func foldControlLabel(total: Int, running: [Bool], expanded: Bool) -> String {
+    if expanded {
+      let folded = visibleIndices(total: total, running: running, expanded: false).count
+      return "收起至 \(folded) 个"
+    }
+    return "展开其余 \(hiddenCount(total: total, running: running, expanded: false)) 个"
   }
 }
 
@@ -22,15 +69,9 @@ struct SidebarSessionGroupView: View {
 
   private var isCollapsed: Bool { collapsedGroups.contains(group.id) }
   private var isExpanded: Bool { expandedGroups.contains(group.id) }
-  private var visibleCount: Int {
-    DSHSidebarSessionPaging.visibleCount(
-      total: group.sessions.count,
-      expanded: isExpanded)
-  }
-  private var hiddenCount: Int {
-    DSHSidebarSessionPaging.hiddenCount(
-      total: group.sessions.count,
-      expanded: isExpanded)
+  private var runningFlags: [Bool] { group.sessions.map(\.running) }
+  private var visibleSessions: [DSHSessionSummary] {
+    DSHSidebarSessionPaging.visibleSessions(group.sessions, expanded: isExpanded)
   }
 
   var body: some View {
@@ -73,16 +114,22 @@ struct SidebarSessionGroupView: View {
       }
 
       if !isCollapsed {
-        ForEach(Array(group.sessions.prefix(visibleCount))) { session in
+        // Identity, not the row's index: a new session inserted at the top
+        // shifts every index, and an index-keyed ForEach would carry each
+        // row's @State (hover, popover) over to a different session.
+        ForEach(visibleSessions) { session in
           SidebarSessionRow(session: session)
             .padding(.leading, showsHeader ? DSHSpace.s3 : 0)
         }
-        if group.sessions.count > DSHSidebarSessionPaging.defaultVisibleCount {
+        // Only offer the toggle when it actually changes what is on screen:
+        // collapsing a group whose remainder is entirely running would remove
+        // nothing, and a button that does nothing is worse than no button.
+        if showsFoldControl {
           Button(action: toggleExpanded) {
             HStack(spacing: 6) {
               Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                 .font(.system(size: 8, weight: .semibold))
-              Text(isExpanded ? "收起至 5 个" : "展开其余 \(hiddenCount) 个")
+              Text(expandLabel)
                 .font(.system(size: 11.5, weight: .medium))
             }
             .foregroundStyle(DSHTheme.inkFaint)
@@ -94,6 +141,19 @@ struct SidebarSessionGroupView: View {
         }
       }
     }
+  }
+
+  private var showsFoldControl: Bool {
+    DSHSidebarSessionPaging.showsFoldControl(
+      total: group.sessions.count,
+      running: runningFlags)
+  }
+
+  private var expandLabel: String {
+    DSHSidebarSessionPaging.foldControlLabel(
+      total: group.sessions.count,
+      running: runningFlags,
+      expanded: isExpanded)
   }
 
   private func toggleCollapsed() {

@@ -23,6 +23,8 @@ grep -q '0xA2 / 255, 0xE4 / 255, 0xE0 / 255' "$THEME" || {
   echo "design-system: the original logo background color is missing" >&2
   exit 1
 }
+# The sidebar marks a running session with the shared activity line — same
+# component as the transcript, but on the contrast-safe running token.
 grep -q 'sessionSelectedBackground' "$THEME" \
   && grep -q 'withAlpha(DSHBrandPalette.logoPrimaryRGBA' "$THEME" \
   && grep -q 'isActive' "$SIDEBAR" \
@@ -31,9 +33,18 @@ grep -q 'sessionSelectedBackground' "$THEME" \
   echo "design-system: selected and running sessions need distinct lightweight treatments" >&2
   exit 1
 }
+grep -q 'DSHActivityLine(active: true, color: DSHTheme.running)' "$SIDEBAR" || {
+  echo "design-system: the sidebar's running line must use the contrast-safe DSHTheme.running token" >&2
+  exit 1
+}
+if grep -q 'Text("运行中")' "$SIDEBAR"; then
+  echo "design-system: the running marker is the line alone — no trailing label" >&2
+  exit 1
+fi
 grep -q 'struct DSHActivityLine' "$THEME" \
+  && grep -q 'var color: Color = DSHTheme.accent' "$THEME" \
   && grep -q 'repeatForever(autoreverses: true)' "$THEME" || {
-  echo "design-system: running sessions need a moving activity line" >&2
+  echo "design-system: running sessions need a moving activity line with the transcript's default colour" >&2
   exit 1
 }
 grep -q 'static let accentBright = DSHBrandPalette.logoPrimary' "$THEME" || {
