@@ -8,9 +8,11 @@ Invariants (each must cite a Note or test):
 - Whether the view follows the tail is decided by the pin alone; after the user scrolls up no trigger may follow — source: `macos/DSHTests/DSHConversationScrollStabilityTests.swift` ("Scroll policy follows the tail only while pinned").
 - Row frames are measured in the ScrollView's document coordinate space, and the bar locates the real scroll view by coverage — source: `macos/DSHTests/DSHConversationScrollStabilityTests.swift` ("Scroll policy rejects viewport-space row frames").
 - The row-height cache serves settled rows only; streaming and collapsed rows neither read nor write it — source: `macos/DSHTests/DSHTranscriptRowHeightTests.swift` ("Row height policy opts streaming and collapsed rows out of the cache").
+- A tool group's digest is computed once per layout by the parent, cached by a hash of every call's raw input, and passed to `ToolGroupRow`; the row's body never classifies commands — source: `macos/DSHTests/DSHTranscriptGroupExpansionTests.swift` ("Expand: body classifies each command at most once", "Expand: late arguments refresh the mutation count").
 Before reporting done: `./scripts/test-reasoning-ui.sh`, `./scripts/test-tool-presentation-ui.sh`, `./scripts/test-attachment-rail-ui.sh`, `./scripts/test-macos-native.sh --unit`.
 Pitfalls:
 - The golden tests are inherently brittle on CI (offscreen window, fixed run-loop duration) — source: `bug-fix/2026-10-28-interrupted-turn-blank-band.md`.
 - `ToolGroupRow.==` must not read `@EnvironmentObject`; the comparison has to be a pure value check — source: `bug-fix/2026-10-28-interrupted-turn-blank-band.md`.
 - Measurement switches exist only under `#if DEBUG`; Release keeps them `false` — source: `bug-fix/2026-10-28-interrupted-turn-blank-band.md`.
 - The 8ms p95 frame-time target has not been reached yet — source: `bug-fix/2026-10-27-transcript-scroll-bridge-and-reading-anchor.md`.
+- Classifier regexes are precompiled `static let`s; never call `String.range(of:options: .regularExpression)` on a per-frame path, it recompiles the pattern every call and froze the app on a 64-command group — source: `bug-fix/2026-10-29-tool-group-expand-freeze.md`.

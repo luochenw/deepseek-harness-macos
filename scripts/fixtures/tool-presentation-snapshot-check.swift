@@ -105,7 +105,15 @@ struct ToolPresentationSnapshotCheck {
               text: $0.name,
               toolCallId: $0.callId)
           },
-          initiallyExpanded: true)
+          initiallyExpanded: true,
+          digest: ConversationView.toolGroupDigest(
+            tools.map {
+              HarnessController.Message(
+                role: .tool,
+                text: $0.name,
+                toolCallId: $0.callId)
+            },
+            tools: harness.displayedTools))
           .padding(DSHSpace.s4)
       }
       .environmentObject(harness))

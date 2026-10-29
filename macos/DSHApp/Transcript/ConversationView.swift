@@ -599,9 +599,15 @@ struct ConversationView: View {
           isLive: Self.isStreamingRow(message, isRunning: isRunning),
           isEmpty: Self.isEmptyBody(message))
     case .toolGroup(let group):
-      ToolGroupRow(
-        messages: group,
-        signature: Self.toolGroupSignature(group, tools: harness.displayedTools))
+      // One digest pass per layout: the row's line AND its `==` signature both
+      // come from it. Two passes here would double the per-frame classification
+      // work the freeze was made of.
+      let digest = DSHToolGroupDigestStore.digest(
+        key: Self.toolGroupDigestKey(group, tools: harness.displayedTools)
+      ) {
+        Self.toolGroupDigest(group, tools: harness.displayedTools)
+      }
+      ToolGroupRow(messages: group, digest: digest)
         .equatable()
         .id(item.id)
         .dshTranscriptRowFrameIfNeeded(id: item.id, enabled: measureFrames)
@@ -635,25 +641,96 @@ struct ConversationView: View {
     return nil
   }
 
+  /// The digest of a group's rendered line — the ONE pass that classifies its
+  /// commands. `toolGroupSignature` used to compute exactly this and throw all
+  /// but four fields away, while `ToolGroupRow.digest` then repeated it three
+  /// times per body; on a 64-command group that was ~1 400 fresh regex
+  /// compilations per frame and froze the app on 2026-10-29 (agent note
+  /// `bug-fix/2026-10-29-tool-group-expand-freeze.md`). Every caller now gets
+  /// the digest once and passes the value down.
+  nonisolated static func toolGroupDigest(
+    _ messages: [HarnessController.Message],
+    tools: [HarnessController.ToolActivity]
+  ) -> DSHToolGroupDigest? {
+    let calls = messages.map { message -> DSHToolGroupDigestBuilder.Call in
+      let activity = message.toolCallId.flatMap { id in
+        tools.last { $0.callId == id }
+      }
+      let running = activity?.state == .running
+      // Only a RUNNING call's title is ever rendered (`digest.runningTitle`);
+      // a settled one contributes nothing but its kind and state. Resolving all
+      // of them was most of what a re-evaluated body still paid for after the
+      // regexes were precompiled.
+      let title = running
+        ? (activity.flatMap { DSHToolGroupStatus.instructionTitle(for: $0) } ?? message.text)
+        : message.text
+      let kind = activity?.callKind
+        ?? DSHToolCallClassifier.kind(name: message.text, arguments: String?.none)
+      return DSHToolGroupDigestBuilder.Call(
+        title: title,
+        kind: kind,
+        running: running,
+        failed: activity?.state == .failed)
+    }
+    if DSHTranscriptPerf.isEnabled {
+      DSHTranscriptPerf.toolGroupDigestBuilds += 1
+      DSHTranscriptPerf.toolGroupClassifications += calls.count
+    }
+    return DSHToolGroupDigestBuilder.digest(for: calls)
+  }
+
+  /// A hash of everything a group's rendered line reads from, so two groups with
+  /// the same key MUST render the same line — which makes a cache hit correct
+  /// even across sessions, and makes a late-arriving input (arguments that turn a
+  /// command into a file write) force a rebuild.
+  ///
+  /// Per call: the message text's CONTENT (not just its length), the activity's
+  /// name, its raw arguments or the projected title, its state, and — while the
+  /// call runs — the title the line actually shows.
+  nonisolated static func toolGroupDigestKey(
+    _ messages: [HarnessController.Message],
+    tools: [HarnessController.ToolActivity]
+  ) -> String {
+    var hasher = Hasher()
+    hasher.combine(messages.count)
+    for message in messages {
+      hasher.combine(message.text)
+      let activity = message.toolCallId.flatMap { id in
+        tools.last { $0.callId == id }
+      }
+      guard let activity else {
+        hasher.combine(0)
+        continue
+      }
+      hasher.combine(activity.name)
+      hasher.combine(activity.arguments)
+      hasher.combine(activity.presentation?.title)
+      hasher.combine(activity.presentation?.path)
+      switch activity.state {
+      case .running:
+        hasher.combine(1)
+        // The running title is rendered, and it changes as arguments stream in.
+        hasher.combine(DSHToolGroupStatus.instructionTitle(for: activity) ?? message.text)
+      case .succeeded:
+        hasher.combine(2)
+      case .failed:
+        hasher.combine(3)
+      }
+    }
+    return String(hasher.finalize())
+  }
+
   /// The bits of a tool group's rendered line that do NOT come from its messages: resolved
   /// activity titles, running state and failure count.
   nonisolated static func toolGroupSignature(
     _ messages: [HarnessController.Message],
     tools: [HarnessController.ToolActivity]
   ) -> String {
-    let calls = messages.map { message -> DSHToolGroupDigestBuilder.Call in
-      let activity = message.toolCallId.flatMap { id in tools.last { $0.callId == id } }
-      let title = activity.flatMap { DSHToolGroupStatus.instructionTitle(for: $0) }
-        ?? message.text
-      let kind = activity?.callKind
-        ?? DSHToolCallClassifier.kind(name: message.text, arguments: String?.none)
-      return DSHToolGroupDigestBuilder.Call(
-        title: title,
-        kind: kind,
-        running: activity?.state == .running,
-        failed: activity?.state == .failed)
-    }
-    guard let digest = DSHToolGroupDigestBuilder.digest(for: calls) else { return "empty" }
+    toolGroupSignature(toolGroupDigest(messages, tools: tools))
+  }
+
+  nonisolated static func toolGroupSignature(_ digest: DSHToolGroupDigest?) -> String {
+    guard let digest else { return "empty" }
     return [
       String(digest.commandCount),
       String(digest.mutatingCount),
@@ -1180,6 +1257,7 @@ struct ConversationView: View {
 
   /// Coalesce repeated follow requests in the same render transaction.
   private func requestScrollToTail(_ proxy: ScrollViewProxy, force: Bool = false) {
+    if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.tailScrollRequests += 1 }
     if scrollViewBox.isUserScrolling,
        DSHConversationScrollFollow.mayFollowTail(isInteracting: true, force: force) == false {
       deferredTailAction = { [proxy] in requestScrollToTail(proxy, force: true) }
@@ -1192,6 +1270,7 @@ struct ConversationView: View {
             pinnedToBottom,
             harness.displayedSession?.messages.isEmpty == false
       else { return }
+      if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.tailScrollExecutions += 1 }
       let before = scrollViewBox.contentOffset
       var transaction = Transaction()
       transaction.animation = nil
@@ -1366,14 +1445,81 @@ private struct PendingSteeringBubble: View {
   }
 }
 
+/// Memoizes a group's resolved line by its signature.
+///
+/// The signature is exactly the set of inputs the line renders from — command
+/// text, resolved titles, running state, failure state — so two rows with the
+/// same signature draw the same line and one build serves both. Skipping the
+/// rebuild is what makes a re-evaluated body free instead of classifying every
+/// command again (the 2026-10-29 expand freeze).
+///
+/// Both remaining callers — `ConversationView.transcriptRow` and `ToolCallRow` —
+/// hand the digest they resolved straight to the row, so this only has to make
+/// REPEATED layout passes cheap: same key, no rebuild. The lock stays because
+/// this type carries no actor isolation while `toolGroupDigest` is non-isolated;
+/// the alternative is `nonisolated(unsafe)`, which this repo forbids without a
+/// written reason.
+enum DSHToolGroupDigestStore {
+  private static let lock = NSLock()
+  private static var entries: [String: DSHToolGroupDigest] = [:]
+  private static var order: [String] = []
+  /// Rows are short-lived but signatures are content-derived, so a small
+  /// window catches the repeated passes without holding a whole session.
+  private static let limit = 256
+
+  static var count: Int {
+    lock.lock(); defer { lock.unlock() }
+    return entries.count
+  }
+
+  static func digest(
+    key: String,
+    build: () -> DSHToolGroupDigest?
+  ) -> DSHToolGroupDigest? {
+    lock.lock()
+    if let cached = entries[key] {
+      lock.unlock()
+      return cached
+    }
+    lock.unlock()
+    guard let digest = build() else { return nil }
+    lock.lock()
+    if entries.updateValue(digest, forKey: key) == nil {
+      order.append(key)
+      if order.count > limit {
+        for stale in order.prefix(order.count - limit) {
+          entries.removeValue(forKey: stale)
+        }
+        order.removeFirst(order.count - limit)
+      }
+    }
+    lock.unlock()
+    return digest
+  }
+
+  static func removeAll() {
+    lock.lock(); defer { lock.unlock() }
+    entries.removeAll(keepingCapacity: true)
+    order.removeAll(keepingCapacity: true)
+  }
+}
+
 /// One turn's command calls share a single collapsed row: "执行了 N 条命令 · 其中 M 条修改了文件 ›".
 struct ToolGroupRow: View, Equatable {
   @EnvironmentObject var harness: HarnessController
   let messages: [HarnessController.Message]
   @State private var expanded: Bool
 
-  /// Precomputed by the parent, NOT read from the environment here.
-  var signature: String = ""
+  /// Derived from `digest` in the initializer, NOT read from the environment
+  /// here. Keeping it derived is what stops two rows with different digests from
+  /// comparing equal.
+  let signature: String
+
+  /// The group's ONE digest, resolved by the caller in the same pass that
+  /// produced `signature`. Required rather than recomputed here: this body is
+  /// re-evaluated on every layout pass, and each recomputation classifies every
+  /// command (three times, before the 2026-10-29 freeze).
+  private let digest: DSHToolGroupDigest?
 
   nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
     lhs.messages.count == rhs.messages.count
@@ -1385,10 +1531,11 @@ struct ToolGroupRow: View, Equatable {
   init(
     messages: [HarnessController.Message],
     initiallyExpanded: Bool = false,
-    signature: String = ""
+    digest: DSHToolGroupDigest?
   ) {
     self.messages = messages
-    self.signature = signature
+    self.digest = digest
+    self.signature = ConversationView.toolGroupSignature(digest)
     _expanded = State(initialValue: initiallyExpanded)
   }
 
@@ -1400,26 +1547,6 @@ struct ToolGroupRow: View, Equatable {
   }
   private var instructions: [DSHToolInstruction] {
     DSHToolInstructionFlatten.instructions(from: activities)
-  }
-
-  /// Digest drives the collapsed line: N commands, M of them mutating, and — while the turn runs —
-  /// the title of the command being executed.
-  private var digest: DSHToolGroupDigest? {
-    let calls = messages.map { message -> DSHToolGroupDigestBuilder.Call in
-      let activity = message.toolCallId.flatMap { id in
-        harness.displayedTools.last { $0.callId == id }
-      }
-      let title = activity.flatMap { DSHToolGroupStatus.instructionTitle(for: $0) }
-        ?? message.text
-      let kind = activity?.callKind
-        ?? DSHToolCallClassifier.kind(name: message.text, arguments: String?.none)
-      return DSHToolGroupDigestBuilder.Call(
-        title: title,
-        kind: kind,
-        running: activity?.state == .running,
-        failed: activity?.state == .failed)
-    }
-    return DSHToolGroupDigestBuilder.digest(for: calls)
   }
 
   /// Body of the group line in normal ink; the running command and the mutation count are separate
@@ -1852,11 +1979,15 @@ struct ToolCallRow: View {
 
   @ViewBuilder var body: some View {
     if instructions.count > 1 {
+      let digest = DSHToolGroupDigestStore.digest(
+        key: ConversationView.toolGroupDigestKey([message], tools: harness.displayedTools)
+      ) {
+        ConversationView.toolGroupDigest([message], tools: harness.displayedTools)
+      }
       ToolGroupRow(
         messages: [message],
         initiallyExpanded: initiallyExpanded ?? false,
-        signature: ConversationView.toolGroupSignature(
-          [message], tools: harness.displayedTools))
+        digest: digest)
     } else if let instruction = instructions.first {
       ToolInstructionRow(
         instruction: instruction,

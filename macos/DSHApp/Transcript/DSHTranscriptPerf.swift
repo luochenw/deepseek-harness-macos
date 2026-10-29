@@ -27,6 +27,18 @@ enum DSHTranscriptPerf {
   static var metricLargestStep: Double = 0
   /// The string a `ToolGroupRow` last drew; a golden test catches `==` ignoring the digest.
   static var renderedGroupTitle: String?
+  /// Group digests actually built (cache misses). A layout pass that changes
+  /// nothing must not add to this — that is the freeze's unit of work.
+  static var toolGroupDigestBuilds = 0
+  /// Commands classified (one `callKind` pass per command per digest build).
+  /// Counted rather than timed, so the assertion is stable on any machine.
+  static var toolGroupClassifications = 0
+  /// Requests that tried to scroll the transcript to its tail, including the
+  /// ones coalesced away, and the ones that actually ran. A single expand must
+  /// not produce an unbounded run of them: that would be the height → follow →
+  /// relayout loop the 2026-10-29 freeze was suspected of.
+  static var tailScrollRequests = 0
+  static var tailScrollExecutions = 0
 }
 
 /// Per-row measured heights, keyed by row id and content version: starting a

@@ -397,7 +397,11 @@ private func renderSnapshot(
     VStack(alignment: .leading, spacing: DSHSpace.s4) {
       ForEach(items) { item in
         if case .toolGroup(let group) = item {
-          ToolGroupRow(messages: group, initiallyExpanded: expandGroups)
+          ToolGroupRow(
+            messages: group,
+            initiallyExpanded: expandGroups,
+            digest: ConversationView.toolGroupDigest(
+              group, tools: harness.displayedTools))
         }
       }
     }

@@ -2,6 +2,76 @@ import AppKit
 import Foundation
 import SwiftUI
 
+/// Precompiled regular expressions for the command summarizer and the write
+/// classifier.
+///
+/// Every pattern below used to be a string literal passed to
+/// `String.range(of:options:.regularExpression)`, which compiles the pattern on
+/// every call. One body evaluation of a 64-command group compiled ~1 400
+/// regexes, which is what froze the app on 2026-10-29 (see
+/// `.agents/notes/proposed/bug-fix/2026-10-29-tool-group-expand-freeze.md`).
+/// The pattern TEXT is unchanged — only the compilation moved to `static let`
+/// initialization — so classification semantics are identical; the before/after
+/// classification dump over every fixture command proves it.
+enum DSHPrecompiledPattern {
+  /// `nil` when the pattern does not compile. A bad literal is a programming
+  /// error the pattern-compilation test catches at build time; at runtime the
+  /// caller must then treat the rule as NOT matching. The old fallback
+  /// (`NSRegularExpression()`) was an empty pattern, which matches everything —
+  /// every command would have been classified as writing files.
+  static func expression(
+    _ pattern: String,
+    caseInsensitive: Bool = false
+  ) -> NSRegularExpression? {
+    do {
+      return try NSRegularExpression(
+        pattern: pattern,
+        options: caseInsensitive ? [.caseInsensitive] : [])
+    } catch {
+      assertionFailure("invalid classification pattern: \(pattern)")
+      return nil
+    }
+  }
+
+  /// How many patterns are declared; the pattern-compilation test walks them so
+  /// a broken literal cannot ship as "silently never matches".
+  static var declaredPatternCount: Int {
+    DSHCommandTitle.declaredPatterns.count
+      + DSHToolCallClassifier.declaredPatterns.count
+      + 2  // pythonInterpreter, nodeInterpreter
+  }
+
+  static var declaredPatternsAreAllCompiled: Bool {
+    let title = DSHCommandTitle.declaredPatterns.allSatisfy { $0 != nil }
+    let classifier = DSHToolCallClassifier.declaredPatterns.allSatisfy { $0 != nil }
+    return title && classifier && pythonInterpreter != nil && nodeInterpreter != nil
+  }
+
+  /// `python3` / `python3.12` … and a `node` invocation at the start of a line.
+  /// Shared by the title summarizer and the write classifier so the two can
+  /// never drift apart.
+  static let pythonInterpreter = expression(#"python[0-9.]*(\s|$)"#)
+  static let nodeInterpreter = expression(#"^node(\s|$)"#)
+
+  static func firstMatch(_ expression: NSRegularExpression?, in text: String) -> NSRange? {
+    // A pattern that failed to compile never matches — see `expression(_:)`.
+    guard let expression else { return nil }
+    return expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))?.range
+  }
+
+  static func matches(_ expression: NSRegularExpression?, _ text: String) -> Bool {
+    firstMatch(expression, in: text) != nil
+  }
+
+  static func range(
+    of expression: NSRegularExpression?,
+    in text: String
+  ) -> Range<String.Index>? {
+    guard let match = firstMatch(expression, in: text) else { return nil }
+    return Range(match, in: text)
+  }
+}
+
 /// Whether a tool call changes files on disk, so a run of commands does not read
 /// as an undifferentiated ladder of terminal rows.
 ///
@@ -246,16 +316,32 @@ enum DSHCommandTitle {
     return clamp(statement)
   }
 
+  /// Every pattern this type declares, for the "all patterns compile" test.
+  static let declaredPatterns: [NSRegularExpression?] = [
+    directoryChangePattern, scaffoldingPattern, noiseHeaderPattern, noiseBareEchoPattern,
+    assignmentOnlyPattern, controlKeywordPattern, shellWriteTargetPatterns[0],
+    shellWriteTargetPatterns[1], shellWriteTargetPatterns[2], inlinePythonCodePattern,
+    assignmentInScriptPattern, openVariableWithWriteModePattern,
+    openLiteralWithWriteModePattern, writeTextPattern, openVariableWriteModeWPattern,
+    nodeWriteTargetPatterns[0], nodeWriteTargetPatterns[1], nodeWriteTargetPatterns[2],
+    heredocMarkerPattern,
+  ]
+
+  private static let directoryChangePattern =
+    DSHPrecompiledPattern.expression(#"^cd(\s|$)"#)
+
   private static func isDirectoryChange(_ statement: String) -> Bool {
-    statement.range(of: #"^cd(\s|$)"#, options: .regularExpression) != nil
+    DSHPrecompiledPattern.matches(directoryChangePattern, statement)
   }
 
   /// Strip a leading `do`/`then`/`else` so a loop body line names what it
   /// actually runs: `do mkdir -p "pbr_$n"` → `mkdir -p "pbr_$n"`. The `for` /
   /// `while` header itself is scaffolding and is filtered out instead.
+  private static let scaffoldingPattern =
+    DSHPrecompiledPattern.expression(#"^(do|then|else)\b\s*"#)
+
   private static func unwrapScaffolding(_ statement: String) -> String {
-    let pattern = #"^(do|then|else)\b\s*"#
-    guard let range = statement.range(of: pattern, options: .regularExpression) else {
+    guard let range = DSHPrecompiledPattern.range(of: scaffoldingPattern, in: statement) else {
       return statement
     }
     let rest = statement[range.upperBound...].trimmingCharacters(in: .whitespaces)
@@ -264,20 +350,26 @@ enum DSHCommandTitle {
 
   /// `echo "--- label"` between real commands is a section header, not a
   /// subject: prefer the command it introduces.
+  private static let noiseHeaderPattern =
+    DSHPrecompiledPattern.expression(#"^(echo|printf)\s+['"]?-{1,}\s"#)
+  private static let noiseBareEchoPattern =
+    DSHPrecompiledPattern.expression(#"^(echo|printf)\s*$"#)
+
   private static func isNoiseStatement(_ statement: String) -> Bool {
-    statement.range(of: #"^(echo|printf)\s+['"]?-{1,}\s"#, options: .regularExpression) != nil
-      || statement.range(of: #"^(echo|printf)\s*$"#, options: .regularExpression) != nil
+    DSHPrecompiledPattern.matches(noiseHeaderPattern, statement)
+      || DSHPrecompiledPattern.matches(noiseBareEchoPattern, statement)
   }
 
   /// `V=0.169.0` / `for f in …` / `done`: shell scaffolding, not the command
   /// that does the work.
+  private static let assignmentOnlyPattern =
+    DSHPrecompiledPattern.expression(#"^[A-Za-z_][A-Za-z0-9_]*=\S*$"#)
+  private static let controlKeywordPattern =
+    DSHPrecompiledPattern.expression(#"^(for|while|until|if|then|elif|else|do|done|fi|esac|\{|\})\b"#)
+
   private static func isAssignmentOnly(_ statement: String) -> Bool {
-    statement.range(
-      of: #"^[A-Za-z_][A-Za-z0-9_]*=\S*$"#,
-      options: .regularExpression) != nil
-      || statement.range(
-        of: #"^(for|while|until|if|then|elif|else|do|done|fi|esac|\{|\})\b"#,
-        options: .regularExpression) != nil
+    DSHPrecompiledPattern.matches(assignmentOnlyPattern, statement)
+      || DSHPrecompiledPattern.matches(controlKeywordPattern, statement)
   }
 
   private static func splitStatement(_ line: String) -> [String] {
@@ -333,13 +425,14 @@ enum DSHCommandTitle {
 
   /// `cat > /tmp/probe.js <<'EOF'` and `cat <<'EOF' > file` read as "写入 …";
   /// a plain heredoc into a command (no redirect) falls through.
+  private static let shellWriteTargetPatterns = [
+    DSHPrecompiledPattern.expression(#"cat\s*>\s*([^\s<>]+)\s*<<-?"#),
+    DSHPrecompiledPattern.expression(#"cat\s*<<-?\s*['"]?[A-Za-z_][A-Za-z0-9_]*['"]?\s*>\s*([^\s<>]+)"#),
+    DSHPrecompiledPattern.expression(#"tee\s+(?:-a\s+)?([^\s<>|]+)"#),
+  ]
+
   private static func shellWriteTarget(_ statement: String) -> String? {
-    let patterns = [
-      #"cat\s*>\s*([^\s<>]+)\s*<<-?"#,
-      #"cat\s*<<-?\s*['"]?[A-Za-z_][A-Za-z0-9_]*['"]?\s*>\s*([^\s<>]+)"#,
-      #"tee\s+(?:-a\s+)?([^\s<>|]+)"#,
-    ]
-    for pattern in patterns {
+    for pattern in shellWriteTargetPatterns {
       if let target = capture(pattern, in: statement) {
         return target.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
       }
@@ -350,15 +443,19 @@ enum DSHCommandTitle {
   /// The python command inside a statement, if any: `python3 - <<'PY'`,
   /// `python3 - <<'PY'` after `&&`, or a `python3 -c '…'` one-liner.
   private static func pythonInvocation(in statement: String) -> Substring? {
-    guard let match = statement.range(
-      of: #"python[0-9.]*(\s|$)"#,
-      options: .regularExpression) else { return nil }
+    guard let match = DSHPrecompiledPattern.range(
+      of: DSHPrecompiledPattern.pythonInterpreter, in: statement) else {
+      return nil
+    }
     return statement[match.lowerBound...]
   }
 
+  private static let inlinePythonCodePattern =
+    DSHPrecompiledPattern.expression(#"python[0-9.]*\s+-c\s+(['"])(.*?)['"]"#)
+
   /// `python3 -c "…"`: the code itself is the only readable subject.
   private static func inlinePythonCode(_ statement: String) -> String? {
-    guard let raw = capture(#"python[0-9.]*\s+-c\s+(['"])(.*?)['"]"#, in: statement) else {
+    guard let raw = capture(inlinePythonCodePattern, in: statement) else {
       return nil
     }
     return clamp(raw)
@@ -381,34 +478,42 @@ enum DSHCommandTitle {
     return nil
   }
 
+  /// `open(p,'w')` write-mode suffix, shared by the two `open(…)` patterns
+  /// exactly as it was concatenated before.
+  private static let writeModes = #"['"][waxr]?[wax][+]?b?['"]"#
+
+  private static let assignmentInScriptPattern = DSHPrecompiledPattern.expression(
+    #"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['"]([^'"]+)['"]"#)
+  private static let openVariableWithWriteModePattern = DSHPrecompiledPattern.expression(
+    #"open\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"# + writeModes)
+  private static let openLiteralWithWriteModePattern = DSHPrecompiledPattern.expression(
+    #"open\s*\(\s*['"]([^'"]+)['"]\s*,\s*"# + writeModes)
+  private static let writeTextPattern = DSHPrecompiledPattern.expression(
+    #"([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(write_text|write_bytes)\s*\("#)
+  private static let openVariableWriteModeWPattern = DSHPrecompiledPattern.expression(
+    #"open\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\s*,\s*['"]w"#)
+
   private static func pythonWriteTarget(in command: String) -> String? {
     guard let script = heredocBody(in: command, interpreter: .python) else { return nil }
     var variables: [String: String] = [:]
-    for match in captures(#"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['"]([^'"]+)['"]"#, in: script) {
+    for match in captures(assignmentInScriptPattern, in: script) {
       variables[match[0]] = match[1]
     }
     // `open(p,'w')` / `open('x/y','w')` / `p.write_text(…)`. A read-only
     // `open(p)` is skipped: only a write mode makes it a modification.
-    let writeModes = #"['"][waxr]?[wax][+]?b?['"]"#
-    for match in captures(
-      #"open\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"# + writeModes,
-      in: script) {
+    for match in captures(openVariableWithWriteModePattern, in: script) {
       if let path = variables[match[0]] { return path }
     }
-    if let literal = capture(
-      #"open\s*\(\s*['"]([^'"]+)['"]\s*,\s*"# + writeModes,
-      in: script) {
+    if let literal = capture(openLiteralWithWriteModePattern, in: script) {
       return literal
     }
-    for match in captures(
-      #"([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(write_text|write_bytes)\s*\("#,
-      in: script) {
+    for match in captures(writeTextPattern, in: script) {
       if let path = variables[match[0]] { return path }
     }
     // `p = '…'` where p is later mutated in place (`.replace(` on its read
     // content, `open(p,'w')`): the assignment itself names the target.
     if variables.isEmpty == false,
-       captures(#"open\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\s*,\s*['"]w"#, in: script).isEmpty == false,
+       captures(openVariableWriteModeWPattern, in: script).isEmpty == false,
        let first = variables.sorted(by: { $0.key < $1.key }).first {
       return first.value
     }
@@ -417,14 +522,15 @@ enum DSHCommandTitle {
 
   private enum Interpreter { case python, node }
 
+  private static let nodeWriteTargetPatterns = [
+    DSHPrecompiledPattern.expression(#"fs\.writeFileSync\s*\(\s*['"]([^'"]+)['"]"#),
+    DSHPrecompiledPattern.expression(#"fs\.writeFile\s*\(\s*['"]([^'"]+)['"]"#),
+    DSHPrecompiledPattern.expression(#"fs\.appendFileSync\s*\(\s*['"]([^'"]+)['"]"#),
+  ]
+
   private static func nodeWriteTarget(in command: String) -> String? {
     guard let script = heredocBody(in: command, interpreter: .node) else { return nil }
-    let patterns = [
-      #"fs\.writeFileSync\s*\(\s*['"]([^'"]+)['"]"#,
-      #"fs\.writeFile\s*\(\s*['"]([^'"]+)['"]"#,
-      #"fs\.appendFileSync\s*\(\s*['"]([^'"]+)['"]"#,
-    ]
-    for pattern in patterns {
+    for pattern in nodeWriteTargetPatterns {
       if let target = capture(pattern, in: script) { return target }
     }
     return nil
@@ -437,7 +543,7 @@ enum DSHCommandTitle {
       guard trimmed.contains("<<") else { return false }
       switch interpreter {
       case .python: return pythonInvocation(in: trimmed) != nil
-      case .node: return trimmed.range(of: #"^node(\s|$)"#, options: .regularExpression) != nil
+      case .node: return DSHPrecompiledPattern.matches(DSHPrecompiledPattern.nodeInterpreter, trimmed)
       }
     }) else { return nil }
     var body: [String] = []
@@ -448,19 +554,23 @@ enum DSHCommandTitle {
     return body.isEmpty ? nil : body.joined(separator: "\n")
   }
 
+  private static let heredocMarkerPattern =
+    DSHPrecompiledPattern.expression(#"<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?"#)
+
   private static func heredocMarker(in line: String) -> String? {
-    guard let raw = capture(#"<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?"#, in: line) else {
+    guard let raw = capture(heredocMarkerPattern, in: line) else {
       return nil
     }
     return raw
   }
 
-  private static func capture(_ pattern: String, in text: String) -> String? {
-    captures(pattern, in: text).first?.first
+  private static func capture(_ expression: NSRegularExpression?, in text: String) -> String? {
+    captures(expression, in: text).first?.first
   }
 
-  private static func captures(_ pattern: String, in text: String) -> [[String]] {
-    guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
+  private static func captures(_ expression: NSRegularExpression?, in text: String) -> [[String]] {
+    // A pattern that failed to compile captures nothing (see `expression(_:)`).
+    guard let expression else { return [] }
     let full = NSRange(text.startIndex..., in: text)
     return expression.matches(in: text, range: full).map { match in
       (1..<match.numberOfRanges).map { index in
@@ -492,11 +602,29 @@ extension HarnessController.ToolActivity {
   }
 }
 
+/// Counts classifications that actually ran. The transcript's own counter
+/// (`DSHTranscriptPerf.toolGroupClassifications`) trusts the number of calls it
+/// handed to the builder; this one is incremented inside the classifier, so a
+/// test that renders the real row can prove the ROW did not re-classify — a
+/// stale `digest` getter shows up here, not there.
+enum DSHClassificationCounter {
+  #if DEBUG
+  static var classifiedCalls = 0
+  @inline(__always) static func noteClassifiedCall() {
+    guard DSHTranscriptPerf.isEnabled else { return }
+    classifiedCalls += 1
+  }
+  #else
+  @inline(__always) static func noteClassifiedCall() {}
+  #endif
+}
+
 enum DSHToolCallClassifier {
   /// Classification for a live activity: falls back to the Host-projected
   /// title as the command text when the App did not retain the raw arguments
   /// (history entries built from a projection keep only `presentation.title`).
   static func kind(for activity: HarnessController.ToolActivity) -> DSHToolCallKind {
+    DSHClassificationCounter.noteClassifiedCall()
     if DSHToolCallShape.mutatingTools.contains(activity.name.lowercased()) {
       return .mutating
     }
@@ -551,7 +679,7 @@ enum DSHToolCallClassifier {
     }
   }
 
-  private static let simpleWritePatterns = [
+  private static let simpleWritePatterns: [NSRegularExpression?] = [
     #"(^|\s)tee(\s|$)"#,
     #"(^|\s)sed\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*i"#,
     #"(^|\s)mv(\s|$)"#,
@@ -574,16 +702,17 @@ enum DSHToolCallClassifier {
     #"(^|\s)ditto(\s|$)"#,
     #"(^|\s)rsync(\s|$)"#,
     #"(^|\s)perl\s+[^|;]*-[a-zA-Z]*i"#,
-  ]
+  ].map { DSHPrecompiledPattern.expression($0, caseInsensitive: true) }
 
   /// `curl -s -o /dev/null URL` / `wget -O /dev/null`: a discard, not a write.
+  private static let downloadURLPattern =
+    DSHPrecompiledPattern.expression(#"(curl|wget)\b"#)
+  private static let downloadDevNullPattern =
+    DSHPrecompiledPattern.expression(#"(-o|--output|-O|--remote-name)\s*['"]?/dev/null"#)
+
   private static func downloadWritesToDevNull(_ statement: String) -> Bool {
-    guard statement.range(
-      of: #"(curl|wget)\b"#,
-      options: .regularExpression) != nil else { return false }
-    return statement.range(
-      of: #"(-o|--output|-O|--remote-name)\s*['"]?/dev/null"#,
-      options: .regularExpression) != nil
+    guard DSHPrecompiledPattern.matches(downloadURLPattern, statement) else { return false }
+    return DSHPrecompiledPattern.matches(downloadDevNullPattern, statement)
   }
 
   /// `>` or `>>` that is a real redirect: not `2>&1`, not `>/dev/null`,
@@ -613,28 +742,36 @@ enum DSHToolCallClassifier {
     return false
   }
 
+  private static let pythonWritePatterns: [NSRegularExpression?] = [
+    #"open\s*\([^)]*,\s*['"](w|a|x|wb|ab|w\+|a\+|r\+)['"]"#,
+    #"\.write_text\s*\("#,
+    #"\.write_bytes\s*\("#,
+    #"(shutil\.(copy|copy2|copyfile|move|rmtree))"#,
+    #"(os\.(remove|unlink|rename|replace|makedirs|mkdir|rmdir))"#,
+    #"(json\.dump\s*\()"#,
+  ].map { DSHPrecompiledPattern.expression($0, caseInsensitive: true) }
+
+  private static let nodeWritePatterns: [NSRegularExpression?] = [
+    #"fs\.(writeFileSync|writeFile|appendFileSync|appendFile|mkdirSync|mkdir|rmSync|rm|unlinkSync|unlink|renameSync|rename)\s*\("#,
+    #"(createWriteStream|writeFileSync)"#,
+  ].map { DSHPrecompiledPattern.expression($0, caseInsensitive: true) }
+
   private static func pythonWritesFiles(_ script: String) -> Bool {
-    let patterns = [
-      #"open\s*\([^)]*,\s*['"](w|a|x|wb|ab|w\+|a\+|r\+)['"]"#,
-      #"\.write_text\s*\("#,
-      #"\.write_bytes\s*\("#,
-      #"(shutil\.(copy|copy2|copyfile|move|rmtree))"#,
-      #"(os\.(remove|unlink|rename|replace|makedirs|mkdir|rmdir))"#,
-      #"(json\.dump\s*\()"#,
-    ]
-    return patterns.contains { matches(script, $0) }
+    pythonWritePatterns.contains { matches(script, $0) }
   }
 
   private static func nodeWritesFiles(_ script: String) -> Bool {
-    let patterns = [
-      #"fs\.(writeFileSync|writeFile|appendFileSync|appendFile|mkdirSync|mkdir|rmSync|rm|unlinkSync|unlink|renameSync|rename)\s*\("#,
-      #"(createWriteStream|writeFileSync)"#,
-    ]
-    return patterns.contains { matches(script, $0) }
+    nodeWritePatterns.contains { matches(script, $0) }
   }
 
-  private static func matches(_ text: String, _ pattern: String) -> Bool {
-    text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+  /// Every pattern this type declares, for the "all patterns compile" test.
+  static let declaredPatterns: [NSRegularExpression?] =
+    simpleWritePatterns + pythonWritePatterns + nodeWritePatterns + [
+      downloadURLPattern, downloadDevNullPattern,
+    ]
+
+  private static func matches(_ text: String, _ expression: NSRegularExpression?) -> Bool {
+    DSHPrecompiledPattern.matches(expression, text)
   }
 
   private static func shellStatements(_ text: String) -> [String] {
@@ -651,11 +788,15 @@ enum DSHToolCallClassifier {
   }
 
   private static func pythonScript(in command: String) -> String? {
-    scriptBody(in: command) { $0.range(of: #"python[0-9.]*(\s|$)"#, options: .regularExpression) != nil }
+    scriptBody(in: command) {
+      DSHPrecompiledPattern.matches(DSHPrecompiledPattern.pythonInterpreter, $0)
+    }
   }
 
   private static func nodeScript(in command: String) -> String? {
-    scriptBody(in: command) { $0.range(of: #"^node(\s|$)"#, options: .regularExpression) != nil }
+    scriptBody(in: command) {
+      DSHPrecompiledPattern.matches(DSHPrecompiledPattern.nodeInterpreter, $0)
+    }
   }
 
   /// Heredoc body for the first line that both invokes `interpreter` and opens
@@ -677,8 +818,11 @@ enum DSHToolCallClassifier {
     return body.isEmpty ? nil : body.joined(separator: "\n")
   }
 
+  private static let heredocMarkerPattern =
+    DSHPrecompiledPattern.expression(#"<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?"#)
+
   private static func heredocMarker(in line: String) -> String? {
-    guard let range = line.range(of: "<<-?\\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", options: .regularExpression) else {
+    guard let range = DSHPrecompiledPattern.range(of: heredocMarkerPattern, in: line) else {
       return nil
     }
     let marker = String(line[range])
