@@ -199,8 +199,12 @@ struct MarkdownText: View {
 
   @MainActor
   private static func cachedParse(_ text: String) -> [IdentifiedBlock] {
-    if let cached = parsedBlockCache[text] { return cached }
+    if let cached = parsedBlockCache[text] {
+      if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.markdownParseCacheHits += 1 }
+      return cached
+    }
     let parsed = parse(text)
+    if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.markdownParses += 1 }
     guard text.utf8.count <= 250_000 else { return parsed }
     parsedBlockCache[text] = parsed
     parsedBlockOrder.append(text)
@@ -215,6 +219,7 @@ struct MarkdownText: View {
   private static func cachedInline(_ string: String) -> AttributedString {
     if let cached = inlineCache[string] { return cached }
     let parsed = inline(string)
+    if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.markdownInlineBuilds += 1 }
     guard string.utf8.count <= 20_000 else { return parsed }
     inlineCache[string] = parsed
     inlineOrder.append(string)

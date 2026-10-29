@@ -33,6 +33,13 @@ enum DSHTranscriptPerf {
   /// Commands classified (one `callKind` pass per command per digest build).
   /// Counted rather than timed, so the assertion is stable on any machine.
   static var toolGroupClassifications = 0
+  /// Markdown work actually performed — a block parse or an inline
+  /// `AttributedString(markdown:)` build — and the parse-cache hits that avoided
+  /// one. A reply re-laid out across passes must parse once; repeats are the defect.
+  static var markdownParses = 0
+  static var markdownInlineBuilds = 0
+  static var markdownParseCacheHits = 0
+
   /// Requests that tried to scroll the transcript to its tail, including the
   /// ones coalesced away, and the ones that actually ran. A single expand must
   /// not produce an unbounded run of them: that would be the height → follow →

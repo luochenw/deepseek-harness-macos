@@ -33,6 +33,7 @@ struct DSHTestsMain {
     allTests += dshTranscriptRowHeightTests
     allTests += dshTranscriptGoldenTests
     allTests += dshTranscriptGroupExpansionTests
+    allTests += dshMarkdownLayoutCountTests
     let ok = runAll(allTests)
     exit(ok ? 0 : 1)
   }
