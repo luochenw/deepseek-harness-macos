@@ -3,11 +3,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
-STATE="$ROOT/macos/DSHApp/DSHWorkbench.swift"
-VIEW="$ROOT/macos/DSHApp/WorkbenchView.swift"
-BROWSER="$ROOT/macos/DSHApp/NativeBrowserView.swift"
-MARKDOWN="$ROOT/macos/DSHApp/NativeMarkdownDocumentView.swift"
-EVENTS="$ROOT/macos/DSHApp/DSHEventSocket.swift"
+STATE="$ROOT/macos/DSHApp/Workbench/DSHWorkbench.swift"
+VIEW="$ROOT/macos/DSHApp/Workbench/WorkbenchView.swift"
+BROWSER="$ROOT/macos/DSHApp/Workbench/NativeBrowserView.swift"
+MARKDOWN="$ROOT/macos/DSHApp/Workbench/NativeMarkdownDocumentView.swift"
+EVENTS="$ROOT/macos/DSHApp/Host/DSHEventSocket.swift"
 RUNTIME_TOOL="$ROOT/macos/Runtime-extras/dsh-tool-workbench/lib/index.js"
 RUNTIME_PATCH="$ROOT/scripts/patch-agent-platform-runtime.mjs"
 SNAPSHOT_FIXTURE="$ROOT/scripts/fixtures/workbench-snapshot-check.swift"
@@ -31,7 +31,7 @@ grep -q 'DSHRadius.sm' "$VIEW" || { echo "workbench-ui: tabs must use the shared
 grep -q 'let webView: WKWebView' "$BROWSER" || { echo "workbench-ui: browser runtime must own a stable WKWebView" >&2; exit 1; }
 grep -q 'DispatchSource.makeFileSystemObjectSource' "$MARKDOWN" || { echo "workbench-ui: Markdown must monitor external writes" >&2; exit 1; }
 grep -q 'NSAllowsLocalNetworking' "$ROOT/macos/DSHApp/Info.plist" || { echo "workbench-ui: local HTTP navigation is not allowed by Info.plist" >&2; exit 1; }
-grep -q 'cachedParse' "$ROOT/macos/DSHApp/NativeMarkdownText.swift" || { echo "workbench-ui: Markdown parsing is not cached for scrolling" >&2; exit 1; }
+grep -q 'cachedParse' "$ROOT/macos/DSHApp/Transcript/NativeMarkdownText.swift" || { echo "workbench-ui: Markdown parsing is not cached for scrolling" >&2; exit 1; }
 grep -q 'consumeModelWorkbenchEvent' "$EVENTS" || { echo "workbench-ui: live tool results do not reach the native workbench" >&2; exit 1; }
 grep -q 'case "tool/code-dispatch"' "$STATE" || { echo "workbench-ui: Code Mode workbench calls are not handled" >&2; exit 1; }
 grep -Rq 'open_workbench_browser' "$(dirname "$RUNTIME_TOOL")" || { echo "workbench-ui: browser tool is not model-callable" >&2; exit 1; }
@@ -45,7 +45,7 @@ fi
 rm -rf "$SNAPSHOT_DIR"
 swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
   -o "$SNAPSHOT_BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
+  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
 swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$SNAPSHOT_BUILD" -L "$SNAPSHOT_BUILD" -lDSHAppLib \
   -o "$SNAPSHOT_BUILD/workbench-snapshot-check" \
   "$SNAPSHOT_FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit

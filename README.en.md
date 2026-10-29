@@ -91,7 +91,7 @@ The refresh script automatically selects an available local `Apple Development` 
 
 ## Verification and native tests
 
-This repo deliberately has no Xcode or SwiftPM test project — production builds compile `macos/DSHApp/*.swift` directly with `swiftc`. The test script reuses that exact input set instead of maintaining a second, driftable target list (see [the Agent Note](.agents/notes/implemented/architecture/2026-08-14-no-xcode-project.md)).
+This repo deliberately has no Xcode or SwiftPM test project — production builds compile `macos/DSHApp/*/*.swift` directly with `swiftc`. The test script reuses that exact input set instead of maintaining a second, driftable target list (see [the Agent Note](.agents/notes/implemented/architecture/2026-08-14-no-xcode-project.md)).
 
 ```bash
 # Fast, side-effect-free native contract check: compiles every production Swift source + RPC-encoding fixtures.

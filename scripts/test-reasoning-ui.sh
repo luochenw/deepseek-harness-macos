@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
-VIEW="$ROOT/macos/DSHApp/ConversationView.swift"
-STREAMING="$ROOT/macos/DSHApp/StreamingAssistantText.swift"
-COMPOSER="$ROOT/macos/DSHApp/ComposerView.swift"
+VIEW="$ROOT/macos/DSHApp/Transcript/ConversationView.swift"
+STREAMING="$ROOT/macos/DSHApp/Transcript/StreamingAssistantText.swift"
+COMPOSER="$ROOT/macos/DSHApp/Composer/ComposerView.swift"
 FIXTURE="$ROOT/scripts/fixtures/reasoning-snapshot-check.swift"
 BUILD="$(mktemp -d)"
 SNAPSHOT_DIR="${REASONING_SNAPSHOT_DIR:-${TMPDIR:-/tmp}/dsh-reasoning-snapshots}"
@@ -56,7 +56,7 @@ grep -q 'DSHConversationLayout.horizontalInset' "$VIEW" \
 rm -rf "$SNAPSHOT_DIR"
 swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
   -o "$BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
+  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
 swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$BUILD" -L "$BUILD" -lDSHAppLib \
   -o "$BUILD/reasoning-snapshot-check" \
   "$FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit

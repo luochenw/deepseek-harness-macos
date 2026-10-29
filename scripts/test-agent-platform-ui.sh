@@ -3,13 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
-VIEW="$ROOT/macos/DSHApp/AgentPlatformView.swift"
-WIRE="$ROOT/macos/DSHApp/DSHAgentPlatform.swift"
-COMPOSER="$ROOT/macos/DSHApp/ComposerView.swift"
-CONVERSATION="$ROOT/macos/DSHApp/ConversationView.swift"
-SIDEBAR="$ROOT/macos/DSHApp/SidebarView.swift"
-SIDEBAR_GROUP="$ROOT/macos/DSHApp/SidebarSessionGroupView.swift"
-POLICY="$ROOT/macos/DSHApp/DSHAgentPlatformPolicy.swift"
+VIEW="$ROOT/macos/DSHApp/AgentPlatform/AgentPlatformView.swift"
+WIRE="$ROOT/macos/DSHApp/AgentPlatform/DSHAgentPlatform.swift"
+COMPOSER="$ROOT/macos/DSHApp/Composer/ComposerView.swift"
+CONVERSATION="$ROOT/macos/DSHApp/Transcript/ConversationView.swift"
+SIDEBAR="$ROOT/macos/DSHApp/Sidebar/SidebarView.swift"
+SIDEBAR_GROUP="$ROOT/macos/DSHApp/Sidebar/SidebarSessionGroupView.swift"
+POLICY="$ROOT/macos/DSHApp/AgentPlatform/DSHAgentPlatformPolicy.swift"
 POLICY_FIXTURE="$ROOT/scripts/fixtures/agent-platform-policy-check.swift"
 SNAPSHOT_FIXTURE="$ROOT/scripts/fixtures/agent-platform-snapshot-check.swift"
 POLICY_BIN="${TMPDIR:-/tmp}/dsh-agent-platform-policy-$$"
@@ -28,7 +28,7 @@ grep -q 'SidebarSessionGroupView(' "$SIDEBAR" || { echo "agent-platform-ui: side
 grep -q 'defaultVisibleCount = 5' "$SIDEBAR_GROUP" || { echo "agent-platform-ui: sidebar projects do not default to five sessions" >&2; exit 1; }
 grep -q 'harness.submitComposer' "$COMPOSER" || { echo "agent-platform-ui: composer send path is not connected" >&2; exit 1; }
 grep -Eq 'harness\.toolDetail\((activity|selected)\)' "$CONVERSATION" || { echo "agent-platform-ui: transcript tool details are not reachable from the right panel" >&2; exit 1; }
-grep -q 'agent-platform/batches' "$ROOT/macos/DSHApp/DSHProjections.swift" || { echo "agent-platform-ui: batch projection is missing" >&2; exit 1; }
+grep -q 'agent-platform/batches' "$ROOT/macos/DSHApp/Host/DSHProjections.swift" || { echo "agent-platform-ui: batch projection is missing" >&2; exit 1; }
 grep -q 'ns: "agentProfiles", method: "list"' "$WIRE" || { echo "agent-platform-ui: profile gateway call is missing" >&2; exit 1; }
 grep -q 'ns: "agentProfiles", method: "runtimeStatus"' "$WIRE" || { echo "agent-platform-ui: runtime status gateway call is missing" >&2; exit 1; }
 grep -q 'profileSnapshot' "$WIRE" || { echo "agent-platform-ui: historical profile snapshot is missing" >&2; exit 1; }
@@ -38,7 +38,7 @@ swiftc -target "$SWIFT_TARGET" "$POLICY" "$POLICY_FIXTURE" -o "$POLICY_BIN"
 rm -rf "$SNAPSHOT_DIR"
 swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
   -o "$SNAPSHOT_BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
+  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
 swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$SNAPSHOT_BUILD" -L "$SNAPSHOT_BUILD" -lDSHAppLib \
   -o "$SNAPSHOT_BUILD/agent-platform-snapshot-check" \
   "$SNAPSHOT_FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit

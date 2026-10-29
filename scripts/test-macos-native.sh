@@ -16,20 +16,23 @@ Usage: ./scripts/test-macos-native.sh [--smoke [APP_PATH] | --unit]
 Without arguments, typechecks all production Swift sources and checks that the
 native Settings surface stays scrollable, uses visible field chrome, and does
 not restore the legacy Relay-only model entry. This includes the compile-time
-fixtures in macos/DSHApp/NativeContractCheck.swift, which exercise native RPC
+fixtures in macos/DSHApp/App/NativeContractCheck.swift, which exercise native RPC
 envelope, prompt, settings-patch, queue, and attachment wire types. It also
 runs Agent-platform, workbench, permission/composer, and long-conversation
 layout snapshots plus a loopback WKWebView smoke, and enforces the main.swift
 freeze (see CLAUDE.md/AGENTS.md): main.swift may only shrink, never grow past
-its recorded baseline.
+its recorded baseline. It also enforces the feature-directory layout: no Swift
+sources directly under macos/DSHApp/, and an AGENTS.md (<= 60 lines) plus a
+CLAUDE.md in every domain directory that holds sources.
 
 --smoke [APP_PATH] additionally starts the packaged DSH Host and verifies
 token authentication, session/workspace/control streams, settings writes and
 Agent Profile CRUD. Build the app first, or pass its path.
 
---unit additionally builds macos/DSHApp as a library (-enable-testing) and
-runs macos/DSHTests/*.swift against it via @testable import — no Xcode/
-XCTest, matching the project's no-project-file build philosophy.
+--unit additionally builds the macos/DSHApp domain directories as a library
+(-enable-testing) and runs macos/DSHTests/*.swift against it via @testable
+import — no Xcode/XCTest, matching the project's no-project-file build
+philosophy.
 EOF
 }
 
@@ -55,7 +58,7 @@ command -v plutil >/dev/null || { echo "plutil is required (macOS only)." >&2; e
 # top-level Views go in DSH<Feature>.swift extensions / <Feature>View.swift
 # instead (see CLAUDE.md "质量规范" / AGENTS.md). This gate is what makes that
 # a rule instead of a suggestion — it only ever ratchets down.
-MAIN_SWIFT="$ROOT/macos/DSHApp/main.swift"
+MAIN_SWIFT="$ROOT/macos/DSHApp/App/main.swift"
 MAIN_SWIFT_LINE_LIMIT=489
 [[ -f "$MAIN_SWIFT" ]] || { echo "Expected main.swift at $MAIN_SWIFT — did it move or get removed (e.g. finished the Phase 2 split)? Update MAIN_SWIFT and MAIN_SWIFT_LINE_LIMIT here, and the freeze rule in AGENTS.md/CLAUDE.md, to match." >&2; exit 1; }
 # awk, not `wc -l`: wc -l counts newline bytes, so a final line with no
@@ -67,6 +70,43 @@ if (( main_swift_lines > MAIN_SWIFT_LINE_LIMIT )); then
   exit 1
 fi
 echo "main.swift size check: OK ($main_swift_lines/$MAIN_SWIFT_LINE_LIMIT lines)"
+
+# Feature-directory layout (see the feature-directories Agent Note): sources
+# live one level down under macos/DSHApp/<Domain>/, and every domain directory
+# carries the rules an agent reads on its way to the file. The build glob is
+# exactly one level deep, so a root-level .swift would be silently left out of
+# the app — this gate is what turns that into a failure.
+DSHAPP_ROOT="$ROOT/macos/DSHApp"
+AGENTS_MD_LINE_LIMIT=60
+layout_issues=0
+for stray in "$DSHAPP_ROOT"/*.swift; do
+  [[ -e "$stray" ]] || continue
+  echo "  ${stray#"$ROOT"/}: Swift sources belong in a domain subdirectory" >&2
+  layout_issues=$((layout_issues + 1))
+done
+for domain_dir in "$DSHAPP_ROOT"/*/; do
+  domain_swift=("$domain_dir"*.swift)
+  [[ -e "${domain_swift[0]}" ]] || continue
+  domain="$(basename "$domain_dir")"
+  for rule_file in AGENTS.md CLAUDE.md; do
+    [[ -f "$domain_dir$rule_file" ]] || {
+      echo "  macos/DSHApp/$domain/$rule_file is missing" >&2
+      layout_issues=$((layout_issues + 1))
+    }
+  done
+  if [[ -f "$domain_dir/AGENTS.md" ]]; then
+    agents_lines="$(awk 'END { print NR }' "$domain_dir/AGENTS.md")"
+    if (( agents_lines > AGENTS_MD_LINE_LIMIT )); then
+      echo "  macos/DSHApp/$domain/AGENTS.md: $agents_lines lines, over the $AGENTS_MD_LINE_LIMIT-line limit" >&2
+      layout_issues=$((layout_issues + 1))
+    fi
+  fi
+done
+if (( layout_issues > 0 )); then
+  echo "layout gates: $layout_issues check(s) failed (see above)" >&2
+  exit 1
+fi
+echo "layout gates: OK (no root-level sources; every domain keeps AGENTS.md + CLAUDE.md)"
 
 # AGENTS.md "Rules for code changes" gates: sanitized home paths only, no new
 # `print(` in production sources, and no parallel `Foo2` types. The account is
@@ -98,10 +138,10 @@ check_home_paths() {
 
 check_prints() {
   local count
-  count="$(grep -ho 'print(' "$ROOT"/macos/DSHApp/*.swift 2>/dev/null | wc -l | tr -d ' ')"
+  count="$(grep -ho 'print(' "$ROOT"/macos/DSHApp/*/*.swift 2>/dev/null | wc -l | tr -d ' ')"
   (( count > PRINT_BASELINE )) || return 0
-  echo "  macos/DSHApp/*.swift: $count print( call(s), baseline $PRINT_BASELINE"
-  grep -Hn 'print(' "$ROOT"/macos/DSHApp/*.swift | sed "s|$ROOT/|  |"
+  echo "  macos/DSHApp/*/*.swift: $count print( call(s), baseline $PRINT_BASELINE"
+  grep -Hn 'print(' "$ROOT"/macos/DSHApp/*/*.swift | sed "s|$ROOT/|  |"
   return 1
 }
 
@@ -126,7 +166,7 @@ echo "style gates: OK (0 issues)"
 
 # The production build compiles this exact glob; keeping the command here avoids
 # a second source list or a synthetic test project that could drift from builds.
-swiftc -target "$SWIFT_TARGET" -typecheck -parse-as-library "$ROOT"/macos/DSHApp/*.swift \
+swiftc -target "$SWIFT_TARGET" -typecheck -parse-as-library "$ROOT"/macos/DSHApp/*/*.swift \
   -framework AppKit -framework SwiftUI -framework WebKit
 plutil -lint "$ROOT/macos/DSHApp/Info.plist" >/dev/null
 "$ROOT/scripts/test-design-system.sh"
@@ -173,7 +213,7 @@ if [[ "$MODE" == "unit" ]]; then
   # are `let false` there and nothing can turn measurement on in production.
   swiftc -target "$SWIFT_TARGET" -parse-as-library -D DEBUG -enable-testing -emit-library -emit-module -module-name DSHAppLib \
     -o "$UNIT_DIR/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-    "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
+    "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
   swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$UNIT_DIR" -L "$UNIT_DIR" -lDSHAppLib \
     -o "$UNIT_DIR/dsh-unit-tests" \
     "$ROOT"/macos/DSHTests/*.swift -framework AppKit -framework SwiftUI -framework WebKit

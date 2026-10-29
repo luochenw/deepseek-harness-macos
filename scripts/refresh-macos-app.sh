@@ -56,7 +56,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Compiling native executable for $SWIFT_TARGET..."
-swiftc -target "$SWIFT_TARGET" -parse-as-library "$ROOT"/macos/DSHApp/*.swift \
+swiftc -target "$SWIFT_TARGET" -parse-as-library "$ROOT"/macos/DSHApp/*/*.swift \
   -o "$WORK/DSH" -framework AppKit -framework SwiftUI -framework WebKit
 
 APP_MINOS="$(xcrun vtool -show-build "$WORK/DSH" | awk '/minos / { print $2; exit }')"

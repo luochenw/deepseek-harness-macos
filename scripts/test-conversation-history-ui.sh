@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
-PRESENTATION="$ROOT/macos/DSHApp/DSHConversationPresentation.swift"
-VIEW="$ROOT/macos/DSHApp/ConversationView.swift"
-HISTORY="$ROOT/macos/DSHApp/DSHHistory.swift"
+PRESENTATION="$ROOT/macos/DSHApp/Transcript/DSHConversationPresentation.swift"
+VIEW="$ROOT/macos/DSHApp/Transcript/ConversationView.swift"
+HISTORY="$ROOT/macos/DSHApp/Host/DSHHistory.swift"
 FIXTURE="$ROOT/scripts/fixtures/conversation-history-snapshot-check.swift"
 BUILD="$(mktemp -d)"
 SNAPSHOT_DIR="${CONVERSATION_HISTORY_SNAPSHOT_DIR:-${TMPDIR:-/tmp}/dsh-conversation-history-snapshots}"
@@ -28,8 +28,8 @@ grep -q 'loadAllOlderHistory' "$HISTORY" || {
   exit 1
 }
 grep -q 'DSHHistoryCachePolicy' "$HISTORY" \
-  && grep -q 'preservingCachedHistory' "$ROOT/macos/DSHApp/DSHHostSessionFollow.swift" \
-  && grep -q 'retainingVisibleHistory' "$ROOT/macos/DSHApp/DSHHostSessionFollow.swift" \
+  && grep -q 'preservingCachedHistory' "$ROOT/macos/DSHApp/Host/DSHHostSessionFollow.swift" \
+  && grep -q 'retainingVisibleHistory' "$ROOT/macos/DSHApp/Host/DSHHostSessionFollow.swift" \
   && grep -q 'replaceVisibleOnCompletion' "$HISTORY" || {
   echo "conversation-history-ui: unchanged complete sessions must reuse cached history" >&2
   exit 1
@@ -48,17 +48,17 @@ grep -q 'DSHConversationFoldRegistry' "$VIEW" || {
 # needs more than one trigger, and the bridge must validate the scroll view it
 # picks instead of trusting source order.
 grep -q 'dshInitialBottomScrollAnchor()' "$VIEW" \
-  && grep -q 'defaultScrollAnchor(.bottom, for: .initialOffset)' "$ROOT/macos/DSHApp/DSHConversationScrollStability.swift" \
+  && grep -q 'defaultScrollAnchor(.bottom, for: .initialOffset)' "$ROOT/macos/DSHApp/Transcript/DSHConversationScrollStability.swift" \
   && grep -q 'DSHConversationScrollPolicy.shouldFollowTail' "$VIEW" \
   && grep -q 'beginPrependRestore' "$VIEW" \
   && grep -q 'measurements.takePendingRestore()' "$VIEW" \
   && grep -q 'measurements.cancelRestore()' "$VIEW" \
   && grep -q 'capturePrependAnchorIfReading' "$VIEW" \
   && grep -q 'scrollViewBox.clampOnEntry()' "$VIEW" \
-  && grep -q 'dshLocateEnclosingScrollView(from: self' "$ROOT/macos/DSHApp/DSHConversationScrollStability.swift" \
-  && grep -q 'viewDidMoveToWindow' "$ROOT/macos/DSHApp/DSHConversationScrollStability.swift" \
-  && grep -q 'documentView is NSTextView' "$ROOT/macos/DSHApp/DSHConversationScrollStability.swift" \
-  && grep -q 'didClampEntry' "$ROOT/macos/DSHApp/DSHConversationScrollStability.swift" \
+  && grep -q 'dshLocateEnclosingScrollView(from: self' "$ROOT/macos/DSHApp/Transcript/DSHConversationScrollStability.swift" \
+  && grep -q 'viewDidMoveToWindow' "$ROOT/macos/DSHApp/Transcript/DSHConversationScrollStability.swift" \
+  && grep -q 'documentView is NSTextView' "$ROOT/macos/DSHApp/Transcript/DSHConversationScrollStability.swift" \
+  && grep -q 'didClampEntry' "$ROOT/macos/DSHApp/Transcript/DSHConversationScrollStability.swift" \
   && grep -q 'id(harness.displayedConversationContextKey' "$VIEW" \
   && grep -q 'scrollRequestGeneration' "$VIEW" \
   && grep -q 'shouldFollowTail(comparedTo:' "$VIEW" \
@@ -85,7 +85,7 @@ grep -q 'ScrollView(.vertical, showsIndicators: false)' "$VIEW" || {
 rm -rf "$SNAPSHOT_DIR"
 swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
   -o "$BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
+  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
 swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$BUILD" -L "$BUILD" -lDSHAppLib \
   -o "$BUILD/conversation-history-snapshot-check" \
   "$FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit

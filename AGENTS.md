@@ -9,20 +9,28 @@ A SwiftUI/AppKit **native** macOS client for [DSH](https://github.com/deepseek-a
 ## Repository layout
 
 ```
-macos/DSHApp/       All Swift sources — flat directory, no Xcode project (see below)
-  main.swift           @main App entry and HarnessController
-                        (the one ObservableObject)
-  DSHHostProtocol.swift   RPC envelope types, DSHHostClient actor, DSHHostRuntime
-                          (spawns/reads the bundled `dsh web` process)
-  DSHHostClientExtensions.swift   Additional DSHHostClient RPC methods (subagents,
-                                  presets, goal, queue, respond) split out of the
-                                  core file above
-  DSH<Feature>.swift   One file per feature domain, each an `extension HarnessController`
-                        plus that domain's wire model structs (see Naming below)
-  <Feature>View.swift / Native<Feature>*.swift   SwiftUI views for a feature
-  NativeContractCheck.swift   Compile-time fixture exercising RPC envelope,
-                              prompt, settings-patch, queue and attachment wire types
-  Info.plist
+macos/DSHApp/       Swift sources, one directory per feature domain — no Xcode
+                    project (see below). Only Info.plist and AppIcon.icns sit at
+                    this level; a *.swift here fails the layout gate.
+  App/                @main entry, the one HarnessController, ContentView,
+                      lifecycle, global Esc policy, NativeContractCheck (fixture)
+  Host/               RPC envelope + DSHHostClient, event sockets, Host runtime
+                      and supervision, history/paging, external-agent bridge
+  Transcript/         Message rendering: rows, scroll anchoring, tool cards,
+                      Markdown text, attachment preview
+  Composer/           Draft input, attachments, queue, submit policy, slash panel
+  Sessions/           Session CRUD/fork/archive, permissions, dashboard, sheets
+  Sidebar/            Project-grouped session list and Host status line
+  Workspace/          Workspace prefs/cwd resolution, git ops, workspace chips
+  Settings/           Settings window, revisioned writes, providers, credentials
+  Voice/              Speech engine, dictation routing, floating bubble
+  Workbench/          Per-session tab dock, browser and document panes
+  AgentPlatform/      Agent Profile/Batch/Run models, policy, execution UI
+  Subagents/          Subagent catalogue, child projection, tree traversal
+  Design/             DSHTheme tokens and brand artwork constants
+  System/             Dock badge, notifications, AppKit exception diagnostics
+  AGENTS.md / CLAUDE.md (per domain)   That domain's rules and invariants;
+                      Claude reads them through the one-line CLAUDE.md
 scripts/             build-macos-app.sh, test-macos-native.sh, verify-native-host-api.sh,
                      ds-agent (send a task to the running App's DSH Host, or headless)
 docs/driving-dsh-from-agents.md   How another model delegates work to the local
@@ -31,9 +39,17 @@ docs/driving-dsh-from-agents.md   How another model delegates work to the local
 dist/                Build output (git-ignored, produced locally)
 ```
 
+Each domain directory carries its own `AGENTS.md` (scope, key files, invariants
+with sources, checks to run, pitfalls) and a one-line `CLAUDE.md` containing
+`@AGENTS.md`, so an agent editing a file there reads the rules for just that
+domain. `./scripts/test-macos-native.sh` enforces the shape: no `.swift` at the
+`macos/DSHApp/` root, and every directory holding sources has both files with
+`AGENTS.md` at 60 lines or less. Add a new feature domain by creating the
+directory plus those two files — the build glob picks the sources up.
+
 ## Deliberately no Xcode / SwiftPM project
 
-Production builds compile `macos/DSHApp/*.swift` directly with `swiftc`
+Production builds compile `macos/DSHApp/*/*.swift` directly with `swiftc`
 (`scripts/build-macos-app.sh`), and `scripts/test-macos-native.sh` type-checks
 the exact same glob. There is intentionally no second target list (`.xcodeproj`
 or `Package.swift`) to keep in sync — see

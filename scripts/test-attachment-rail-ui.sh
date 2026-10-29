@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
-ATTACHMENTS="$ROOT/macos/DSHApp/DSHAttachments.swift"
-PREVIEW="$ROOT/macos/DSHApp/NativeAttachmentPreview.swift"
-CONVERSATION="$ROOT/macos/DSHApp/ConversationView.swift"
-EVENTS="$ROOT/macos/DSHApp/DSHEventSocket.swift"
+ATTACHMENTS="$ROOT/macos/DSHApp/Composer/DSHAttachments.swift"
+PREVIEW="$ROOT/macos/DSHApp/Transcript/NativeAttachmentPreview.swift"
+CONVERSATION="$ROOT/macos/DSHApp/Transcript/ConversationView.swift"
+EVENTS="$ROOT/macos/DSHApp/Host/DSHEventSocket.swift"
 SNAPSHOT_FIXTURE="$ROOT/scripts/fixtures/attachment-rail-snapshot-check.swift"
 SNAPSHOT_BUILD="$(mktemp -d)"
 SNAPSHOT_DIR="${ATTACHMENT_RAIL_SNAPSHOT_DIR:-${TMPDIR:-/tmp}/dsh-attachment-rail-snapshots}"
@@ -44,7 +44,7 @@ grep -q 'retryImage' "$PREVIEW" || {
 rm -rf "$SNAPSHOT_DIR"
 swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
   -o "$SNAPSHOT_BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
+  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
 swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$SNAPSHOT_BUILD" -L "$SNAPSHOT_BUILD" -lDSHAppLib \
   -o "$SNAPSHOT_BUILD/attachment-rail-snapshot-check" \
   "$SNAPSHOT_FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit

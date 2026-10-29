@@ -2,14 +2,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VIEW="$ROOT/macos/DSHApp/DSHSettingsView.swift"
-MAIN="$ROOT/macos/DSHApp/main.swift"
-THEME="$ROOT/macos/DSHApp/DSHTheme.swift"
-EDITOR="$ROOT/macos/DSHApp/DSHSettingsEditor.swift"
-AUTHORING="$ROOT/macos/DSHApp/DSHProviderAuthoring.swift"
-ACTIONS="$ROOT/macos/DSHApp/DSHProviderActions.swift"
-USAGE="$ROOT/macos/DSHApp/ModelUsageSettingsView.swift"
-USAGE_SUPPORT="$ROOT/macos/DSHApp/DSHModelUsage.swift"
+VIEW="$ROOT/macos/DSHApp/Settings/DSHSettingsView.swift"
+MAIN="$ROOT/macos/DSHApp/App/main.swift"
+THEME="$ROOT/macos/DSHApp/Design/DSHTheme.swift"
+EDITOR="$ROOT/macos/DSHApp/Settings/DSHSettingsEditor.swift"
+AUTHORING="$ROOT/macos/DSHApp/Settings/DSHProviderAuthoring.swift"
+ACTIONS="$ROOT/macos/DSHApp/Settings/DSHProviderActions.swift"
+USAGE="$ROOT/macos/DSHApp/Settings/ModelUsageSettingsView.swift"
+USAGE_SUPPORT="$ROOT/macos/DSHApp/Settings/DSHModelUsage.swift"
 
 # grep, not rg: ripgrep is not installed on every dev machine (here `rg` is
 # only an interactive-shell alias), and a gate that can't run reads as a

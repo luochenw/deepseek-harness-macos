@@ -48,7 +48,7 @@ EOF
 
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
 xcrun swiftc -target "$SWIFT_TARGET" -parse-as-library \
-  "$ROOT/macos/DSHApp/DSHHostGateway.swift" \
+  "$ROOT/macos/DSHApp/Host/DSHHostGateway.swift" \
   "$ROOT/scripts/fixtures/host-handshake-check.swift" \
   -o "$HOME_DIR/host-handshake-check"
 "$HOME_DIR/host-handshake-check" "$LAUNCH_URL"

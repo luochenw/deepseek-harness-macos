@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/macos/DSHApp"
-THEME="$APP/DSHTheme.swift"
-SIDEBAR="$APP/SidebarView.swift"
+THEME="$APP/Design/DSHTheme.swift"
+SIDEBAR="$APP/Sidebar/SidebarView.swift"
 
 grep -q 'enum DSHType' "$THEME" || {
   echo "design-system: shared typography roles are missing" >&2
@@ -15,7 +15,7 @@ grep -q 'struct DSHIconButtonStyle' "$THEME" || {
   exit 1
 }
 grep -q 'enum DSHBrandPalette' "$THEME" \
-  && grep -q 'Color(red: 0.22, green: 0.82, blue: 0.78)' "$APP/NativeSeaArt.swift" || {
+  && grep -q 'Color(red: 0.22, green: 0.82, blue: 0.78)' "$APP/Design/NativeSeaArt.swift" || {
   echo "design-system: the original logo artwork must remain unchanged" >&2
   exit 1
 }

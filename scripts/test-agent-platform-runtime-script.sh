@@ -151,7 +151,7 @@ grep -Fq 'DSH_RUNTIME_VERIFY_LATEST=1' "$CI" || {
   exit 1
 }
 
-grep -Fq '"--no-open"' "$ROOT/macos/DSHApp/DSHHostProtocol.swift" || {
+grep -Fq '"--no-open"' "$ROOT/macos/DSHApp/Host/DSHHostProtocol.swift" || {
   echo "agent-platform-runtime-script: native Host launch must suppress the bundled Web UI" >&2
   exit 1
 }

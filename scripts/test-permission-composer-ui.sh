@@ -3,17 +3,17 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
-PERMISSIONS="$ROOT/macos/DSHApp/DSHPermissions.swift"
-SUBMISSION="$ROOT/macos/DSHApp/DSHComposerSubmission.swift"
-COMPOSER="$ROOT/macos/DSHApp/ComposerView.swift"
-SETTINGS="$ROOT/macos/DSHApp/DSHSettingsView.swift"
-EVENTS="$ROOT/macos/DSHApp/DSHEventSocket.swift"
+PERMISSIONS="$ROOT/macos/DSHApp/Sessions/DSHPermissions.swift"
+SUBMISSION="$ROOT/macos/DSHApp/Composer/DSHComposerSubmission.swift"
+COMPOSER="$ROOT/macos/DSHApp/Composer/ComposerView.swift"
+SETTINGS="$ROOT/macos/DSHApp/Settings/DSHSettingsView.swift"
+EVENTS="$ROOT/macos/DSHApp/Host/DSHEventSocket.swift"
 FIXTURE="$ROOT/scripts/fixtures/permission-composer-snapshot-check.swift"
 BUILD="$(mktemp -d)"
 SNAPSHOT_DIR="${PERMISSION_COMPOSER_SNAPSHOT_DIR:-${TMPDIR:-/tmp}/dsh-permission-composer-snapshots}"
 trap 'rm -rf "$BUILD"' EXIT
 
-grep -q 'struct PermissionMenu' "$ROOT/macos/DSHApp/PermissionViews.swift" || {
+grep -q 'struct PermissionMenu' "$ROOT/macos/DSHApp/Sessions/PermissionViews.swift" || {
   echo "permission-composer-ui: missing native permission menu" >&2
   exit 1
 }
@@ -88,7 +88,7 @@ grep -q 'preferredBusyMode' "$SUBMISSION" || {
   echo "permission-composer-ui: busy submission policy is missing" >&2
   exit 1
 }
-grep -q 'submitSubagentComposerDraft' "$ROOT/macos/DSHApp/DSHQueue.swift" || {
+grep -q 'submitSubagentComposerDraft' "$ROOT/macos/DSHApp/Composer/DSHQueue.swift" || {
   echo "permission-composer-ui: continuable subagent still bypasses the safe busy submission path" >&2
   exit 1
 }
@@ -96,11 +96,11 @@ grep -q 'promptSubagent' "$SUBMISSION" || {
   echo "permission-composer-ui: shared subagent submission does not call the Host" >&2
   exit 1
 }
-grep -q 'executeCommand' "$ROOT/macos/DSHApp/DSHQueue.swift" || {
+grep -q 'executeCommand' "$ROOT/macos/DSHApp/Composer/DSHQueue.swift" || {
   echo "permission-composer-ui: running slash commands bypass the command plane" >&2
   exit 1
 }
-grep -q 'if displayedIsRunning { submitRunningDraft(mode: busyEnterMode) }' "$ROOT/macos/DSHApp/NativeCommandPalette.swift" || {
+grep -q 'if displayedIsRunning { submitRunningDraft(mode: busyEnterMode) }' "$ROOT/macos/DSHApp/Composer/NativeCommandPalette.swift" || {
   echo "permission-composer-ui: running command-palette picks bypass busy command submission" >&2
   exit 1
 }
@@ -108,7 +108,7 @@ grep -q 'danger-full-access' "$PERMISSIONS" || {
   echo "permission-composer-ui: full-access risk path is missing" >&2
   exit 1
 }
-grep -q 'confirmationDialog' "$ROOT/macos/DSHApp/PermissionViews.swift" || {
+grep -q 'confirmationDialog' "$ROOT/macos/DSHApp/Sessions/PermissionViews.swift" || {
   echo "permission-composer-ui: full-access confirmation is missing" >&2
   exit 1
 }
@@ -116,7 +116,7 @@ grep -q 'confirmationDialog' "$ROOT/macos/DSHApp/PermissionViews.swift" || {
 rm -rf "$SNAPSHOT_DIR"
 swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
   -o "$BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
+  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
 swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$BUILD" -L "$BUILD" -lDSHAppLib \
   -o "$BUILD/permission-composer-snapshot-check" \
   "$FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit

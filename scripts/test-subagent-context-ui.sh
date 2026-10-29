@@ -2,14 +2,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DASHBOARD="$ROOT/macos/DSHApp/NativeDashboard.swift"
-CONVERSATION="$ROOT/macos/DSHApp/ConversationView.swift"
-GOAL_VIEW="$ROOT/macos/DSHApp/SkillsGoalView.swift"
-COMPOSER="$ROOT/macos/DSHApp/ComposerView.swift"
-GOAL_ACTIONS="$ROOT/macos/DSHApp/DSHGoalActions.swift"
-QUEUE="$ROOT/macos/DSHApp/DSHQueue.swift"
-QUEUE_DOCK="$ROOT/macos/DSHApp/QueueDockView.swift"
-PROJECTIONS="$ROOT/macos/DSHApp/DSHSubagentProjection.swift"
+DASHBOARD="$ROOT/macos/DSHApp/Sessions/NativeDashboard.swift"
+CONVERSATION="$ROOT/macos/DSHApp/Transcript/ConversationView.swift"
+GOAL_VIEW="$ROOT/macos/DSHApp/Sessions/SkillsGoalView.swift"
+COMPOSER="$ROOT/macos/DSHApp/Composer/ComposerView.swift"
+GOAL_ACTIONS="$ROOT/macos/DSHApp/Sessions/DSHGoalActions.swift"
+QUEUE="$ROOT/macos/DSHApp/Composer/DSHQueue.swift"
+QUEUE_DOCK="$ROOT/macos/DSHApp/Composer/QueueDockView.swift"
+PROJECTIONS="$ROOT/macos/DSHApp/Subagents/DSHSubagentProjection.swift"
 
 grep -q 'harness.displayedTodos' "$DASHBOARD" || {
   echo "subagent-context-ui: dashboard Todo card is still root-scoped" >&2

@@ -1,7 +1,7 @@
 // Renders macos/DSHApp/AppIcon.icns from code so the icon stays editable
 // alongside the jelly-sea theme.
 //
-// This is a hand-copied mirror of macos/DSHApp/NativeSeaArt.swift: this script
+// This is a hand-copied mirror of macos/DSHApp/Design/NativeSeaArt.swift: this script
 // is not part of the app target and draws with AppKit, so it cannot import
 // SeaArt / WhaleBody. Every constant below has a twin over there — change one,
 // change both, or the Dock icon drifts away from the in-app artwork.

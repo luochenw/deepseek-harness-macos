@@ -29,7 +29,7 @@
 
 ## 写代码前先想清楚
 
-1. 读清楚相关 Swift 源码和 Host RPC 协议（`macos/DSHApp/DSHHostProtocol.swift` 定义了 envelope + client；具体某个 RPC method 的语义去 `work/deepseek-harness-reference`——本机的上游 monorepo 只读参考副本——的 `packages/` 里找，或 `docs/`）。范围大就起 `Explore` 子 agent 并行探。
+1. 读清楚相关 Swift 源码和 Host RPC 协议（`macos/DSHApp/Host/DSHHostProtocol.swift` 定义了 envelope + client；具体某个 RPC method 的语义去 `work/deepseek-harness-reference`——本机的上游 monorepo 只读参考副本——的 `packages/` 里找，或 `docs/`）。范围大就起 `Explore` 子 agent 并行探。
 2. 复杂功能先写 Agent Note（见上）想清楚目标、约束、验收标准。
 3. 对照 [macos/WEB_PARITY.md](macos/WEB_PARITY.md) 确认这个改动完成后要不要更新那张表。
 
@@ -37,30 +37,33 @@
 
 ## 多 Agent 并行
 
-这个代码库是**按功能域拆文件**的（见 AGENTS.md），天然适合并行：
+这个代码库是**按功能域拆目录**的：`macos/DSHApp/<Domain>/`，共 14 个域，目录树见 AGENTS.md。天然适合并行：
 
 - **只读 / 探查**：读 RPC 协议、读上游 `work/deepseek-harness-reference` 参考副本、方案调研——大胆并行用 `Explore` / `general-purpose` 子 agent，互不冲突。
-- **写代码并行**：不同功能域（比如"补 diff 渲染卡片"和"补 workflow 详情钻取"）分属不同的 `DSH<Feature>.swift` / `Native<Feature>View.swift` 文件 → 可以并行改，互不覆盖。**`main.swift` 不再是"例外可以碰"，而是冻结**——新状态/新逻辑/新 View 一律不进这个文件，规则见下面「质量规范」。这同时也解决了并行冲突：大家都不往同一个文件里写，天然没有冲突面。
+- **写代码并行**：不同功能域（比如"补 diff 渲染卡片"和"补 workflow 详情钻取"）分属不同的域目录 → 可以并行改，互不覆盖。同一时间每个域只派一个写代码的任务。**`main.swift` 不再是"例外可以碰"，而是冻结**——新状态/新逻辑/新 View 一律不进这个文件，规则见下面「质量规范」。这同时也解决了并行冲突：大家都不往同一个文件里写，天然没有冲突面。
 - 一律直接在当前分支上改（这是个人维护的开源项目，不强制 worktree/PR 流程），但落笔前 `git status` 确认没有别的改动会被覆盖。
 
 ## 质量规范
 
-- **main.swift 冻结**：`main.swift` 只保留 App 入口、`HarnessController` 类声明与核心生命周期——新的 `@Published` 状态、controller 方法、顶层 View **一律不再**写进这个文件，哪怕是"核心流程"。新状态/新逻辑写成 `DSH<Feature>.swift` 里的 `extension HarnessController`（没有对应文件就新建一个）；新界面写成独立的 `<Feature>View.swift` / `Native<Feature>View.swift`。这条规则配了 gate，不是口头约定：`./scripts/test-macos-native.sh` 会检查 `main.swift` 行数不超过基线，超了直接报错退出。
+- **main.swift 冻结**：`main.swift` 只保留 App 入口、`HarnessController` 类声明与核心生命周期——新的 `@Published` 状态、controller 方法、顶层 View **一律不再**写进这个文件，哪怕是"核心流程"。新状态/新逻辑写成所属域目录下 `DSH<Feature>.swift` 里的 `extension HarnessController`（没有对应文件就新建一个）；新界面写成同一目录下独立的 `<Feature>View.swift` / `Native<Feature>View.swift`。这条规则配了 gate，不是口头约定：`./scripts/test-macos-native.sh` 会检查 `main.swift` 行数不超过基线，超了直接报错退出。
 - `main.swift` 的历史债分批拆分已完成；工作区偏好恢复逻辑迁出后当前为 489 行，仍只保留 App 入口、`HarnessController` 类声明、状态与核心生命周期。进度与决策见 [Agent Note](.agents/notes/implemented/architecture/2026-08-18-quality-remediation-plan.md)。
 - 改行为的代码（不是纯文档/纯 UI 文案）优先带上能验证的手段——现阶段是契约 fixture（`NativeContractCheck.swift`）+ smoke（`--smoke`），单测基建落地后（见上面 Note 的 Phase 1）新逻辑改动要带对应单测。
 
-## CLAUDE.md 组织方式：不拆子目录
+## 规则文件组织方式：每个域目录一份
 
-新功能不要另开一份子目录 CLAUDE.md（比如 `macos/DSHApp/CLAUDE.md`）。原因：
+`macos/DSHApp/` 下每个域目录都有两份规则文件：
 
-- Claude Code 的子目录 CLAUDE.md 是**按文件所在目录懒加载**的（读到那个目录下的文件才加载），不是按文件名。这个仓库恰恰是"按功能域拆*文件*、不拆*目录*"（见上面「多 Agent 并行」）——`NativeDashboard.swift`、`NativeAttachmentPreview.swift`、`main.swift` 全在同一个 `macos/DSHApp/` 目录下，放一份目录级 CLAUDE.md 起不到"只在改这个功能时才加载"的效果，跟直接写进根 CLAUDE.md 没区别，纯增加维护成本。
-- 官方按目录拆分是给真正的 monorepo/多包仓库用的（`packages/api`、`packages/web` 各自有独立构建/测试栈），参考 [Set up Claude Code in a monorepo or large codebase](https://code.claude.com/docs/en/large-codebases)。这个项目是单一 Swift target，没有这种边界。
-- 这份文件目前 100 出头行，远低于官方建议的 200 行拆分阈值（[Write effective instructions](https://code.claude.com/docs/en/memory#write-effective-instructions)），没有"太长导致遵从率下降"的压力，不需要为了拆而拆。
+- `AGENTS.md`：这个域的规则，固定 5 节——负责什么、不负责什么，关键文件，不变量，改完必须跑的检查，踩过的坑。每条不变量和每个坑都要注明出处（Agent Note 或测试名）。
+- `CLAUDE.md`：只有一行 `@AGENTS.md`，Claude Code 和 DeepSeek（dsh）由此读到同一份内容。
 
-以后如果真要拆，按这个优先级：
+两边都按目录加载规则：读到或改到哪个目录下的文件，就加载那个目录的规则文件。所以规则放进域目录，改到哪个域就能读到哪个域的规则，不需要派任务的人每次手动指定。决策和被否决的方案（根文件加索引、`.claude/rules` 按 glob 匹配、做成 skills）见 [Agent Note](.agents/notes/implemented/architecture/2026-10-28-feature-directories.md)。
 
-1. **先考虑 `.claude/rules/*.md` + `paths:` frontmatter**——按 glob 匹配文件而非目录，更贴合这个项目"按文件名前缀分功能域"的组织方式（比如给 `Native*.swift` 单开一份规则）。
-2. **只有新增一个真正独立的子系统**（新 target、独立 CLI 工具、单独的 docs 站点，有自己的构建/测试流程）才值得为它开一份子目录 CLAUDE.md——这才对得上 monorepo 那套场景。
+维护规则：
+
+- 通用规则只写在根 `AGENTS.md` / `CLAUDE.md`，域文件不重复。
+- 改了某个域的不变量，或者踩了新坑并写进 Agent Note 后，同步更新这个域的 `AGENTS.md`。不变量没有出处就不写。
+- 新增一个域目录时，同时建 `AGENTS.md` 和 `CLAUDE.md`。`./scripts/test-macos-native.sh` 有三条卡口：`macos/DSHApp/` 根目录不能有 `.swift` 文件，每个含 `.swift` 的子目录都必须有这两份文件，`AGENTS.md` 不超过 60 行。
+- `macos/DSHTests/` 暂时保持平铺，测试文件靠前缀对应到域。
 
 ## 开发与收尾流程
 

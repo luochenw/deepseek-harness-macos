@@ -69,7 +69,7 @@ rm -rf "$APP.previous"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/Runtime" "$STAGE/Contents/Resources/Licenses"
-swiftc -target "$SWIFT_TARGET" -parse-as-library "$ROOT"/macos/DSHApp/*.swift \
+swiftc -target "$SWIFT_TARGET" -parse-as-library "$ROOT"/macos/DSHApp/*/*.swift \
   -o "$STAGE/Contents/MacOS/DSH" -framework AppKit -framework SwiftUI -framework WebKit
 APP_MINOS="$(xcrun vtool -show-build "$STAGE/Contents/MacOS/DSH" | awk '/minos / { print $2; exit }')"
 [[ "$APP_MINOS" == "$MINIMUM_MACOS_VERSION" ]] || {

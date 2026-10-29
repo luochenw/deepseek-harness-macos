@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
-VIEW="$ROOT/macos/DSHApp/NativeToolPresentationView.swift"
-CONVERSATION="$ROOT/macos/DSHApp/ConversationView.swift"
-SUPPORT="$ROOT/macos/DSHApp/DSHToolPresentationSupport.swift"
-THEME="$ROOT/macos/DSHApp/DSHTheme.swift"
+VIEW="$ROOT/macos/DSHApp/Transcript/NativeToolPresentationView.swift"
+CONVERSATION="$ROOT/macos/DSHApp/Transcript/ConversationView.swift"
+SUPPORT="$ROOT/macos/DSHApp/Transcript/DSHToolPresentationSupport.swift"
+THEME="$ROOT/macos/DSHApp/Design/DSHTheme.swift"
 SNAPSHOT_FIXTURE="$ROOT/scripts/fixtures/tool-presentation-snapshot-check.swift"
 SNAPSHOT_BUILD="$(mktemp -d)"
 SNAPSHOT_DIR="${TOOL_PRESENTATION_SNAPSHOT_DIR:-${TMPDIR:-/tmp}/dsh-tool-presentation-snapshots}"
@@ -138,7 +138,7 @@ grep -q 'struct DSHDisclosureWindow' "$SUPPORT" || {
 rm -rf "$SNAPSHOT_DIR"
 swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
   -o "$SNAPSHOT_BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*.swift -framework AppKit -framework SwiftUI -framework WebKit
+  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
 swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$SNAPSHOT_BUILD" -L "$SNAPSHOT_BUILD" -lDSHAppLib \
   -o "$SNAPSHOT_BUILD/tool-presentation-snapshot-check" \
   "$SNAPSHOT_FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit
