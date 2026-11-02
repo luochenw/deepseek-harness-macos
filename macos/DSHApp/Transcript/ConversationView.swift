@@ -1635,8 +1635,8 @@ struct WaveBand: Shape {
 }
 
 /// One frame of the miniature app icon (daylight lagoon, breaching whale) at
-/// time `t` — the shared artwork behind the animated running indicator and the
-/// static end-of-turn marker. Shapes and colors come from `SeaArt` /
+/// time `t` — the static end-of-turn marker; `DSHRunningWhaleIcon` animates the
+/// same scene while the turn runs. Shapes and colors come from `SeaArt` /
 /// `SeaWhaleScene`, the single source shared with the floating bubble and the
 /// icon generator; don't inline new constants here.
 /// Drawn at its native 26 pt then scaled to `size`, so nothing needs retuning
@@ -1662,10 +1662,8 @@ private struct WaveIconArt: View {
 /// placeholder bubble; see the composer-consolidation note).
 private struct WaitingWaveIndicator: View {
   var body: some View {
-    TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
-      WaveIconArt(t: context.date.timeIntervalSinceReferenceDate)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
+    DSHRunningWhaleIcon()
+      .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 

@@ -3,7 +3,8 @@ import SwiftUI
 /// 品牌图形的唯一来源：白昼浅湖 + 跃身鲸。
 ///
 /// 三处共用这份文件——悬浮圈（FloatingBubble.swift）、转录尾部的运行指示器
-/// （ConversationView.swift 的 WaveIconArt）、以及 App 图标。图标生成器
+/// （DSHRunningWhaleIcon.swift，以及 ConversationView.swift 的 WaveIconArt）、
+/// 以及 App 图标。图标生成器
 /// （scripts/generate-app-icon.swift）不在 app target 里、用的是 AppKit
 /// 绘制，没法 import 这里，所以它是**手抄一份**：改这里的常量时必须同步改
 /// 那边，否则 Dock 里的图标会和界面里的对不上。
@@ -40,6 +41,28 @@ enum SeaArt {
   static let whaleRestY: CGFloat = 7.5
   /// 跃身的纵向行程。
   static let whaleTravel: CGFloat = 13.0
+
+  // MARK: 三层浪 —— 海景和运行图标共用
+  /// 一层浪。`speed` 是相位速度（弧度/秒），`offset` 是初相。
+  struct Wave {
+    let baseY: CGFloat
+    let amplitude: CGFloat
+    let speed: Double
+    let offset: Double
+    let color: Color
+    let alpha: Double
+
+    func phase(at time: Double) -> CGFloat { CGFloat(time * speed + offset) }
+    /// 相位走满一圈的秒数。
+    var period: Double { 2 * .pi / speed }
+  }
+
+  static let farWave = Wave(
+    baseY: 0.60, amplitude: 0.075, speed: 1.6, offset: 0, color: waterFar, alpha: waterFarAlpha)
+  static let midWave = Wave(
+    baseY: 0.70, amplitude: 0.065, speed: 2.2, offset: 2.1, color: waterMid, alpha: waterMidAlpha)
+  static let nearWave = Wave(
+    baseY: 0.80, amplitude: 0.055, speed: 2.9, offset: 4.4, color: waterNear, alpha: waterNearAlpha)
 
   // MARK: 动画时序
   /// 一次跃身的周期。
@@ -251,18 +274,20 @@ struct SeaWhaleScene: View {
     let restY = SeaArt.whaleRestY * level
     ZStack {
       SeaArt.sky
-      WaveBand(baseY: 0.60 + sink, amplitude: 0.075, phase: t * 1.6)
-        .fill(SeaArt.waterFar.opacity(SeaArt.waterFarAlpha * fade))
+      band(SeaArt.farWave, sink: sink, fade: fade, at: t)
       WhaleMark()
         .frame(width: SeaArt.whaleSize * k, height: SeaArt.whaleSize * k)
         .rotationEffect(.degrees(tilt))
         .offset(x: dx * k, y: (restY - SeaArt.whaleTravel * lift) * k)
         .frame(width: side, height: side)
-      WaveBand(baseY: 0.70 + sink, amplitude: 0.065, phase: t * 2.2 + 2.1)
-        .fill(SeaArt.waterMid.opacity(SeaArt.waterMidAlpha * fade))
-      WaveBand(baseY: 0.80 + sink, amplitude: 0.055, phase: t * 2.9 + 4.4)
-        .fill(SeaArt.waterNear.opacity(SeaArt.waterNearAlpha * fade))
+      band(SeaArt.midWave, sink: sink, fade: fade, at: t)
+      band(SeaArt.nearWave, sink: sink, fade: fade, at: t)
     }
     .frame(width: side, height: side)
+  }
+
+  private func band(_ wave: SeaArt.Wave, sink: CGFloat, fade: Double, at time: Double) -> some View {
+    WaveBand(baseY: wave.baseY + sink, amplitude: wave.amplitude, phase: wave.phase(at: time))
+      .fill(wave.color.opacity(wave.alpha * fade))
   }
 }
