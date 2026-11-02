@@ -340,6 +340,7 @@ extension HarnessController {
       consumeRemoteWaterfall(frame)
     case "cancel":
       guard let eventID = frame["eventId"] as? String else { return }
+      childSessionPrompts.retract(approvalId: eventID)
       queuedApprovals.removeAll { $0.rpcId == eventID }
       queuedQuestions.removeAll { $0.rpcId == eventID }
       if pendingApproval?.rpcId == eventID {
@@ -423,9 +424,9 @@ extension HarnessController {
         rpcId: eventID,
         sessionId: sessionID,
         toolName: toolName,
-        reason: request["reason"] as? String)
-      if pendingApproval == nil { pendingApproval = approval } else { queuedApprovals.append(approval) }
-      nativeAlerts.notifyApprovalNeeded(toolName: toolName)
+        reason: request["reason"] as? String,
+        callId: request["callId"] as? String)
+      queueApproval(approval, request: request)
     case "user-questions/request":
       guard let rawQuestions = request["questions"] as? [[String: Any]] else { return }
       let items = rawQuestions.compactMap { value -> PendingQuestion.Item? in

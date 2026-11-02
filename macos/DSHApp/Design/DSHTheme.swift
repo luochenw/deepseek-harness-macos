@@ -217,81 +217,222 @@ struct DSHRunningBars: View {
   var color: Color = DSHTheme.warm
   var height: CGFloat = 10
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var moving = false
-
-  private let idleScales: [CGFloat] = [0.52, 0.82, 0.64]
-  private let movingScales: [CGFloat] = [1.0, 0.46, 0.84]
 
   var body: some View {
-    HStack(alignment: .center, spacing: 1.5) {
-      ForEach(0..<3, id: \.self) { index in
-        Capsule()
-          .fill(color)
-          .frame(width: 2, height: height)
-          .scaleEffect(
-            y: reduceMotion
-              ? 0.72
-              : (moving ? movingScales[index] : idleScales[index]),
-            anchor: .center)
-          .opacity(reduceMotion ? 0.82 : (moving ? 1 : 0.58))
-          .animation(
-            reduceMotion
-              ? nil
-              : .easeInOut(duration: 0.58)
-                .repeatForever(autoreverses: true)
-                .delay(Double(index) * 0.1),
-            value: moving)
-      }
+    DSHRunningBarsLayer(moving: !reduceMotion, color: color, height: height)
+      .frame(width: 9, height: height)
+      .accessibilityHidden(true)
+  }
+}
+
+private struct DSHRunningBarsLayer: NSViewRepresentable {
+  let moving: Bool
+  let color: Color
+  let height: CGFloat
+
+  func makeNSView(context: Context) -> DSHRunningBarsView { DSHRunningBarsView() }
+
+  func updateNSView(_ view: DSHRunningBarsView, context: Context) {
+    view.configure(moving: moving, color: NSColor(color), height: height)
+  }
+}
+
+/// Core Animation for the same reason as `DSHActivityLineView`.
+final class DSHRunningBarsView: NSView {
+  private static let idleScales: [CGFloat] = [0.52, 0.82, 0.64]
+  private static let movingScales: [CGFloat] = [1.0, 0.46, 0.84]
+  private static let pulseKey = "pulse"
+  private let bars = [CALayer(), CALayer(), CALayer()]
+  private var moving = false
+  private var color = NSColor.clear
+  private var barHeight: CGFloat = 10
+
+  var isPulsing: Bool { bars.contains { $0.animation(forKey: Self.pulseKey) != nil } }
+
+  override init(frame: NSRect) {
+    super.init(frame: frame)
+    wantsLayer = true
+    bars.forEach { layer?.addSublayer($0) }
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+  func configure(moving: Bool, color: NSColor, height: CGFloat) {
+    self.moving = moving
+    self.color = color
+    barHeight = height
+    applyBars()
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  override func layout() {
+    super.layout()
+    applyBars()
+  }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    applyBars()
+  }
+
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    applyBars()
+  }
+
+  private func applyBars() {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      bars.forEach { $0.backgroundColor = color.cgColor }
     }
-    .frame(width: 9, height: height)
-    .onAppear { moving = !reduceMotion }
-    .onChange(of: reduceMotion) { _, reduced in
-      moving = !reduced
+    for (index, bar) in bars.enumerated() {
+      bar.cornerRadius = 1
+      bar.bounds = CGRect(x: 0, y: 0, width: 2, height: barHeight)
+      bar.position = CGPoint(x: 1 + CGFloat(index) * 3.5, y: bounds.midY)
+      bar.transform = CATransform3DMakeScale(1, moving ? Self.idleScales[index] : 0.72, 1)
+      bar.opacity = moving ? 0.58 : 0.82
     }
-    .accessibilityHidden(true)
+    CATransaction.commit()
+    guard moving, window != nil else {
+      bars.forEach { $0.removeAnimation(forKey: Self.pulseKey) }
+      return
+    }
+    for (index, bar) in bars.enumerated() where bar.animation(forKey: Self.pulseKey) == nil {
+      let scale = CABasicAnimation(keyPath: "transform.scale.y")
+      scale.fromValue = Self.idleScales[index]
+      scale.toValue = Self.movingScales[index]
+      let opacity = CABasicAnimation(keyPath: "opacity")
+      opacity.fromValue = 0.58
+      opacity.toValue = 1
+      let pulse = CAAnimationGroup()
+      pulse.animations = [scale, opacity]
+      pulse.duration = 0.58
+      pulse.autoreverses = true
+      pulse.repeatCount = .infinity
+      pulse.beginTime = CACurrentMediaTime() + Double(index) * 0.1
+      pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+      pulse.isRemovedOnCompletion = false
+      bar.add(pulse, forKey: Self.pulseKey)
+    }
   }
 }
 
 /// One compact moving line for a live process. Included only while work is
-/// active; Reduce Motion keeps the same indicator without the shuttle.
+/// active; Reduce Motion keeps the same indicator without the shuttle. Core
+/// Animation moves it: a SwiftUI `repeatForever` updates the whole window every
+/// frame and redraws the text around it (34% CPU for one running session,
+/// 2026-11-01).
 struct DSHActivityLine: View {
   let active: Bool
   var color: Color = DSHTheme.accent
   var height: CGFloat = 1.2
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var appeared = false
-  @State private var moving = false
 
   var body: some View {
-    GeometryReader { geometry in
-      let segmentWidth = min(max(geometry.size.width * 0.26, 36), 68)
-      let travel = max(geometry.size.width - segmentWidth, 0)
-      Capsule()
-        .fill(color.opacity(0.72))
-        .frame(width: segmentWidth, height: height)
-        .scaleEffect(x: appeared ? 1 : 0, anchor: .leading)
-        .offset(x: active && !reduceMotion ? (moving ? travel : 0) : 0)
-        .animation(
-          reduceMotion
-            ? nil
-            : .easeInOut(duration: 1.8).repeatForever(autoreverses: true),
-          value: moving)
-        .animation(
-          reduceMotion ? nil : .easeOut(duration: 0.18),
-          value: appeared)
-        .onAppear {
-          appeared = true
-          moving = active && !reduceMotion
-        }
-        .onChange(of: active) { _, running in
-          moving = running && !reduceMotion
-        }
-        .onChange(of: reduceMotion) { _, reduced in
-          moving = active && !reduced
-        }
+    DSHActivityLineLayer(moving: active && !reduceMotion, color: color, height: height)
+      .frame(height: max(2, height))
+      .accessibilityHidden(true)
+  }
+}
+
+private struct DSHActivityLineLayer: NSViewRepresentable {
+  let moving: Bool
+  let color: Color
+  let height: CGFloat
+
+  func makeNSView(context: Context) -> DSHActivityLineView { DSHActivityLineView() }
+
+  func updateNSView(_ view: DSHActivityLineView, context: Context) {
+    view.configure(moving: moving, color: NSColor(color), height: height)
+  }
+}
+
+final class DSHActivityLineView: NSView {
+  private static let shuttleKey = "shuttle"
+  private let segment = CALayer()
+  private var moving = false
+  private var appeared = false
+  private var color = NSColor.clear
+  private var lineHeight: CGFloat = 1.2
+
+  var isShuttling: Bool { segment.animation(forKey: Self.shuttleKey) != nil }
+
+  override init(frame: NSRect) {
+    super.init(frame: frame)
+    wantsLayer = true
+    layer?.addSublayer(segment)
+    segment.anchorPoint = CGPoint(x: 0, y: 0.5)
+    segment.opacity = 0.72
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+  func configure(moving: Bool, color: NSColor, height: CGFloat) {
+    self.moving = moving
+    self.color = color
+    lineHeight = height
+    applyLine()
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  override func layout() {
+    super.layout()
+    applyLine()
+  }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    applyLine()
+  }
+
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    applyLine()
+  }
+
+  private func applyLine() {
+    let width = min(max(bounds.width * 0.26, 36), 68)
+    let travel = max(bounds.width - width, 0)
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      segment.backgroundColor = color.cgColor
     }
-    .frame(height: max(2, height))
-    .accessibilityHidden(true)
+    segment.cornerRadius = lineHeight / 2
+    segment.bounds = CGRect(x: 0, y: 0, width: width, height: lineHeight)
+    segment.position = CGPoint(x: 0, y: bounds.midY)
+    CATransaction.commit()
+    guard moving, travel > 0, window != nil else {
+      segment.removeAnimation(forKey: Self.shuttleKey)
+      return
+    }
+    if !appeared {
+      appeared = true
+      let grow = CABasicAnimation(keyPath: "transform.scale.x")
+      grow.fromValue = 0
+      grow.toValue = 1
+      grow.duration = 0.18
+      grow.timingFunction = CAMediaTimingFunction(name: .easeOut)
+      segment.add(grow, forKey: "appear")
+    }
+    if let running = segment.animation(forKey: Self.shuttleKey) as? CABasicAnimation,
+       running.toValue as? CGFloat == travel {
+      return
+    }
+    let shuttle = CABasicAnimation(keyPath: "position.x")
+    shuttle.fromValue = 0
+    shuttle.toValue = travel
+    shuttle.duration = 1.8
+    shuttle.autoreverses = true
+    shuttle.repeatCount = .infinity
+    shuttle.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+    shuttle.isRemovedOnCompletion = false
+    segment.add(shuttle, forKey: Self.shuttleKey)
   }
 }
 

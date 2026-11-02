@@ -5,13 +5,23 @@ struct Sidebar: View {
   @EnvironmentObject var harness: HarnessController
   @State private var collapsedSessionGroups: Set<String> = []
   @State private var expandedSessionGroups: Set<String> = []
+  @State private var expandedSubagentRows: Set<String> = []
 
-  private var brandIcon: NSImage {
+  /// Loaded once: `body` re-evaluates on every controller update, and reading the
+  /// icon file there took about 5% of the main thread during a running turn.
+  private static let brandIcon: NSImage = {
     if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
        let image = NSImage(contentsOf: url) {
       return image
     }
     return NSApp.applicationIconImage
+  }()
+
+  /// Subagent sessions fold into their parent's row instead of listing on
+  /// their own, so the header count and the group view both read this layout
+  /// rather than re-deriving it.
+  private var hostRows: DSHSidebarSubagentLayout.Rows {
+    DSHSidebarSubagentLayout.rows(harness.hostSessions)
   }
 
   var body: some View {
@@ -21,7 +31,7 @@ struct Sidebar: View {
           // Load the bundle resource directly. NSApp.applicationIconImage can
           // lag behind an in-place refresh and return a color-shifted cached
           // copy, which makes the brand mark disagree with DSHBrandPalette.
-          Image(nsImage: brandIcon)
+          Image(nsImage: Self.brandIcon)
             .resizable().interpolation(.high).frame(width: 22, height: 22)
           Text("DeepSeek Harness")
             .font(DSHType.brand)
@@ -46,7 +56,7 @@ struct Sidebar: View {
           Spacer()
           Button(action: { harness.showSessionSearch = true }) { Image(systemName: "magnifyingglass") }.buttonStyle(.dshGhost)
           Button(action: harness.refreshHostSnapshots) { Image(systemName: "arrow.clockwise") }.buttonStyle(.dshGhost)
-          Text("\(harness.hostSessions.count > 0 ? harness.hostSessions.count : harness.sessions.count)")
+          Text("\(harness.hostSessions.isEmpty ? harness.sessions.count : hostRows.topLevel.count)")
             .font(DSHType.micro)
             .foregroundStyle(DSHTheme.inkFaint)
         }
@@ -56,7 +66,13 @@ struct Sidebar: View {
           ScrollView {
             LazyVStack(alignment: .leading, spacing: DSHSpace.s4) {
               if !harness.hostSessions.isEmpty {
-                let groups = harness.sessionGroups
+                // Subagents nest under their parent row; an orphaned child (its
+                // parent archived or filtered out of the snapshot) rejoins the
+                // project grouping as a normal top-level row.
+                let groups = DSHSidebarSubagentLayout.groups(
+                  harness.sessionGroups,
+                  sessions: harness.hostSessions)
+                let subagents = hostRows.children
                 // Degrade to a flat list with no section labels when every
                 // session landed in one bucket with no name to show — with
                 // directory-derived fallback titles that's nearly never, so
@@ -66,8 +82,10 @@ struct Sidebar: View {
                   SidebarSessionGroupView(
                     group: group,
                     showsHeader: showHeaders,
+                    subagents: subagents,
                     collapsedGroups: $collapsedSessionGroups,
-                    expandedGroups: $expandedSessionGroups)
+                    expandedGroups: $expandedSessionGroups,
+                    expandedSubagentRows: $expandedSubagentRows)
                 }
               } else {
                 ForEach(harness.sessions) { session in SidebarLocalSessionRow(session: session) }
@@ -217,6 +235,18 @@ private struct SidebarRowChrome: View {
 struct SidebarSessionRow: View {
   @EnvironmentObject var harness: HarnessController
   let session: DSHSessionSummary
+  /// Overrides the row's own `running` flag — a parent row whose idle session
+  /// has a running subagent reports activity too.
+  var showsActivity: Bool?
+  /// Overrides the default "select this session" tap; a subagent row routes
+  /// through its parent instead.
+  var onOpen: (() -> Void)?
+  /// Whether this row carries the selection highlight. Mandatory because the
+  /// decision needs context the row cannot see: a child row is only drawn
+  /// while its parent is expanded, so the parent takes the highlight whenever
+  /// the child's own row is not on screen. See
+  /// `DSHSidebarSubagentLayout.carriesSelection`.
+  let showsSelection: Bool
   @State private var hovering = false
   var body: some View {
     // Host sessions carry no "seen/unread" flag (unlike the local fallback
@@ -226,9 +256,9 @@ struct SidebarSessionRow: View {
     SidebarRowChrome(
       title: session.needsMigration ? "\(session.title) · 待升级" : session.title,
       date: Date(timeIntervalSince1970: session.updatedAt / 1000),
-      statusKind: session.running ? .live : .idle,
-      isActive: harness.hostCurrentSessionID == session.sessionId,
-      action: { harness.openHostSession(session) },
+      statusKind: (showsActivity ?? session.running) ? .live : .idle,
+      isActive: showsSelection,
+      action: onOpen ?? { harness.openHostSession(session) },
       forceHover: hovering
     )
     // Hover-revealed ⋯ trigger; clicking opens an app-styled action panel

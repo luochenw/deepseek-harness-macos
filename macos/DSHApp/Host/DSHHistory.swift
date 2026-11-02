@@ -314,9 +314,14 @@ extension HarnessController {
             self.rootSessionFollowCursor == nil,
             let index = self.sessions.firstIndex(where: { $0.id == localSessionID })
           else { return }
-          self.sessions[index].messages = DSHHistoryPageMerge.replacingRows(
-            with: folded.messages,
-            keepingUnloggedFrom: self.sessions[index].messages)
+          // Same rule as a follow snapshot: a page smaller than what is already
+          // displayed is a partial view of the log, not a correction. Folding it
+          // in keeps the rows (and the scroll position) instead of collapsing
+          // the transcript and letting it grow back.
+          self.sessions[index].messages = DSHHistoryPageMerge.applyFollowSnapshot(
+            folded.messages,
+            to: self.sessions[index].messages,
+            isComplete: !page.hasMore)
           self.sessions[index].turnStartedAt = folded.activeTurnStartedAt
           self.reconcileRootSessionRunningState(
             sessionID: sessionId,

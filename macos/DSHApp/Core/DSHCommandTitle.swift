@@ -147,8 +147,46 @@ struct DSHCommandSummary: Equatable {
   let directory: String?
 }
 
+/// Memoizes a pure function of a command's text. An expanded group's body asks
+/// for every command's kind and title on each pass, and a running turn re-runs
+/// that body on every controller update, so without this the regex work of a
+/// large group is paid many times a second (2026-11-01: "一展开就卡").
+final class DSHCommandMemo<Value> {
+  private let lock = NSLock()
+  private var values: [String: Value] = [:]
+  private var order: [String] = []
+  private let limit: Int
+
+  init(limit: Int = 2_048) { self.limit = limit }
+
+  func value(for command: String, compute: (String) -> Value) -> Value {
+    lock.lock()
+    if let cached = values[command] {
+      lock.unlock()
+      return cached
+    }
+    lock.unlock()
+    let computed = compute(command)
+    lock.lock()
+    defer { lock.unlock() }
+    if values.updateValue(computed, forKey: command) == nil {
+      order.append(command)
+      if order.count > limit {
+        values.removeValue(forKey: order.removeFirst())
+      }
+    }
+    return computed
+  }
+}
+
 enum DSHCommandTitle {
+  private static let memo = DSHCommandMemo<DSHCommandSummary>()
+
   static func summarize(_ command: String) -> DSHCommandSummary {
+    memo.value(for: command, compute: computeSummary)
+  }
+
+  private static func computeSummary(_ command: String) -> DSHCommandSummary {
     let lines = command.split(whereSeparator: \.isNewline).map(String.init)
     var directory: String?
     var statements: [String] = []
@@ -523,7 +561,13 @@ enum DSHToolCallClassifier {
   /// True when a shell command matches one of the write patterns the
   /// transcript treats as "modified code". `2>&1`-style redirections and
   /// `>/dev/null` do not count: they are plumbing, not file edits.
+  private static let writesFilesMemo = DSHCommandMemo<Bool>()
+
   static func commandWritesFiles(_ command: String) -> Bool {
+    writesFilesMemo.value(for: command, compute: computeCommandWritesFiles)
+  }
+
+  private static func computeCommandWritesFiles(_ command: String) -> Bool {
     let text = command.isEmpty ? "" : command
     guard !text.isEmpty else { return false }
     let tokens = shellStatements(text)

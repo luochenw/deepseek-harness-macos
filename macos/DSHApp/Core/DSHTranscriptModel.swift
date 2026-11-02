@@ -285,6 +285,29 @@ enum DSHHistoryPageMerge {
     return folded + unlogged
   }
 
+  /// Apply a `session/follow` snapshot or a first history page to the displayed rows.
+  ///
+  /// A follow's first frame carries ONE message and ONE turn (a WebSocket frame
+  /// has a size cap). So when a stream is (re)opened while a complete transcript
+  /// is already on screen, replacing the array with that frame throws the whole
+  /// conversation away — the list collapses to a single row and then grows back
+  /// page by page. Only replace when the snapshot is the whole log, is at least as
+  /// long as what is displayed, or nothing usable is displayed yet.
+  static func applyFollowSnapshot(
+    _ incoming: [DSHMessage],
+    to current: [DSHMessage],
+    isComplete: Bool
+  ) -> [DSHMessage] {
+    guard !current.isEmpty else { return incoming }
+    // The whole log is authoritative even when shorter: compaction removes rows.
+    if isComplete || incoming.count >= current.count {
+      return replacingRows(with: incoming, keepingUnloggedFrom: current)
+    }
+    // Otherwise a shorter frame is a partial (first-frame) payload. Fold it into
+    // the rows already on screen.
+    return mergeTail(incoming, into: current)
+  }
+
   /// Merge a follow snapshot's recent tail into an already visible transcript.
   /// Existing row UUIDs are retained so LazyVStack identities and scroll
   /// anchors stay stable while reconnect repair runs in the background.

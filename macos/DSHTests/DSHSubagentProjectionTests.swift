@@ -1,4 +1,7 @@
+import AppKit
 import Foundation
+import Network
+import SwiftUI
 @testable import DSHAppLib
 
 private func projection(
@@ -765,6 +768,326 @@ private func testRootHistoryGenerationRejectsStaleOrHiddenResponses() throws {
   }
 }
 
+// MARK: - 新建子会话（dashboard 委派入口）
+
+private func testNewChild_delegationTemplateKeepsTaskVerbatim() throws {
+  let task = """
+  改一下 `Config` 的默认值，然后把 "read-only" 换成 'workspace-write'。
+    - 这一行有缩进
+    - 这一行有\t制表符
+  最后一行不带标点
+  """
+  let text = DSHNewChildDelegation.instruction(task: task, label: "配置修复")
+  try expect(text.contains(task), "the task must be spliced in unchanged")
+  try expect(text.hasSuffix(task), "the task must end the instruction — nothing appended after it")
+  try expectEqual(text.components(separatedBy: task).count, 2)
+  try expect(text.contains("一个字都不要改"), "the fixed delegation wording is missing")
+  try expect(text.contains("【委派】"), "the instruction must be the fixed 【委派】 form")
+}
+
+private func testNewChild_delegationModeFollowsRunningState() throws {
+  try expectEqual(DSHNewChildDelegation.mode(running: false), .queue)
+  try expectEqual(DSHNewChildDelegation.mode(running: true), .steer)
+}
+
+private func testNewChild_labelFallsBackWhenBlank() throws {
+  let task = "跑一遍测试"
+  let untagged = DSHNewChildDelegation.instruction(task: task, label: "   ")
+  try expect(untagged.contains("标签：\(DSHNewChildDelegation.emptyTag)"),
+             "a blank label must ask the main session to name the child")
+  let tagged = DSHNewChildDelegation.instruction(task: task, label: "  冒烟  ")
+  try expect(tagged.contains("标签：冒烟），"), "a filled label goes in verbatim, trimmed")
+  try expect(!tagged.contains(DSHNewChildDelegation.emptyTag))
+}
+
+private func testNewChild_submitRequiresNonBlankTask() throws {
+  try expect(!DSHNewChildDelegation.canSubmit(task: ""))
+  try expect(!DSHNewChildDelegation.canSubmit(task: " \n\t "))
+  try expect(DSHNewChildDelegation.canSubmit(task: "做事"))
+}
+
+private func testNewChild_entryOnlyOfferedAtTopLevelSession() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    try expect(!harness.canCreateChildSession,
+               "the blank default page has no Host session, so the card must not offer the entry")
+    harness.hostCurrentSessionID = "root-session"
+    try expect(harness.canCreateChildSession, "a top-level session shows the entry even with no children")
+    harness.subagentPath = [
+      HarnessController.SubagentNavigationNode(
+        address: DSHSubagentAddress(parentSessionId: "root", childSessionId: "child", mode: "continuable"),
+        title: "子会话")
+    ]
+    try expect(!harness.canCreateChildSession, "drilled into a child, the card must not offer a new child")
+    harness.subagentPath = []
+    harness.activeSubagentAddress = DSHSubagentAddress(
+      parentSessionId: "root", childSessionId: "child", mode: "continuable")
+    try expect(!harness.canCreateChildSession, "a directly addressed child must hide the entry too")
+  }
+}
+
+private func testNewChild_delegationReportsWhyItSentNothing() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let local = HarnessController.Session(
+      title: "主会话",
+      workspaceName: "ds-harness",
+      updatedAt: Date(),
+      messages: [],
+      hostSessionId: "root-session")
+    harness.sessions = [local]
+    harness.selectedSessionID = local.id
+    harness.hostCurrentSessionID = "root-session"
+    // No host client: nothing is sent, the caller is told, and the refusal
+    // reaches the transcript the user is actually looking at.
+    try expect(!harness.delegateNewChildSession(task: "做事", label: ""))
+    try expectEqual(harness.status, "Host 未连接，无法委派子会话")
+    try expectEqual(harness.sessions[0].messages.last?.text, "Host 未连接，无法委派子会话")
+
+    harness.hostClient = DSHHostClient(baseURL: URL(string: "http://127.0.0.1:0000")!)
+    harness.activeSubagentAddress = DSHSubagentAddress(
+      parentSessionId: "root-session", childSessionId: "child", mode: "continuable")
+    try expect(!harness.delegateNewChildSession(task: "做事", label: ""))
+    try expectEqual(harness.status, "只能在主会话里新建子会话")
+    try expectEqual(harness.sessions[0].messages.last?.text, "只能在主会话里新建子会话")
+
+    // A blank task never reaches the Host either.
+    harness.activeSubagentAddress = nil
+    try expect(!harness.delegateNewChildSession(task: "  \n ", label: ""))
+  }
+}
+
+private func testNewChild_cardAndPopoverSnapshots() throws {
+  try MainActor.assumeIsolated {
+    _ = NSApplication.shared
+    let output = newChildSnapshotDirectory()
+    let names = ["new-child-card.png", "new-child-card-dark.png",
+                 "new-child-popover.png", "new-child-popover-dark.png"]
+    try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+    // Only this test's own four files — never the directory, which may hold
+    // snapshots written by other checks running against the same path.
+    for name in names { try? FileManager.default.removeItem(at: output.appendingPathComponent(name)) }
+    defer { NSApp.appearance = NSAppearance(named: .aqua) }
+
+    let harness = HarnessController(startRuntime: false)
+    harness.hostClient = DSHHostClient(baseURL: URL(string: "http://127.0.0.1:0000")!)
+    harness.hostCurrentSessionID = "root-session"
+    harness.hostStatus = "已连接"
+
+    for (suffix, appearance) in [
+      ("", NSAppearance.Name.aqua),
+      ("-dark", NSAppearance.Name.darkAqua),
+    ] {
+      NSApp.appearance = NSAppearance(named: appearance)
+      try newChildRenderSnapshot(
+        name: "new-child-card\(suffix).png",
+        appearance: appearance,
+        size: CGSize(width: 420, height: 150),
+        root: AnyView(NativeDashboard().environmentObject(harness)),
+        output: output)
+      try newChildRenderSnapshot(
+        name: "new-child-popover\(suffix).png",
+        appearance: appearance,
+        size: CGSize(width: 400, height: 330),
+        root: AnyView(
+          NewChildSessionPanel {}
+            .environmentObject(harness)
+            .background(DSHTheme.surface, in: RoundedRectangle(cornerRadius: DSHRadius.lg, style: .continuous))
+            .padding(DSHSpace.s5)
+            .background(DSHTheme.canvas)),
+        output: output)
+    }
+    print("new-child-snapshot: \(output.path)")
+  }
+}
+
+private func newChildSnapshotDirectory() -> URL {
+  let directory = ProcessInfo.processInfo.environment["DSH_NEW_CHILD_SNAPSHOT_DIR"]
+    .map { URL(fileURLWithPath: $0, isDirectory: true) }
+    ?? URL(fileURLWithPath: "/tmp/dsh-new-child/out", isDirectory: true)
+  try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+  return directory
+}
+
+private func newChildRenderSnapshot(
+  name: String,
+  appearance: NSAppearance.Name,
+  size: CGSize,
+  root: AnyView,
+  output: URL
+) throws {
+  let hosting = NSHostingView(rootView: root)
+  hosting.appearance = NSAppearance(named: appearance)
+  hosting.frame = NSRect(origin: .zero, size: size)
+  let window = NSWindow(
+    contentRect: NSRect(x: -20_000, y: -20_000, width: size.width, height: size.height),
+    styleMask: .borderless,
+    backing: .buffered,
+    defer: false)
+  window.isReleasedWhenClosed = false
+  window.backgroundColor = .clear
+  window.contentView = hosting
+  window.orderFrontRegardless()
+  RunLoop.main.run(until: Date().addingTimeInterval(0.25))
+  hosting.layoutSubtreeIfNeeded()
+  hosting.displayIfNeeded()
+  guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
+    window.close()
+    throw TestFailure.message("\(name): no bitmap")
+  }
+  hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+  window.orderOut(nil)
+  window.close()
+  guard let png = bitmap.representation(using: .png, properties: [:]) else {
+    throw TestFailure.message("\(name): cannot encode PNG")
+  }
+  try expect(png.count > 3_000, "\(name): snapshot looks empty")
+  try png.write(to: output.appendingPathComponent(name))
+}
+
+/// Minimal one-shot Host stub: accepts TCP connections, answers every
+/// `api/*` POST with a `server-response` echoing the request's `rpcId`, and
+/// records the prompt payloads it saw. Enough to observe what the delegating
+/// client actually put on the wire without a real Host.
+private final class NewChildPromptStub: @unchecked Sendable {
+  private let lock = NSLock()
+  private var recorded: [[String: Any]] = []
+  private var listener: NWListener?
+
+  var requests: [[String: Any]] {
+    lock.lock(); defer { lock.unlock() }
+    return recorded
+  }
+
+  var baseURL: URL? {
+    guard let port = listener?.port else { return nil }
+    return URL(string: "http://127.0.0.1:\(port.rawValue)")
+  }
+
+  func start() throws {
+    let listener = try NWListener(using: .tcp, on: .any)
+    self.listener = listener
+    listener.newConnectionHandler = { [weak self] connection in
+      connection.start(queue: .global())
+      Self.receive(on: connection, accumulator: Data(), owner: self)
+    }
+    let ready = DispatchSemaphore(value: 0)
+    listener.stateUpdateHandler = { state in
+      if case .ready = state { ready.signal() }
+      if case .failed = state { ready.signal() }
+    }
+    listener.start(queue: .global())
+    _ = ready.wait(timeout: .now() + 5)
+  }
+
+  func stop() {
+    listener?.cancel()
+    listener = nil
+  }
+
+  private static func receive(on connection: NWConnection, accumulator: Data, owner: NewChildPromptStub?) {
+    connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, isComplete, error in
+      var buffer = accumulator
+      if let data { buffer.append(data) }
+      guard let owner else { connection.cancel(); return }
+      if let range = buffer.range(of: Data("\r\n\r\n".utf8)) {
+        let head = String(decoding: buffer[..<range.lowerBound], as: UTF8.self)
+        let length = head
+          .split(separator: "\r\n")
+          .first { $0.lowercased().hasPrefix("content-length:") }
+          .flatMap { Int($0.split(separator: ":")[1].trimmingCharacters(in: .whitespaces)) } ?? 0
+        let body = buffer[range.upperBound...]
+        if body.count >= length {
+          owner.record(Data(body.prefix(length)))
+          let response = Self.response(for: Data(body.prefix(length)))
+          connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
+          return
+        }
+      }
+      if isComplete || error != nil { connection.cancel(); return }
+      receive(on: connection, accumulator: buffer, owner: owner)
+    }
+  }
+
+  private func record(_ body: Data) {
+    guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return }
+    lock.lock(); defer { lock.unlock() }
+    recorded.append(object)
+  }
+
+  private static func response(for body: Data) -> Data {
+    let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+    let rpcId = object?["rpcId"] as? String ?? ""
+    let payload: [String: Any] = [
+      "type": "server-response",
+      "rpcId": rpcId,
+      "result": ["ok": true, "value": ["accepted": true]],
+    ]
+    let encoded = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{}".utf8)
+    var head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+    head += "Content-Length: \(encoded.count)\r\nConnection: close\r\n\r\n"
+    return Data(head.utf8) + encoded
+  }
+
+  /// `session/prompt` carries the mode/session at the request's top level and
+  /// the text inside its single content block.
+  private static func args(_ request: [String: Any]) -> [String: Any]? {
+    ((request["payload"] as? [String: Any])?["args"] as? [String: Any])?["request"] as? [String: Any]
+  }
+
+  static func mode(of request: [String: Any]) -> String? { args(request)?["mode"] as? String }
+  static func sessionID(of request: [String: Any]) -> String? { args(request)?["sessionId"] as? String }
+
+  static func text(of request: [String: Any]) -> String? {
+    let content = args(request)?["content"] as? [[String: Any]]
+    return content?.first?["text"] as? String
+  }
+}
+
+private func testNewChild_idleSessionSendsQueueAndRunningOneSendsSteer() throws {
+  try MainActor.assumeIsolated {
+    let stub = NewChildPromptStub()
+    try stub.start()
+    defer { stub.stop() }
+    guard let baseURL = stub.baseURL else { throw TestFailure.message("stub never opened a port") }
+
+    let harness = HarnessController(startRuntime: false)
+    let local = HarnessController.Session(
+      title: "主会话",
+      workspaceName: "ds-harness",
+      updatedAt: Date(),
+      messages: [],
+      hostSessionId: "root-session")
+    harness.sessions = [local]
+    harness.selectedSessionID = local.id
+    harness.hostCurrentSessionID = "root-session"
+    harness.hostClient = DSHHostClient(baseURL: baseURL)
+
+    try expect(harness.delegateNewChildSession(task: "空闲时委派", label: ""))
+    try newChildWait { stub.requests.count == 1 }
+    try expectEqual(stub.requests.first.map { NewChildPromptStub.mode(of: $0) }, "queue")
+
+    harness.isRunning = true
+    try expect(harness.delegateNewChildSession(task: "运行中委派", label: ""))
+    try newChildWait { stub.requests.count == 2 }
+    try expectEqual(stub.requests.last.map { NewChildPromptStub.mode(of: $0) }, "steer")
+
+    // The instruction really is what the template builds, not a rewording.
+    try expectEqual(
+      stub.requests.last.flatMap { NewChildPromptStub.text(of: $0) },
+      DSHNewChildDelegation.instruction(task: "运行中委派", label: ""))
+    try expectEqual(stub.requests.last.flatMap { NewChildPromptStub.sessionID(of: $0) }, "root-session")
+  }
+}
+
+private func newChildWait(timeout: TimeInterval = 5, until ready: () -> Bool) throws {
+  let deadline = Date().addingTimeInterval(timeout)
+  while !ready() {
+    guard Date() < deadline else { throw TestFailure.message("the stub never received the prompt") }
+    RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+  }
+}
+
 let dshSubagentProjectionTests: [NamedTest] = [
   ("Subagent presentation selects child state without overwriting root", testSubagentPresentation_selectsChildStateWithoutOverwritingRoot),
   ("Subagent presentation rejects older projection frame", testSubagentPresentation_rejectsOlderProjectionFrame),
@@ -786,4 +1109,12 @@ let dshSubagentProjectionTests: [NamedTest] = [
   ("Child context hides root slash catalog and root-only slash commands", testChildContext_hidesRootSlashCatalogAndRootOnlySlashCommands),
   ("Workflow member navigation generation rejects stale catalog", testWorkflowMemberNavigationGenerationRejectsStaleCatalog),
   ("Root history generation rejects stale or hidden responses", testRootHistoryGenerationRejectsStaleOrHiddenResponses),
+  ("New child: delegation template keeps the task verbatim", testNewChild_delegationTemplateKeepsTaskVerbatim),
+  ("New child: delegation mode follows the running state", testNewChild_delegationModeFollowsRunningState),
+  ("New child: blank label asks the main session to name it", testNewChild_labelFallsBackWhenBlank),
+  ("New child: submit requires a non-blank task", testNewChild_submitRequiresNonBlankTask),
+  ("New child: entry is offered only at a top-level session", testNewChild_entryOnlyOfferedAtTopLevelSession),
+  ("New child: a rejected delegation reports why and sends nothing", testNewChild_delegationReportsWhyItSentNothing),
+  ("New child: idle session sends queue, running session sends steer", testNewChild_idleSessionSendsQueueAndRunningOneSendsSteer),
+  ("New child: card and popover snapshots", testNewChild_cardAndPopoverSnapshots),
 ]

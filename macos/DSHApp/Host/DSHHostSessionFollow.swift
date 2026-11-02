@@ -402,10 +402,19 @@ extension HarnessController {
         sessions[index].messages = DSHHistoryPageMerge.mergeTail(
           folded.messages,
           into: sessions[index].messages)
-      } else {
+      } else if rewound {
+        // Rows from before a rewind describe events the Host no longer has.
         sessions[index].messages = DSHHistoryPageMerge.replacingRows(
           with: folded.messages,
           keepingUnloggedFrom: sessions[index].messages)
+      } else {
+        // A follow's first frame carries ONE message and ONE turn; replacing a
+        // complete transcript with it collapses the list and it then grows back
+        // (2026-10-30: content 61347 → 797 → 8503 on open).
+        sessions[index].messages = DSHHistoryPageMerge.applyFollowSnapshot(
+          folded.messages,
+          to: sessions[index].messages,
+          isComplete: !snapshot.hasMore)
       }
       sessions[index].turnStartedAt = folded.activeTurnStartedAt
       reconcileRootSessionRunningState(
@@ -415,9 +424,11 @@ extension HarnessController {
       sessions[index].isLoadingHistory = preserveCachedHistory || retainVisibleHistory
         ? false
         : snapshot.hasMore
-      activeTools = preserveCachedHistory || retainVisibleHistory
-        ? DSHToolActivityMerge.mergingTail(folded.tools, into: activeTools)
-        : DSHToolActivityMerge.preservingDetails(incoming: folded.tools, previous: activeTools)
+      // Rows can survive this snapshot unless the log rewound, and a surviving row
+      // needs its tool to expand.
+      activeTools = rewound
+        ? DSHToolActivityMerge.preservingDetails(incoming: folded.tools, previous: activeTools)
+        : DSHToolActivityMerge.mergingTail(folded.tools, into: activeTools)
       recordWorkflowHistory(folded, sessionID: sessionID)
       let oldest = DSHHistoryPagination.oldestSeq(in: snapshot.records)
       sessions[index].updatedAt = Date()

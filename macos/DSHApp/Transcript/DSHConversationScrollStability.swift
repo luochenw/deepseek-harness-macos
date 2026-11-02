@@ -39,6 +39,31 @@ enum DSHConversationScrollPolicy {
 
   /// A transcript resize is not a follow request by itself: LazyVStack height corrections happen
   /// all the time.
+  /// A tail scroll is only meaningful when the tail is not already in view.
+  /// While a turn runs, the tail row's own animation re-publishes the layout
+  /// metrics ~20 times a second; each publish used to issue another
+  /// `scrollTo("transcript-tail")` even though the offset was already correct
+  /// (2026-10-30: 920 requests in 2.5 minutes with the content unchanged).
+  static let alreadyAtTailTolerance: CGFloat = 2
+
+  static func shouldIssueTailScroll(realBottomDistance: CGFloat?) -> Bool {
+    guard let distance = realBottomDistance else { return true }
+    return distance > alreadyAtTailTolerance
+  }
+
+  /// Streaming grows the tail on every delta, so the at-tail check above cannot
+  /// stop these. Each `scrollTo` forces a synchronous layout: at 40+ a second it
+  /// took half the main thread, and expanding a group made every pass dearer
+  /// (2026-11-01 samples). Following at this rate still reads as continuous.
+  static let tailScrollInterval: TimeInterval = 0.1
+
+  /// Seconds to wait before the next follow. Measured from the last one that ran,
+  /// so a stream of requests cannot keep pushing the pending scroll back.
+  static func tailScrollDelay(sinceLast elapsed: TimeInterval, force: Bool) -> TimeInterval {
+    guard !force else { return 0 }
+    return max(0, tailScrollInterval - elapsed)
+  }
+
   static func shouldFollowAfterResize(
     pinned: Bool,
     previousContentHeight: CGFloat,
@@ -566,6 +591,8 @@ final class DSHTranscriptScrollProbeView: NSView {
 /// Entry clamp state + offset writes for the transcript's `NSScrollView`.
 @MainActor
 final class DSHTranscriptScrollViewBox {
+  /// Uptime of the last tail scroll that ran, for `tailScrollDelay`.
+  var lastTailScrollUptime: TimeInterval = 0
   weak var scrollView: NSScrollView?
   /// At most one entry clamp per session.
   private(set) var didClampEntry = false

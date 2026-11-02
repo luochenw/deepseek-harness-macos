@@ -43,7 +43,7 @@ if grep -q 'Text("运行中")' "$SIDEBAR"; then
 fi
 grep -q 'struct DSHActivityLine' "$THEME" \
   && grep -q 'var color: Color = DSHTheme.accent' "$THEME" \
-  && grep -q 'repeatForever(autoreverses: true)' "$THEME" || {
+  && grep -q 'shuttle.repeatCount = .infinity' "$THEME" || {
   echo "design-system: running sessions need a moving activity line with the transcript's default colour" >&2
   exit 1
 }

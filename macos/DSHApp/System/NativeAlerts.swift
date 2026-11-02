@@ -17,6 +17,9 @@ extension HarnessController: DSHBadgeFactsSource {
   var hasPendingUserAction: Bool {
     pendingApproval != nil || pendingQuestion != nil
       || !queuedApprovals.isEmpty || !queuedQuestions.isEmpty
+      // A child-session card asks the same question without going through the
+      // sheet, so it must raise the same "!" as every other pending decision.
+      || childSessionPrompts.hasPendingRequest
   }
   var hasBackgroundRunningWork: Bool {
     !voiceTaskSessions.isEmpty || hostSessions.contains(where: \.running)

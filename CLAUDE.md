@@ -46,7 +46,7 @@
 ## 质量规范
 
 - **main.swift 冻结**：`main.swift` 只保留 App 入口、`HarnessController` 类声明与核心生命周期——新的 `@Published` 状态、controller 方法、顶层 View **一律不再**写进这个文件，哪怕是"核心流程"。新状态/新逻辑写成所属域目录下 `DSH<Feature>.swift` 里的 `extension HarnessController`（没有对应文件就新建一个）；新界面写成同一目录下独立的 `<Feature>View.swift` / `Native<Feature>View.swift`。这条规则配了 gate，不是口头约定：`./scripts/test-macos-native.sh` 会检查 `main.swift` 行数和 `@Published` 数量不超过基线，超了直接报错退出。
-- `main.swift` 的历史债分批拆分已完成；工作区偏好恢复逻辑迁出后当前为 347 行，仍只保留 App 入口、`HarnessController` 类声明、状态与核心生命周期。进度与决策见 [Agent Note](.agents/notes/implemented/architecture/2026-08-18-quality-remediation-plan.md)。
+- `main.swift` 的历史债分批拆分已完成；工作区偏好恢复逻辑迁出后当前为 349 行，仍只保留 App 入口、`HarnessController` 类声明、状态与核心生命周期。进度与决策见 [Agent Note](.agents/notes/implemented/architecture/2026-08-18-quality-remediation-plan.md)。
 - 改行为的代码（不是纯文档/纯 UI 文案）优先带上能验证的手段——现阶段是契约 fixture（`NativeContractCheck.swift`）+ smoke（`--smoke`），单测基建落地后（见上面 Note 的 Phase 1）新逻辑改动要带对应单测。
 
 ## 规则文件组织方式：每个域目录一份
@@ -157,6 +157,7 @@ gh release create v<version> \
 | 改了事件、转录或工具逻辑（几秒） | `./scripts/test-core.sh` |
 | 门禁 + 全部单测（约 1 分钟） | `./scripts/test-macos-native.sh --unit` |
 | 类型检查（无需构建） | `./scripts/test-macos-native.sh` |
+| 改完代码的常用检查（单测，约 2 分钟） | `./scripts/test-macos-native.sh --quick` |
 | 构建 | `./scripts/build-macos-app.sh` |
 | Swift-only 原地刷新已安装 App | `./scripts/refresh-macos-app.sh` |
 | 构建后冒烟测试 | `./scripts/test-macos-native.sh --smoke` |

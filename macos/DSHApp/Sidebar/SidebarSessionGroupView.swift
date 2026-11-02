@@ -27,13 +27,16 @@ enum DSHSidebarSessionPaging {
 
   /// The rows a collapsed project renders, in order. Views iterate these
   /// directly so SwiftUI keys them by session identity instead of by position.
+  /// `running` overrides each row's own flag, which lets a parent row report a
+  /// running subagent as its own activity.
   static func visibleSessions(
     _ sessions: [DSHSessionSummary],
+    running: [Bool]? = nil,
     expanded: Bool
   ) -> [DSHSessionSummary] {
     visibleIndices(
       total: sessions.count,
-      running: sessions.map(\.running),
+      running: running ?? sessions.map(\.running),
       expanded: expanded
     ).compactMap { index in
       sessions.indices.contains(index) ? sessions[index] : nil
@@ -63,15 +66,22 @@ struct SidebarSessionGroupView: View {
   @EnvironmentObject private var harness: HarnessController
   let group: HarnessController.WorkspaceSessionGroup
   let showsHeader: Bool
+  let subagents: [String: [DSHSessionSummary]]
   @Binding var collapsedGroups: Set<String>
   @Binding var expandedGroups: Set<String>
+  @Binding var expandedSubagentRows: Set<String>
   @State private var headerHovering = false
 
   private var isCollapsed: Bool { collapsedGroups.contains(group.id) }
   private var isExpanded: Bool { expandedGroups.contains(group.id) }
-  private var runningFlags: [Bool] { group.sessions.map(\.running) }
+  private var runningFlags: [Bool] {
+    DSHSidebarSubagentLayout.runningFlags(group.sessions, subagents: subagents)
+  }
   private var visibleSessions: [DSHSessionSummary] {
-    DSHSidebarSessionPaging.visibleSessions(group.sessions, expanded: isExpanded)
+    DSHSidebarSessionPaging.visibleSessions(
+      group.sessions,
+      running: runningFlags,
+      expanded: isExpanded)
   }
 
   var body: some View {
@@ -117,8 +127,13 @@ struct SidebarSessionGroupView: View {
         // Identity, not the row's index: a new session inserted at the top
         // shifts every index, and an index-keyed ForEach would carry each
         // row's @State (hover, popover) over to a different session.
+        // Subagent rows are nested inside their parent's row and never count
+        // towards the 5-row preview or the 「展开其余 N 个」 total.
         ForEach(visibleSessions) { session in
-          SidebarSessionRow(session: session)
+          SidebarSessionTreeRow(
+            session: session,
+            subagents: subagents[session.sessionId] ?? [],
+            expandedRows: $expandedSubagentRows)
             .padding(.leading, showsHeader ? DSHSpace.s3 : 0)
         }
         // Only offer the toggle when it actually changes what is on screen:

@@ -584,22 +584,38 @@ struct ConversationView: View {
           isCollapsible: true,
           isEmpty: trace.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     case .message(let message):
-      MessageBubble(
-        message: message,
-        isFeedbackAnchor: item.id == feedbackAnchorID)
-        .equatable()
-        .id(item.id)
-        .dshTranscriptRowFrameIfNeeded(id: item.id, enabled: measureFrames)
-        .onAppear { if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.rowAppearances += 1 } }
-        .dshTranscriptCachedHeight(
-          id: item.id,
-          version: Self.rowVersion(message: message),
-          width: width,
-          estimate: DSHTranscriptRowEstimate.messageHeight(message, width: width),
-          // The streamed reply grows within one row id; its measured height is a frame of a moving
-          // target, never a stable minimum.
-          isLive: Self.isStreamingRow(message, isRunning: isRunning),
-          isEmpty: Self.isEmptyBody(message))
+      // A child-session call is a session row, not an execution row: it carries
+      // the confirmation (or the child's live state) instead of tool output.
+      if message.role == .tool, DSHChildSessionCard.isChildSessionTool(message.text) {
+        ChildSessionPromptCard(prompts: harness.childSessionPrompts, message: message)
+          .id(item.id)
+          .dshTranscriptRowFrameIfNeeded(id: item.id, enabled: measureFrames)
+          // The card's own state changes its height (a question is taller than
+          // a session row), so it stays out of the settled-row height cache.
+          .dshTranscriptCachedHeight(
+            id: item.id,
+            version: 0,
+            width: width,
+            estimate: DSHTranscriptRowEstimate.toolStatusRowHeight(accessory: true),
+            isCollapsible: true)
+      } else {
+        MessageBubble(
+          message: message,
+          isFeedbackAnchor: item.id == feedbackAnchorID)
+          .equatable()
+          .id(item.id)
+          .dshTranscriptRowFrameIfNeeded(id: item.id, enabled: measureFrames)
+          .onAppear { if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.rowAppearances += 1 } }
+          .dshTranscriptCachedHeight(
+            id: item.id,
+            version: Self.rowVersion(message: message),
+            width: width,
+            estimate: DSHTranscriptRowEstimate.messageHeight(message, width: width),
+            // The streamed reply grows within one row id; its measured height is a frame of a moving
+            // target, never a stable minimum.
+            isLive: Self.isStreamingRow(message, isRunning: isRunning),
+            isEmpty: Self.isEmptyBody(message))
+      }
     case .toolGroup(let group):
       // One digest pass per layout: the row's line AND its `==` signature both
       // come from it. Two passes here would double the per-frame classification
@@ -609,7 +625,7 @@ struct ConversationView: View {
       ) {
         Self.toolGroupDigest(group, tools: harness.displayedTools)
       }
-      ToolGroupRow(messages: group, digest: digest)
+      ToolGroupRow(messages: group, rowID: item.id, digest: digest)
         .equatable()
         .id(item.id)
         .dshTranscriptRowFrameIfNeeded(id: item.id, enabled: measureFrames)
@@ -793,9 +809,11 @@ struct ConversationView: View {
   }
 
   nonisolated static func rowVersion(reasoning text: String, live: Bool) -> Int {
+    // Reasoning only grows, so length plus the tail identifies a version. Hashing
+    // the whole text here ran on every body and scaled with the reasoning's size.
     var hasher = Hasher()
     hasher.combine(text.utf8.count)
-    hasher.combine(text.hashValue)
+    for byte in text.utf8.suffix(64) { hasher.combine(byte) }
     hasher.combine(live)
     return hasher.finalize()
   }
@@ -911,6 +929,24 @@ struct ConversationView: View {
         }
       }
       .onHover { pointerInsideTranscript = $0 }
+      // A rebuilt `ScrollView` (its `.id` changed) re-runs the initial bottom
+      // anchor and drops the old offset, which reads as "the page jumped".
+      .onAppear {
+        DSHScrollTrace.log(
+          "scrollViewAppear", before: nil, after: scrollViewBox.contentOffset,
+          contentHeight: scrollViewBox.contentHeight, pinned: pinnedToBottom,
+          gesture: false,
+          extra: "msgs=\(messages.count)"
+            + " ctx=\(String((harness.displayedConversationContextKey ?? "-").prefix(12)))")
+      }
+      .onChange(of: harness.displayedConversationContextKey) { previous, current in
+        DSHScrollTrace.log(
+          "contextKeyChange", before: nil, after: scrollViewBox.contentOffset,
+          contentHeight: scrollViewBox.contentHeight, pinned: pinnedToBottom,
+          gesture: false,
+          extra: "from=\(String((previous ?? "-").prefix(12)))"
+            + " to=\(String((current ?? "-").prefix(12)))")
+      }
       // Distance is bookkeeping only — it must never re-engage the pin by
       // itself. The old `pinned = distance < 80` lost a race during
       // streaming: every auto-scroll zeroed the distance and re-pinned
@@ -945,7 +981,7 @@ struct ConversationView: View {
         if follow, token.shouldFollowTail(comparedTo: previous) {
           // The user's own send is the one path that must scroll immediately, even if a
           // gesture/momentum is still in flight.
-          requestScrollToTail(proxy, force: isOwnSend)
+          requestScrollToTail(proxy, force: isOwnSend, reason: "tail-content")
         }
       }
       // The run settling (or starting without a new message, e.g. a queued
@@ -954,14 +990,14 @@ struct ConversationView: View {
         if DSHConversationScrollPolicy.shouldFollowTail(
           pinned: pinnedToBottom,
           trigger: .runningStateChanged) {
-          requestScrollToTail(proxy)
+          requestScrollToTail(proxy, reason: "running-changed")
         }
       }
       .onChange(of: harness.displayedSteeringItems.map(\.id)) { _, _ in
         if DSHConversationScrollPolicy.shouldFollowTail(
           pinned: pinnedToBottom,
           trigger: .steeringChanged) {
-          requestScrollToTail(proxy)
+          requestScrollToTail(proxy, reason: "steering-changed")
         }
       }
       // Document-space row frames: scroll-invariant, so this fires when rows are
@@ -990,7 +1026,7 @@ struct ConversationView: View {
           previousContentHeight: previous,
           contentHeight: metrics.contentHeight)
         else { return }
-        requestScrollToTail(proxy)
+        requestScrollToTail(proxy, reason: "content-resize")
       }
       // Older pages are prepended incrementally for responsiveness.
       .onChange(of: harness.displayedIsLoadingHistory) { wasLoading, isLoading in
@@ -1009,7 +1045,7 @@ struct ConversationView: View {
         } else if DSHConversationScrollPolicy.shouldFollowTail(
           pinned: pinnedToBottom,
           trigger: .olderHistoryFinished) {
-          requestScrollToTail(proxy)
+          requestScrollToTail(proxy, reason: "older-history-finished")
         }
       }
       // A reader who scrolls up WHILE a batch is in flight must not be dragged back to where the
@@ -1262,21 +1298,37 @@ struct ConversationView: View {
   }
 
   /// Coalesce repeated follow requests in the same render transaction.
-  private func requestScrollToTail(_ proxy: ScrollViewProxy, force: Bool = false) {
+  private func requestScrollToTail(
+    _ proxy: ScrollViewProxy,
+    force: Bool = false,
+    reason: String = "-"
+  ) {
     if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.tailScrollRequests += 1 }
+    // Already at the tail: the scroll would be a no-op. During a running turn the
+    // tail row re-publishes layout metrics ~20x/s, and each publish used to issue
+    // another scroll (2026-10-30: 920 no-op requests in 2.5 minutes).
+    guard force || DSHConversationScrollPolicy.shouldIssueTailScroll(
+      realBottomDistance: scrollViewBox.realBottomDistance) else {
+      if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.tailScrollSuppressed += 1 }
+      return
+    }
     if scrollViewBox.isUserScrolling,
        DSHConversationScrollFollow.mayFollowTail(isInteracting: true, force: force) == false {
-      deferredTailAction = { [proxy] in requestScrollToTail(proxy, force: true) }
+      deferredTailAction = { [proxy] in requestScrollToTail(proxy, force: true, reason: reason) }
       return
     }
     let generation = scrollRequestGeneration + 1
     scrollRequestGeneration = generation
-    DispatchQueue.main.async {
+    let delay = DSHConversationScrollPolicy.tailScrollDelay(
+      sinceLast: ProcessInfo.processInfo.systemUptime - scrollViewBox.lastTailScrollUptime,
+      force: force)
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
       guard generation == scrollRequestGeneration,
             pinnedToBottom,
             harness.displayedSession?.messages.isEmpty == false
       else { return }
       if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.tailScrollExecutions += 1 }
+      scrollViewBox.lastTailScrollUptime = ProcessInfo.processInfo.systemUptime
       let before = scrollViewBox.contentOffset
       var transaction = Transaction()
       transaction.animation = nil
@@ -1288,7 +1340,10 @@ struct ConversationView: View {
       DSHScrollTrace.log(
         "requestScrollToTail", before: before, after: scrollViewBox.contentOffset,
         contentHeight: scrollViewBox.contentHeight, pinned: pinnedToBottom,
-        gesture: scrollViewBox.isUserScrolling, extra: "force=\(force)")
+        gesture: scrollViewBox.isUserScrolling,
+        extra: "reason=\(reason) force=\(force) msgs=\(harness.displayedSession?.messages.count ?? 0)"
+          + " first=\(String((harness.displayedSession?.messages.first?.id.uuidString ?? "-").prefix(8)))"
+          + " ctx=\(String((harness.displayedConversationContextKey ?? "-").prefix(12)))")
     }
   }
 
@@ -1401,6 +1456,14 @@ struct ConversationView: View {
       if message.role == .tool {
         turnGroup = nil
       }
+      // A child-session call is its own card, never merged into a same-name
+      // group: two `subagent` calls in one turn must stay two cards, each
+      // holding its own approval.
+      if message.role == .tool,
+         DSHChildSessionCard.isChildSessionTool(message.text) {
+        items.append(.message(message))
+        continue
+      }
       if message.role == .tool,
          case .toolGroup(var group) = items.last, group[0].text == message.text {
         group.append(message)
@@ -1510,10 +1573,44 @@ enum DSHToolGroupDigestStore {
   }
 }
 
+/// Remembers which command groups the reader opened.
+///
+/// The expansion used to live only in `ToolGroupRow`'s own `@State`. Scrolling
+/// the transcript to the bottom takes the row out of `LazyVStack`'s window and
+/// back, which mounts a NEW row view: `@State` starts over at `initiallyExpanded`
+/// (false), so a group the reader had opened folded itself shut (2026-10-30,
+/// "鼠标滚动到最底部的时候，展开的指令也会被折叠"). Measured on the fixture:
+/// 99 `ToolGroupRow.init` calls in one scroll-to-bottom-and-back pass.
+///
+/// Keyed by the transcript row id (stable per turn), so the state survives
+/// remounting and dies with the row.
+enum DSHToolGroupExpansionStore {
+  private static let lock = NSLock()
+  private static var entries: [String: Bool] = [:]
+
+  static func isExpanded(_ rowID: String, default fallback: Bool) -> Bool {
+    lock.lock(); defer { lock.unlock() }
+    return entries[rowID] ?? fallback
+  }
+
+  static func setExpanded(_ expanded: Bool, rowID: String) {
+    lock.lock(); defer { lock.unlock() }
+    entries[rowID] = expanded
+  }
+
+  static func removeAll() {
+    lock.lock(); defer { lock.unlock() }
+    entries.removeAll(keepingCapacity: true)
+  }
+}
+
 /// One turn's command calls share a single collapsed row: "执行了 N 条命令 · 其中 M 条修改了文件 ›".
 struct ToolGroupRow: View, Equatable {
   @EnvironmentObject var harness: HarnessController
   let messages: [HarnessController.Message]
+  /// Transcript row id, the key that keeps the reader's expansion across the
+  /// `LazyVStack` remounts a scroll causes.
+  let rowID: String
   @State private var expanded: Bool
 
   /// Derived from `digest` in the initializer, NOT read from the environment
@@ -1528,7 +1625,8 @@ struct ToolGroupRow: View, Equatable {
   private let digest: DSHToolGroupDigest?
 
   nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-    lhs.messages.count == rhs.messages.count
+    lhs.rowID == rhs.rowID
+      && lhs.messages.count == rhs.messages.count
       && ConversationView.rowVersion(toolGroup: lhs.messages)
         == ConversationView.rowVersion(toolGroup: rhs.messages)
       && lhs.signature == rhs.signature
@@ -1536,13 +1634,19 @@ struct ToolGroupRow: View, Equatable {
 
   init(
     messages: [HarnessController.Message],
+    rowID: String,
     initiallyExpanded: Bool = false,
     digest: DSHToolGroupDigest?
   ) {
+    if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.toolGroupMounts += 1 }
     self.messages = messages
+    self.rowID = rowID
     self.digest = digest
     self.signature = ConversationView.toolGroupSignature(digest)
-    _expanded = State(initialValue: initiallyExpanded)
+    // Seeded from the store, so a remount resumes the reader's choice instead of
+    // folding the group back up.
+    _expanded = State(initialValue: DSHToolGroupExpansionStore.isExpanded(
+      rowID, default: initiallyExpanded))
   }
 
   private var activities: [HarnessController.ToolActivity] {
@@ -1574,7 +1678,14 @@ struct ToolGroupRow: View, Equatable {
   }
 
   var body: some View {
-    if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.rowEvaluations += 1 }
+    if DSHTranscriptPerf.isEnabled {
+      DSHTranscriptPerf.rowEvaluations += 1
+      if expanded {
+        DSHTranscriptPerf.groupBodiesExpanded += 1
+      } else {
+        DSHTranscriptPerf.groupBodiesCollapsed += 1
+      }
+    }
     return groupBody
   }
 
@@ -1596,7 +1707,11 @@ struct ToolGroupRow: View, Equatable {
         failed: digest?.isFailed == true,
         interrupted: digest?.isInterrupted == true,
         expanded: expanded,
-        onToggle: { expanded.toggle() },
+        onToggle: {
+          expanded.toggle()
+          DSHToolGroupExpansionStore.setExpanded(expanded, rowID: rowID)
+          if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.groupToggleFlips += 1 }
+        },
         mutating: mutatingCount > 0,
         chip: chipText)
       if expanded, !instructions.isEmpty {
@@ -1642,8 +1757,8 @@ struct WaveBand: Shape {
 }
 
 /// One frame of the miniature app icon (daylight lagoon, breaching whale) at
-/// time `t` — the shared artwork behind the animated running indicator and the
-/// static end-of-turn marker. Shapes and colors come from `SeaArt` /
+/// time `t` — the static end-of-turn marker; `DSHRunningWhaleIcon` animates the
+/// same scene while the turn runs. Shapes and colors come from `SeaArt` /
 /// `SeaWhaleScene`, the single source shared with the floating bubble and the
 /// icon generator; don't inline new constants here.
 /// Drawn at its native 26 pt then scaled to `size`, so nothing needs retuning
@@ -1669,10 +1784,8 @@ private struct WaveIconArt: View {
 /// placeholder bubble; see the composer-consolidation note).
 private struct WaitingWaveIndicator: View {
   var body: some View {
-    TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
-      WaveIconArt(t: context.date.timeIntervalSinceReferenceDate)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
+    DSHRunningWhaleIcon()
+      .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -1993,6 +2106,7 @@ struct ToolCallRow: View {
       }
       ToolGroupRow(
         messages: [message],
+        rowID: "toolcall-\(message.id.uuidString)",
         initiallyExpanded: initiallyExpanded ?? false,
         digest: digest)
     } else if let instruction = instructions.first {

@@ -35,6 +35,8 @@ Agent 推理、工具、MCP、终端、文件系统与子代理仍由 DSH runtim
 - NSOpenPanel 原生工作区入口；已选工作区持久化在 macOS 用户偏好中。
 - 本地任务从所选工作区启动，DSH 可执行终端、读取/修改文件、使用技能及配置好的本地工具。
 - 子代理会话是叠加在对话面板上的独立、实时流式视图（而非插入侧边栏的伪顶层会话），带只读/可续写的可视区分与面包屑导航。
+- 模型想开子会话时，先在对话里出现一张和普通会话一样的卡片：点「新建会话」才会创建，点「在这里做」模型就留在当前会话完成；创建后卡片显示运行状态，点击可进入子会话。一次开多个时逐张询问；完全访问模式不询问。
+- 子会话收在主会话下面，展开即可看到；子会话运行时主会话那一行显示运行线。也可以在右侧仪表盘的子代理卡片上点「新建」，直接把任务交给一个子会话，这时不再重复询问。
 - 可复用的 Agent Profile 可从 Composer、手动运行 Sheet 或已授权的 Agent/Subagent 工具调用，同时派发 DSH、Claude Code、Codex 与 ZCode。后三种外部 Runtime 需要在本机另行安装并完成各自认证。右侧工作台统一展示持久 Batch、成员日志、停止/重试/丢弃、不可变运行快照和主 Agent 选择性整合。
 - 执行成员必须使用独立 Git worktree。每个 Batch 在创建时冻结发起会话的 cwd、sandbox、模型、工具面和 Agent Preset；外部 CLI 经过 DSH sandbox provider，DSH continuable context 则复用 worktree 直到采纳或丢弃。
 - 审批和提问弹窗会标明来自哪个会话；回合失败、中断或达到上限时，原因直接写进对话，被中断的工具显示「已中断」。
@@ -100,6 +102,9 @@ open "dist/DeepSeek Harness.app"
 ```bash
 # 快速、无副作用的原生契约检查：编译全部生产 Swift 源码和 RPC 编码 fixture。
 ./scripts/test-macos-native.sh
+
+# 改完代码的常用检查：设计系统检查 + 构建并运行单元测试，跳过界面脚本（约 2 分钟）。
+./scripts/test-macos-native.sh --quick
 
 # 打包后运行：在临时 DSH_HOME 启动内置 Host，并检查读写与 Agent 平台路径。
 ./scripts/build-macos-app.sh

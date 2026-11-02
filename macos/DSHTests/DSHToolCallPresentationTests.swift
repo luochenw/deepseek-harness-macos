@@ -399,6 +399,7 @@ private func renderSnapshot(
         if case .toolGroup(let group) = item {
           ToolGroupRow(
             messages: group,
+            rowID: item.id,
             initiallyExpanded: expandGroups,
             digest: ConversationView.toolGroupDigest(
               group, tools: harness.displayedTools))

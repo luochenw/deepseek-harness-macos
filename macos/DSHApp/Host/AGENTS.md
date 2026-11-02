@@ -7,6 +7,7 @@ Invariants (each must cite a Note or test):
 - Never pick a same-named cookie out of the shared store, or multiple loopback Hosts cross over to a stale port — source: `architecture/2026-08-28-dsh-0.2-protocol-migration.md` ("不能再从全局 cookie 存储挑选同名 cookie").
 - Request payloads are always `{args:{...}}` and responses are validated by `rpcId` — source: `architecture/2026-08-28-dsh-0.2-protocol-migration.md` ("{args:{...}}").
 - A single `/api/remote.mux` carries `$events`, `workspace/follow`, `session/control` and root/subagent `session/follow` — source: `architecture/2026-08-28-dsh-0.2-protocol-migration.md` ("remote.mux").
+- An `approval/request` for `subagent` / `subagent_fork` is routed to the transcript card instead of `pendingApproval`, and keeps its `callId` — source: `macos/DSHTests/DSHChildSessionCardTests.swift` ("Child card: state follows approval, result and catalog").
 - A follow first frame carries one message and one turn; full history goes through plain `session/page` because a WebSocket message has a size cap — source: `bug-fix/2026-10-23-progressive-large-session-history.md`.
 - Supervision allows at most 5 restarts in 300s, backs off 1/2/4/8/16s, clears after stability and latches give-up past the cap; callbacks from an older generation are dropped — source: `feature/2026-10-27-external-agent-bridge.md`.
 Before reporting done: `./scripts/test-macos-native.sh` and `./scripts/verify-native-host-api.sh <App>`.

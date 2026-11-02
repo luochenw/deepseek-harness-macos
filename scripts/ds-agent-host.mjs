@@ -357,6 +357,117 @@ export function projectionsState(value) {
  * failed handshake all mean "not available" — the caller falls back to
  * headless, and `--host` reports the specific `reason`/`detail`.
  */
+/// Tools that create a new child session; the only approvals an external
+/// client may answer on the user's behalf for one run.
+export const CHILD_SESSION_TOOLS = ['subagent', 'subagent_fork'];
+
+/**
+ * Whether one forwarded approval is the child-session ask this run may answer.
+ * Restricted to the run's own Session and to the two child-session tools: the
+ * grant is for this task, not a standing permission.
+ */
+export function isChildSessionApproval(frame, { sessionId } = {}) {
+  if (frame?.type !== 'waterfall' || frame.event !== 'approval/request') return false;
+  if (typeof sessionId === 'string' && sessionId !== '' && frame.agentId !== sessionId) return false;
+  const toolName = frame.request?.toolName;
+  return typeof toolName === 'string' && CHILD_SESSION_TOOLS.includes(toolName);
+}
+
+/**
+ * Answer child-session approvals for one Session while its turn runs.
+ *
+ * A forwarded approval may only be answered by a Peer admitted with
+ * `interactions=answer` — the plain `?token` handshake installs a browser
+ * cookie, which the gateway refuses to take a decision from. So this performs
+ * the `/connect?token=…&interactions=answer` exchange, holds one `$events`
+ * stream on `/api/remote.mux`, and answers only the asks
+ * {@link isChildSessionApproval} accepts. Every other approval is left alone:
+ * the App (or any other answering peer) still decides it.
+ *
+ * @returns {{stop: () => void, answered: string[], failures: string[]}}
+ */
+export async function openChildSessionApprover({
+  baseURL,
+  token,
+  sessionId,
+  fetchImpl = globalThis.fetch,
+  WebSocketImpl = globalThis.WebSocket,
+  onWarning = () => {},
+} = {}) {
+  if (typeof WebSocketImpl !== 'function') throw new HostUnavailableError('当前 Node 没有 WebSocket，无法代为回复审批');
+  const response = await fetchImpl(`${baseURL}/connect?token=${encodeURIComponent(token)}&interactions=answer`, {
+    redirect: 'manual',
+    signal: AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS),
+  });
+  if (response.status !== 302) {
+    await response.text().catch(() => {});
+    throw new HostUnavailableError(`无法建立审批应答通道：/connect 返回 HTTP ${response.status}`);
+  }
+  const cookie = parseAuthCookie(response);
+  if (!cookie) {
+    await response.text().catch(() => {});
+    throw new HostUnavailableError('无法建立审批应答通道：/connect 未返回 dsh-auth cookie');
+  }
+  const answered = [];
+  const failures = [];
+  const socket = new WebSocketImpl(`${baseURL.replace(/^http/u, 'ws')}/api/remote.mux`, {
+    headers: { cookie },
+  });
+  let clientId = null;
+  let stopped = false;
+  const answer = async (eventId, value) => {
+    const rpcId = randomUUID();
+    const result = await fetchImpl(`${baseURL}/api/$events/result`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        type: 'client-request',
+        rpcId,
+        method: '$events/result',
+        payload: { args: { clientId, eventId, outcome: { kind: 'result', value } } },
+      }),
+      signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
+    });
+    if (!result.ok) failures.push(`$events/result HTTP ${result.status}`);
+    await result.text().catch(() => {});
+  };
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'open', streamId: randomUUID(), endpoint: '$events', payload: { args: {} } }));
+  });
+  socket.addEventListener('message', (message) => {
+    let frame;
+    try {
+      frame = JSON.parse(String(message.data));
+    } catch {
+      return;
+    }
+    if (frame?.type === 'item' && frame.value?.type === 'ready') {
+      clientId = frame.value.clientId;
+      return;
+    }
+    if (stopped || clientId === null || !isChildSessionApproval(frame.value ?? frame, { sessionId })) return;
+    answered.push(frame.value?.eventId ?? frame.eventId ?? '');
+    answer(frame.value?.eventId ?? frame.eventId, 'allowed-once').catch((error) => {
+      failures.push(error instanceof Error ? error.message : String(error));
+    });
+  });
+  socket.addEventListener('error', () => {
+    if (!stopped) onWarning('审批应答通道连接失败，子会话将等待 App 里的确认');
+  });
+  return {
+    answered,
+    failures,
+    stop() {
+      stopped = true;
+      try {
+        socket.close();
+      } catch {
+        /* already closed */
+      }
+    },
+  };
+}
+
 export async function detectHost({ home, fetchImpl = globalThis.fetch } = {}) {
   const { record, problem, detail } = readHostState(home);
   if (!record) return { available: false, reason: problem, detail };

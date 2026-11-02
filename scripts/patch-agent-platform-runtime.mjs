@@ -38,6 +38,24 @@ async function assertPackageVersion(runtimeRoot, name, expectedVersion) {
   }
 }
 
+/// Anchor the child-session guard row above the preset registry. Anchoring, not
+/// appending, keeps the patch fail-closed: if a future runtime drops that row
+/// the patch errors instead of shipping an app where child sessions are gated
+/// by nothing at all.
+const childSessionGuardAnchor = `- insert:
+    - id: agent-preset-registry`;
+
+function addChildSessionGuard(source) {
+  if (source.includes("@dsh-app/dsh-tool-child-session-guard")) return source;
+  const row = `# Asks the user before the model opens a new child session.
+- insert:
+    - id: dsh-tool-child-session-guard
+      name: '@dsh-app/dsh-tool-child-session-guard'
+
+`;
+  return replaceOnce(source, childSessionGuardAnchor, row + childSessionGuardAnchor, "child-session guard row");
+}
+
 export async function patchRuntime(runtimeRoot) {
   const manifestPath = path.join(runtimeRoot, "package.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
@@ -86,11 +104,15 @@ export async function patchRuntime(runtimeRoot) {
     - id: dsh-tool-workbench
       name: '@dsh-app/dsh-tool-workbench'`);
     }
-    if (additions.length === 0) return source;
-    return `${source.trimEnd()}
+    if (additions.length === 0) {
+      // Still runs the child-session row below, so an existing installation
+      // picks the guard up without re-adding the other two rows.
+      return addChildSessionGuard(source);
+    }
+    return addChildSessionGuard(`${source.trimEnd()}
 
 ${additions.join("\n\n")}
-`;
+`);
   });
 }
 

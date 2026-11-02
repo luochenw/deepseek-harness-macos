@@ -9,7 +9,7 @@ struct NativeDashboard: View {
       if let notice = harness.runNotice { RunNoticeCard(text: notice) }
       if !harness.displayedTodos.isEmpty { TodoCard(items: harness.displayedTodos) }
       if !harness.displayedTools.isEmpty { JobCard(items: harness.displayedTools) }
-      if !harness.subagents.isEmpty || !harness.subagentPath.isEmpty { SubagentCard(items: harness.subagents) }
+      if harness.canCreateChildSession || !harness.subagents.isEmpty || !harness.subagentPath.isEmpty { SubagentCard(items: harness.subagents) }
       if !harness.workflows.isEmpty { WorkflowCard(items: harness.workflows) }
       if !harness.skills.isEmpty { SkillsCard(items: harness.skills) }
     }
@@ -66,11 +66,19 @@ private struct JobCard: View {
 private struct SubagentCard: View {
   @EnvironmentObject var harness: HarnessController
   let items: [DSHSubagentEntry]
+  @State private var composing = false
   var body: some View {
     VStack(alignment: .leading, spacing: DSHSpace.s2) {
       HStack {
         HStack(spacing: DSHSpace.s2) { Image(systemName: "person.3").foregroundStyle(DSHTheme.inkFaint); Text("子代理").dshSectionLabel() }
         Spacer()
+        if harness.canCreateChildSession {
+          Button("新建") { composing = true }
+            .buttonStyle(.dshSecondary)
+            .popover(isPresented: $composing, arrowEdge: .bottom) {
+              NewChildSessionPanel { composing = false }.environmentObject(harness)
+            }
+        }
         Button("完整树", action: { harness.showSubagentTree = true }).buttonStyle(.dshSecondary)
         if !harness.subagentPath.isEmpty { Button("返回上级", action: harness.navigateUpSubagent).buttonStyle(.dshSecondary) }
       }

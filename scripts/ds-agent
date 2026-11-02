@@ -15,6 +15,8 @@
 //   ds-agent --timeout 30m "task"       give up waiting after 30 minutes
 //   ds-agent --attach <session> "…"     follow a Session without prompting
 //   ds-agent --attach <session> --request-id <id>
+//   ds-agent --allow-child-sessions "…" let this run open child sessions
+//                                        without asking (Host mode only)
 //
 // Waiting is unbounded by default: a model turn ends when it ends. `--timeout`
 // (`90s` / `30m` / `2h`, or a plain millisecond count) makes the CLI stop
@@ -33,6 +35,7 @@ import {
   HostUnavailableError,
   abortOwnTurn,
   attachToTurn,
+  openChildSessionApprover,
   parseDuration,
   resolveDSHHome,
   runHostTask,
@@ -56,6 +59,10 @@ const HELP = `用法：ds-agent [选项] "任务"
   --timeout <时长>       最多等待多久，例如 90s / 30m / 2h 或毫秒数（默认不限）
   --attach <id>         不发送新任务，跟随该会话的回合并输出其回复（只走 Host）
   --request-id <id>     --attach 时精确接回某一次 prompt 的回合
+  --allow-child-sessions
+                        本次任务允许模型直接开子会话（只对这次任务的会话、只对
+                        subagent / subagent_fork 自动同意，仅 Host 模式支持；
+                        只在本进程存活时生效，--attach 接回时要再带一次）
   -h, --help            显示本帮助
 
 环境变量：DSH_HOME、DSH_APP、DS_PROVIDER、DS_MODEL、DS_EFFORT、
@@ -83,6 +90,7 @@ function parseArgs(argv) {
     requestId: undefined,
     timeoutMs: undefined,
     sessionId: undefined,
+    allowChildSessions: false,
     taskParts: [],
     readStdin: false,
     // dsh-only flags. They are replayed verbatim (with their values) on the
@@ -117,6 +125,10 @@ function parseArgs(argv) {
     }
     if (arg === '--headless') {
       options.headless = true;
+      continue;
+    }
+    if (arg === '--allow-child-sessions') {
+      options.allowChildSessions = true;
       continue;
     }
     if (arg === '-h' || arg === '--help') {
@@ -168,6 +180,12 @@ function parseArgs(argv) {
     throw new UsageError('--request-id 只能配合 --attach 使用');
   }
   if (options.attach && options.headless) throw new UsageError('--attach 只支持 Host 模式');
+  // The flag rides on the Host's forwarded approvals; the headless profile has
+  // no answering peer at all, so silently accepting it there would promise a
+  // permission that cannot be delivered.
+  if (options.allowChildSessions && (options.headless || options.unknownFlags.length > 0)) {
+    throw new UsageError('--allow-child-sessions 只支持 Host 模式');
+  }
   if (options.attach && options.taskParts.length > 0) {
     throw new UsageError('--attach 不接受任务文本（它不发送新 prompt）');
   }
@@ -275,6 +293,8 @@ async function runHost(options, client) {
   process.on('SIGINT', () => cancel('SIGINT'));
   process.on('SIGTERM', () => cancel('SIGTERM'));
 
+  const approver = childSessionApprover(options, client);
+
   let result;
   try {
     result = await runHostTask(client, {
@@ -286,6 +306,7 @@ async function runHost(options, client) {
       timeoutMs: resolveTimeoutMs(options),
       onSession: (session) => {
         activeSessionId = session.sessionId;
+        approver.start(session.sessionId);
         if (json) writeJson({ type: 'session', ...session });
       },
       // Announced once the Host accepted the prompt: the `session` line has to
@@ -301,15 +322,48 @@ async function runHost(options, client) {
   } catch (error) {
     reportUnfinishedWait(error, { sessionId: activeSessionId, requestId: options.attach ? options.requestId : requestId });
     throw error;
+  } finally {
+    await approver.stop();
   }
   activeSessionId = result.sessionId;
   emitFinal(options, result);
+}
+
+/**
+ * `--allow-child-sessions`: answer this run's child-session approvals so the
+ * model can delegate without stopping on a card. Scoped to one Session and to
+ * the two child-session tools (see `isChildSessionApproval`). The grant lasts
+ * only as long as this process, so a resumed lead needs it on `--attach` too.
+ */
+function childSessionApprover(options, client) {
+  let opening = null;
+  return {
+    start(sessionId) {
+      if (!options.allowChildSessions || opening !== null) return;
+      opening = openChildSessionApprover({
+        baseURL: client.baseURL,
+        token: client.token,
+        sessionId,
+        onWarning: (message) => log(message),
+      }).catch((error) => {
+        // Report and keep going: the card in the App still works, it just needs
+        // the user instead of answering itself.
+        log(`无法自动同意子会话：${error.message}`);
+        return null;
+      });
+    },
+    async stop() {
+      (await opening)?.stop();
+    },
+  };
 }
 
 /** `--attach`: follow an existing Session, print the same first/last lines. */
 async function runAttach(options, client) {
   const json = options.json;
   if (json) writeJson({ type: 'session', sessionId: options.sessionId, requestId: options.requestId, via: 'host', attach: true });
+  const approver = childSessionApprover(options, client);
+  approver.start(options.sessionId);
   let result;
   try {
     result = await attachToTurn(client, {
@@ -322,6 +376,8 @@ async function runAttach(options, client) {
   } catch (error) {
     reportUnfinishedWait(error, { sessionId: options.sessionId, requestId: options.requestId });
     throw error;
+  } finally {
+    await approver.stop();
   }
   emitFinal(options, result);
 }
@@ -396,6 +452,11 @@ async function main() {
   }
 
   if (selection.mode === 'headless') {
+    // The headless profile has no answering peer: the flag would promise a
+    // permission that cannot be delivered, and dsh itself does not know it.
+    if (options.allowChildSessions) {
+      throw new UsageError('--allow-child-sessions 需要 App Host；headless 运行时不支持');
+    }
     // Say WHY the Host was skipped when the file existed but was unusable —
     // silent fallback hid a mistyped/hostile baseURL before.
     if (selection.reason === 'handshake-failed') {
