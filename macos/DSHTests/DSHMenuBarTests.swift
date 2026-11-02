@@ -236,7 +236,7 @@ private func testTurnEndKeepsAttentionFromAnotherSession() throws {
 
     // Session A is waiting on an approval while session B is running.
     harness.pendingApproval = HarnessController.PendingApproval(
-      id: "a1", rpcId: "a1", sessionId: "A", toolName: "shell", reason: nil)
+      id: "a1", rpcId: "a1", sessionId: "A", toolName: "shell", reason: nil, callId: nil)
     harness.isRunning = true
     drainMainQueue(harness.nativeAlerts)
     try expectEqual(written.last ?? nil, "!")

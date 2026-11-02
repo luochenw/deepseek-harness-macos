@@ -340,6 +340,7 @@ extension HarnessController {
       consumeRemoteWaterfall(frame)
     case "cancel":
       guard let eventID = frame["eventId"] as? String else { return }
+      childSessionPrompts.retract(approvalId: eventID)
       queuedApprovals.removeAll { $0.rpcId == eventID }
       queuedQuestions.removeAll { $0.rpcId == eventID }
       if pendingApproval?.rpcId == eventID {
@@ -436,9 +437,9 @@ extension HarnessController {
         rpcId: eventID,
         sessionId: sessionID,
         toolName: toolName,
-        reason: request["reason"] as? String)
-      if pendingApproval == nil { pendingApproval = approval } else { queuedApprovals.append(approval) }
-      nativeAlerts.notifyApprovalNeeded(toolName: toolName)
+        reason: request["reason"] as? String,
+        callId: request["callId"] as? String)
+      queueApproval(approval, request: request)
     case "user-questions/request":
       guard let rawQuestions = request["questions"] as? [[String: Any]] else { return }
       let items = rawQuestions.compactMap { value -> PendingQuestion.Item? in
@@ -575,18 +576,21 @@ extension HarnessController {
         Task { try? await hostEvents?.eventResult(eventID: rpcId, value: "allowed-once") }
         return
       }
-      let approval = PendingApproval(id: approvalId, rpcId: rpcId, sessionId: sessionId, toolName: toolName, reason: frame["reason"] as? String)
-      // A second request while one is already showing used to silently
-      // overwrite `pendingApproval`, leaving the first's RPC unanswered
-      // forever — queue instead, see the reconcile-parallel-redesigns note.
-      if pendingApproval == nil { pendingApproval = approval } else { queuedApprovals.append(approval) }
-      nativeAlerts.notifyApprovalNeeded(toolName: toolName)
+      let approval = PendingApproval(
+        id: approvalId,
+        rpcId: rpcId,
+        sessionId: sessionId,
+        toolName: toolName,
+        reason: frame["reason"] as? String,
+        callId: frame["callId"] as? String)
+      queueApproval(approval, request: frame)
     case "approval/resolved":
       // Another client (or a Host-side timeout) settled it — retract it
       // from whichever of the shown slot / backlog it's sitting in.
       if let approvalId = frame["approvalId"] as? String {
         if pendingApproval?.id == approvalId { pendingApproval = queuedApprovals.isEmpty ? nil : queuedApprovals.removeFirst() }
         else { queuedApprovals.removeAll { $0.id == approvalId } }
+        childSessionPrompts.retract(approvalId: approvalId)
         refreshAttentionBadge()
       }
     case "question/requested":

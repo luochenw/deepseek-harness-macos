@@ -1,6 +1,6 @@
 # Sidebar — agent rules
-Scope: the session list only — project grouping and folding, the 5-row preview, row selection and running markers, and the converged Host status line. Does not show workspace switching and does not send RPC directly.
-Key files: `SidebarView.swift` (list, selection, Host status, primary New Session action), `SidebarSessionGroupView.swift` (per-project folding and the 5-row preview).
+Scope: the session list only — project grouping and folding, the 5-row preview, subagent nesting, row selection and running markers, and the converged Host status line. Does not show workspace switching. Does not send RPC directly, with one exception: `openSidebarSubagent` reads the parent's `subagents` catalogue, because opening a child requires the catalogue entry that `openSubagent` takes.
+Key files: `SidebarView.swift` (list, selection, Host status, primary New Session action), `SidebarSessionGroupView.swift` (per-project folding and the 5-row preview), `SidebarSessionSubagents.swift` (subagent nesting under the parent row and opening a child).
 Invariants (each must cite a Note or test):
 - Each project renders 5 sessions by default plus every running session past them, and the fold control only appears when collapsing would actually hide rows — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar session paging never folds a running session", "Sidebar fold control hidden when collapsing removes nothing").
 - Fold state lives only in the current app session; a restart returns to the 5-row default — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar session paging defaults to five and expands all").
@@ -10,7 +10,16 @@ Invariants (each must cite a Note or test):
 - The running line keeps the transcript's 1.2pt geometry and Reduce Motion cut-out — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar running line keeps its geometry and Reduce Motion cut-out").
 - The 13pt gutter is unread-only; running does not claim it — source: `scripts/test-design-system.sh` ("selected and running sessions need distinct lightweight treatments").
 - Rows are keyed by session identity, never by list position — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar visible rows keep session identity across an insert").
-Before reporting done: `./scripts/test-design-system.sh` and `./scripts/test-macos-native.sh --unit`.
+- A session with `origin == "subagent"` whose `parentSessionId` is a listed session is not a top-level row; it nests under that parent and shows as an indented row when the parent's 「N 个子会话」 control is expanded — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar subagents nest under their parent row").
+- Only `origin == "subagent"` nests: a fork (empty origin, parentSessionId set) stays a top-level peer row — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar fork is not collapsed as a subagent").
+- A subagent whose parent is missing from the list falls back to a top-level row in its project group instead of disappearing — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar orphaned subagent falls back to a top-level row", "Sidebar orphaned subagent rejoins its project group").
+- Nesting is exactly one level: a subagent of a subagent also falls back to a top-level row, because a child row renders no children of its own — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar grandchild subagent stays visible").
+- The 5-row preview and the 「展开其余 N 个」 count cover top-level rows only; subagent rows never count towards them — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar subagent rows do not count towards folding").
+- An orphaned subagent re-joins its project in three passes — exact workspace path, then directory-name bucket, then the flat bucket — never the first group that merely matches a name — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar orphan prefers its named bucket over the flat one", "Sidebar same-named folders match the exact path").
+- Exactly one row carries the selection highlight: the open child while its child rows are drawn, otherwise its parent, so folding the list never leaves nothing selected — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar selection follows the visible row").
+- A subagent catalogue read is guarded by a generation, so clicking child A then B under the same parent keeps B even if A answers last — source: `DSHSubagentProjection.swift` (`beginSubagentCatalogLoad` / `acceptsSubagentCatalogLoad`), called from `openSidebarSubagent`.
+- A parent row shows the running line while any of its subagents runs, even if the parent itself is idle — source: `macos/DSHTests/DSHSidebarTests.swift` ("Sidebar running subagent keeps the parent row active").
+Before reporting done: `./scripts/test-design-system.sh` and `./scripts/test-macos-native.sh --quick`.
 Pitfalls:
 - A selected session past the fifth row is invisible to a user who has not expanded that project — source: `feature/2026-10-21-sidebar-project-session-folding.md`.
 - Expanding a very large project adds noticeable sidebar layout work — source: `feature/2026-10-21-sidebar-project-session-folding.md`.

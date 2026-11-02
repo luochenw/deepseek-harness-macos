@@ -8,9 +8,11 @@ Invariants (each must cite a Note or test):
 - Whether the view follows the tail is decided by the pin alone; after the user scrolls up no trigger may follow — source: `macos/DSHTests/DSHConversationScrollStabilityTests.swift` ("Scroll policy follows the tail only while pinned").
 - Row frames are measured in the ScrollView's document coordinate space, and the bar locates the real scroll view by coverage — source: `macos/DSHTests/DSHConversationScrollStabilityTests.swift` ("Scroll policy rejects viewport-space row frames").
 - The row-height cache serves settled rows only; streaming and collapsed rows neither read nor write it — source: `macos/DSHTests/DSHTranscriptRowHeightTests.swift` ("Row height policy opts streaming and collapsed rows out of the cache").
+- A `subagent` / `subagent_fork` call renders as `ChildSessionPromptCard`, stays its own row (never folded into a same-name group), and its approval never reaches `ApprovalSheet` — source: `macos/DSHTests/DSHChildSessionCardTests.swift` ("Child card: each delegation keeps its own transcript row", "Child card: parallel cards stay keyed by call id").
 - A tool group's digest is computed once per layout by the parent, cached by a hash of every call's raw input, and passed to `ToolGroupRow`; the row's body never classifies commands — source: `macos/DSHTests/DSHTranscriptGroupExpansionTests.swift` ("Expand: body classifies each command at most once", "Expand: late arguments refresh the mutation count").
 Before reporting done: `./scripts/test-reasoning-ui.sh`, `./scripts/test-tool-presentation-ui.sh`, `./scripts/test-attachment-rail-ui.sh`, `./scripts/test-macos-native.sh --unit`.
 Pitfalls:
+- Parallel child-session calls ask one at a time: dsh runs pre-execute serially, so the second card only appears after the first is answered — source: `feature/2026-10-30-child-session-prompt-card.md`.
 - The golden tests are inherently brittle on CI (offscreen window, fixed run-loop duration) — source: `bug-fix/2026-10-28-interrupted-turn-blank-band.md`.
 - `ToolGroupRow.==` must not read `@EnvironmentObject`; the comparison has to be a pure value check — source: `bug-fix/2026-10-28-interrupted-turn-blank-band.md`.
 - Measurement switches exist only under `#if DEBUG`; Release keeps them `false` — source: `bug-fix/2026-10-28-interrupted-turn-blank-band.md`.

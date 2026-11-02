@@ -582,22 +582,38 @@ struct ConversationView: View {
           isCollapsible: true,
           isEmpty: trace.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     case .message(let message):
-      MessageBubble(
-        message: message,
-        isFeedbackAnchor: item.id == feedbackAnchorID)
-        .equatable()
-        .id(item.id)
-        .dshTranscriptRowFrameIfNeeded(id: item.id, enabled: measureFrames)
-        .onAppear { if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.rowAppearances += 1 } }
-        .dshTranscriptCachedHeight(
-          id: item.id,
-          version: Self.rowVersion(message: message),
-          width: width,
-          estimate: DSHTranscriptRowEstimate.messageHeight(message, width: width),
-          // The streamed reply grows within one row id; its measured height is a frame of a moving
-          // target, never a stable minimum.
-          isLive: Self.isStreamingRow(message, isRunning: isRunning),
-          isEmpty: Self.isEmptyBody(message))
+      // A child-session call is a session row, not an execution row: it carries
+      // the confirmation (or the child's live state) instead of tool output.
+      if message.role == .tool, DSHChildSessionCard.isChildSessionTool(message.text) {
+        ChildSessionPromptCard(prompts: harness.childSessionPrompts, message: message)
+          .id(item.id)
+          .dshTranscriptRowFrameIfNeeded(id: item.id, enabled: measureFrames)
+          // The card's own state changes its height (a question is taller than
+          // a session row), so it stays out of the settled-row height cache.
+          .dshTranscriptCachedHeight(
+            id: item.id,
+            version: 0,
+            width: width,
+            estimate: DSHTranscriptRowEstimate.toolStatusRowHeight(accessory: true),
+            isCollapsible: true)
+      } else {
+        MessageBubble(
+          message: message,
+          isFeedbackAnchor: item.id == feedbackAnchorID)
+          .equatable()
+          .id(item.id)
+          .dshTranscriptRowFrameIfNeeded(id: item.id, enabled: measureFrames)
+          .onAppear { if DSHTranscriptPerf.isEnabled { DSHTranscriptPerf.rowAppearances += 1 } }
+          .dshTranscriptCachedHeight(
+            id: item.id,
+            version: Self.rowVersion(message: message),
+            width: width,
+            estimate: DSHTranscriptRowEstimate.messageHeight(message, width: width),
+            // The streamed reply grows within one row id; its measured height is a frame of a moving
+            // target, never a stable minimum.
+            isLive: Self.isStreamingRow(message, isRunning: isRunning),
+            isEmpty: Self.isEmptyBody(message))
+      }
     case .toolGroup(let group):
       // One digest pass per layout: the row's line AND its `==` signature both
       // come from it. Two passes here would double the per-frame classification
@@ -1433,6 +1449,14 @@ struct ConversationView: View {
       // preceding row with the same name joins.
       if message.role == .tool {
         turnGroup = nil
+      }
+      // A child-session call is its own card, never merged into a same-name
+      // group: two `subagent` calls in one turn must stay two cards, each
+      // holding its own approval.
+      if message.role == .tool,
+         DSHChildSessionCard.isChildSessionTool(message.text) {
+        items.append(.message(message))
+        continue
       }
       if message.role == .tool,
          case .toolGroup(var group) = items.last, group[0].text == message.text {

@@ -29,6 +29,8 @@ struct ContentView: View {
     .sheet(item: $harness.manualAgentProfile) { profile in
       AgentManualRunSheet(profile: profile)
     }
+    // Child-session approvals are answered by the transcript card instead.
+    // The router never puts them in `pendingApproval`, so this cannot double-show.
     .sheet(item: $harness.pendingApproval) { approval in ApprovalSheet(approval: approval) }
     .sheet(item: $harness.pendingQuestion) { question in QuestionBatchSheet(question: question) }
   }

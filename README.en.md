@@ -32,6 +32,8 @@ Agent reasoning, tools, MCP, terminal, filesystem, and subagents are still provi
 - Native `NSOpenPanel` workspace entry; the chosen workspace persists in macOS user defaults.
 - Local tasks run from the selected workspace — DSH can execute a terminal, read/write files, use skills, and use configured local tools.
 - Subagent transcripts are a dedicated, live-streaming overlay on the conversation pane (not a synthetic top-level session), with a visible read-only/continuable distinction and breadcrumb navigation.
+- When the model wants a child session, a card styled like a normal session row appears in the transcript first: 「新建会话」 creates it, 「在这里做」 keeps the work in the current session. Once created, the card shows its running state and opens the child session. Several at once are asked one by one; full-access mode does not ask.
+- Child sessions nest under their parent in the sidebar, and the parent row shows the running line while any of them runs. The dashboard's subagent card also has a 新建 button that hands a task straight to a child session without asking again.
 - Reusable Agent Profiles dispatch DSH, Claude Code, Codex, and ZCode together from the composer, a manual run sheet, or an authorized Agent/Subagent tool call. The three external runtimes must be installed and authenticated separately on the Mac. Dedicated right-workbench tabs show durable Batches, member logs, stop/retry/discard actions, immutable runtime snapshots, and selective root-Agent integration.
 - Execution members require isolated Git worktrees. Each Batch freezes the initiating session's cwd, sandbox mode, model, tool surface, and Agent Preset; external CLIs run through DSH's sandbox provider, while continuable DSH contexts reuse their worktree until adoption or discard.
 - A Dock icon badge and system notifications for approval requests, agent questions, and turn completion — capability a browser tab structurally can't provide. The badge shows "!" while any session waits on an approval or question, "•" while work is running, and nothing when idle; after closing the window, click the Dock icon to reopen it. (The menu bar item was removed to avoid a macOS 27 beta system crash.)
@@ -96,6 +98,9 @@ This repo deliberately has no Xcode or SwiftPM test project — production build
 ```bash
 # Fast, side-effect-free native contract check: compiles every production Swift source + RPC-encoding fixtures.
 ./scripts/test-macos-native.sh
+
+# The everyday check after a code change: design-system checks plus unit tests, without the UI scripts (about 2 minutes).
+./scripts/test-macos-native.sh --quick
 
 # After a build: starts the bundled Host in a temp DSH_HOME and checks read/write and Agent-platform paths.
 ./scripts/build-macos-app.sh

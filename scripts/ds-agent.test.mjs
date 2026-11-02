@@ -26,7 +26,9 @@ import {
   claimWithBackfill,
   detectHost,
   isProcessAlive,
+  isChildSessionApproval,
   lastTurnAssistantText,
+  openChildSessionApprover,
   parseAuthCookie,
   parseHostBaseURL,
   readHostRecord,
@@ -1735,4 +1737,141 @@ test('default timeout is 0 (wait forever) and ignores the environment', async ()
   // The CLI computes it from the flag or DS_AGENT_TIMEOUT_MS; the exported
   // constant must be the "no limit" default the help text promises.
   assert.equal(DEFAULT_TIMEOUT_MS, 0);
+});
+
+// ── --allow-child-sessions ──────────────────────────────────────────────────
+//
+// The grant is deliberately narrow: this run's Session, and only the two tools
+// that open a child session. Everything else stays a human decision.
+
+test('child-session approvals are only the two tools, only this Session', () => {
+  const ask = (overrides = {}) => ({
+    type: 'waterfall',
+    event: 'approval/request',
+    eventId: 'event-1',
+    agentId: 'session-ours',
+    request: { toolName: 'subagent', callId: 'call-1', reason: '想开子会话' },
+    ...overrides,
+  });
+
+  assert.equal(isChildSessionApproval(ask(), { sessionId: 'session-ours' }), true);
+  assert.equal(
+    isChildSessionApproval(
+      ask({ request: { toolName: 'subagent_fork' } }),
+      { sessionId: 'session-ours' }),
+    true);
+
+  // Another Session's ask is none of this run's business.
+  assert.equal(isChildSessionApproval(ask(), { sessionId: 'session-other' }), false);
+  // Not the child-session tools: sandbox escalation and every other ask stays human.
+  for (const toolName of ['bash', 'write', 'send_message', 'interrupt_agent']) {
+    assert.equal(
+      isChildSessionApproval(ask({ request: { toolName } }), { sessionId: 'session-ours' }),
+      false,
+      `${toolName} must never be auto-answered`);
+  }
+  // A broadcast/other forwarded event is not an ask.
+  assert.equal(isChildSessionApproval(ask({ type: 'emit' })), false);
+  assert.equal(isChildSessionApproval(ask({ event: 'agent-preset/selected' })), false);
+  assert.equal(isChildSessionApproval(null), false);
+});
+
+test('the approver answers only matching asks and needs an answering peer', async () => {
+  const sockets = [];
+  const http = [];
+  class FakeSocket {
+    constructor(url, options) {
+      this.url = url;
+      this.options = options;
+      this.handlers = {};
+      sockets.push(this);
+      queueMicrotask(() => this.handlers.open?.());
+    }
+    addEventListener(name, handler) { this.handlers[name] = handler; }
+    send(text) { this.sent = JSON.parse(text); }
+    close() { this.closed = true; }
+    emit(frame) { this.handlers.message?.({ data: JSON.stringify(frame) }); }
+  }
+  const fetchImpl = async (url, options = {}) => {
+    http.push({ url, options });
+    if (url.includes('/connect?')) {
+      return {
+        status: 302,
+        headers: { getSetCookie: () => ['dsh-auth-test=abc; Path=/'] },
+        text: async () => '',
+      };
+    }
+    return { ok: true, status: 200, text: async () => '{"type":"server-response"}' };
+  };
+
+  const approver = await openChildSessionApprover({
+    baseURL: 'http://127.0.0.1:1234',
+    token: 'launch',
+    sessionId: 'session-ours',
+    fetchImpl,
+    WebSocketImpl: FakeSocket,
+  });
+  // A plain ?token handshake would mint a browser cookie the gateway refuses to
+  // take a forwarded-event result from, so the answer-capable exchange is what
+  // makes this feature possible at all.
+  assert.match(http[0].url, /\/connect\?token=launch&interactions=answer/u);
+  assert.equal(sockets[0].options.headers.cookie, 'dsh-auth-test=abc');
+  assert.equal(sockets[0].sent.endpoint, '$events');
+
+  const socket = sockets[0];
+  socket.emit({ type: 'item', value: { type: 'ready', clientId: 'client-1' } });
+  socket.emit({
+    type: 'waterfall',
+    event: 'approval/request',
+    eventId: 'event-child',
+    agentId: 'session-ours',
+    request: { toolName: 'subagent', callId: 'call-1' },
+  });
+  socket.emit({
+    type: 'waterfall',
+    event: 'approval/request',
+    eventId: 'event-bash',
+    agentId: 'session-ours',
+    request: { toolName: 'bash', callId: 'call-2' },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.deepEqual(approver.answered, ['event-child']);
+  const answers = http.filter((entry) => entry.url.includes('$events/result'));
+  assert.equal(answers.length, 1);
+  const body = JSON.parse(answers[0].options.body);
+  assert.equal(body.payload.args.clientId, 'client-1');
+  assert.equal(body.payload.args.eventId, 'event-child');
+  assert.equal(body.payload.args.outcome.value, 'allowed-once');
+
+  approver.stop();
+  assert.equal(socket.closed, true);
+});
+
+test('--allow-child-sessions is refused where it cannot be honoured', async () => {
+  const { spawn } = await import('node:child_process');
+  // An empty DSH_HOME: an accepted --attach must fail on the missing Host here,
+  // never reach the machine's real one.
+  const home = mkdtempSync(join(tmpdir(), 'ds-agent-attach-'));
+  const run = (...args) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, DSH_HOME: home },
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+    child.on('exit', (code) => resolve({ code, stderr }));
+  });
+
+  // headless has no answering peer, so the flag is a hard error rather than a
+  // silent no-op.
+  const headless = await run('--headless', '--allow-child-sessions', 'task');
+  assert.equal(headless.code, 2);
+  assert.match(headless.stderr, /--allow-child-sessions 只支持 Host 模式/u);
+
+  // A resumed lead keeps its grant, so --attach has to accept the flag: without
+  // it the first child session after a resume waits on a card nobody answers.
+  const attach = await run('--attach', 'session-x', '--allow-child-sessions');
+  assert.doesNotMatch(attach.stderr, /--allow-child-sessions/u);
+  assert.notEqual(attach.code, 0, 'there is no Host in the empty DSH_HOME');
 });

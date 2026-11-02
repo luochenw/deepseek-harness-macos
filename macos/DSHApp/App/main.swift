@@ -105,6 +105,8 @@ final class HarnessController: ObservableObject {
     let sessionId: String
     let toolName: String
     let reason: String?
+    /// Correlates with the transcript's tool row; nil when the Host sent none.
+    let callId: String?
   }
 
   struct PendingQuestion: Identifiable {
