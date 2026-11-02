@@ -154,6 +154,7 @@ gh release create v<version> \
 | 场景 | 命令 |
 |------|------|
 | 类型检查（无需构建） | `./scripts/test-macos-native.sh` |
+| 改完代码的常用检查（单测，约 2 分钟） | `./scripts/test-macos-native.sh --quick` |
 | 构建 | `./scripts/build-macos-app.sh` |
 | Swift-only 原地刷新已安装 App | `./scripts/refresh-macos-app.sh` |
 | 构建后冒烟测试 | `./scripts/test-macos-native.sh --smoke` |

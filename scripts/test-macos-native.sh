@@ -11,7 +11,7 @@ export SWIFT_TARGET
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/test-macos-native.sh [--smoke [APP_PATH] | --unit]
+Usage: ./scripts/test-macos-native.sh [--smoke [APP_PATH] | --unit | --quick]
 
 Without arguments, typechecks all production Swift sources and checks that the
 native Settings surface stays scrollable, uses visible field chrome, and does
@@ -33,6 +33,10 @@ Agent Profile CRUD. Build the app first, or pass its path.
 (-enable-testing) and runs macos/DSHTests/*.swift against it via @testable
 import — no Xcode/XCTest, matching the project's no-project-file build
 philosophy.
+
+--quick is the inner-loop check while developing: the gates, the design-system
+check and the --unit build and tests, without the UI snapshot scripts that each
+recompile every source. Run the full suite once before reporting done.
 EOF
 }
 
@@ -45,6 +49,10 @@ case "${1:-}" in
     ;;
   --unit)
     MODE="unit"
+    [[ $# -le 1 ]] || { usage >&2; exit 64; }
+    ;;
+  --quick)
+    MODE="quick"
     [[ $# -le 1 ]] || { usage >&2; exit 64; }
     ;;
   -h|--help) usage; exit 0 ;;
@@ -166,20 +174,24 @@ echo "style gates: OK (0 issues)"
 
 # The production build compiles this exact glob; keeping the command here avoids
 # a second source list or a synthetic test project that could drift from builds.
-swiftc -target "$SWIFT_TARGET" -typecheck -parse-as-library "$ROOT"/macos/DSHApp/*/*.swift \
-  -framework AppKit -framework SwiftUI -framework WebKit
+if [[ "$MODE" != "quick" ]]; then
+  swiftc -target "$SWIFT_TARGET" -typecheck -parse-as-library "$ROOT"/macos/DSHApp/*/*.swift \
+    -framework AppKit -framework SwiftUI -framework WebKit
+fi
 plutil -lint "$ROOT/macos/DSHApp/Info.plist" >/dev/null
 "$ROOT/scripts/test-design-system.sh"
-"$ROOT/scripts/test-settings-ui.sh"
-bash "$ROOT/scripts/test-agent-platform-ui.sh"
-bash "$ROOT/scripts/test-attachment-rail-ui.sh"
-bash "$ROOT/scripts/test-tool-presentation-ui.sh"
-bash "$ROOT/scripts/test-subagent-context-ui.sh"
-bash "$ROOT/scripts/test-workbench-ui.sh"
-bash "$ROOT/scripts/test-permission-composer-ui.sh"
-bash "$ROOT/scripts/test-conversation-history-ui.sh"
-bash "$ROOT/scripts/test-reasoning-ui.sh"
-echo "native-contract: OK"
+if [[ "$MODE" != "quick" ]]; then
+  "$ROOT/scripts/test-settings-ui.sh"
+  bash "$ROOT/scripts/test-agent-platform-ui.sh"
+  bash "$ROOT/scripts/test-attachment-rail-ui.sh"
+  bash "$ROOT/scripts/test-tool-presentation-ui.sh"
+  bash "$ROOT/scripts/test-subagent-context-ui.sh"
+  bash "$ROOT/scripts/test-workbench-ui.sh"
+  bash "$ROOT/scripts/test-permission-composer-ui.sh"
+  bash "$ROOT/scripts/test-conversation-history-ui.sh"
+  bash "$ROOT/scripts/test-reasoning-ui.sh"
+  echo "native-contract: OK"
+fi
 
 if [[ "$MODE" == "smoke" ]]; then
   [[ -x "$APP/Contents/MacOS/node" ]] || { echo "Packaged Node runtime is missing: $APP" >&2; exit 1; }
@@ -200,7 +212,7 @@ if [[ "$MODE" == "smoke" ]]; then
   "$ROOT/scripts/verify-native-host-api.sh" "$APP"
 fi
 
-if [[ "$MODE" == "unit" ]]; then
+if [[ "$MODE" == "unit" || "$MODE" == "quick" ]]; then
   UNIT_DIR="$(mktemp -d)"
   trap 'rm -rf "$UNIT_DIR"' EXIT
   # Same production source glob as the real build, compiled as a library
