@@ -328,6 +328,28 @@ private func testDisplayedExecutionTarget_selectsRootAndContinuableChild() throw
   }
 }
 
+private func testDisplayedStopTarget_interruptsOneShotChild() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    harness.hostCurrentSessionID = "root-1"
+    try expectEqual(harness.displayedStopTarget, .root(sessionID: "root-1"))
+
+    let oneShot = DSHSubagentAddress(
+      parentSessionId: "root-1",
+      childSessionId: "child-2",
+      mode: "one-shot")
+    harness.activeSubagentAddress = oneShot
+    try expectEqual(harness.displayedStopTarget, .subagent(oneShot))
+
+    let continuable = DSHSubagentAddress(
+      parentSessionId: "root-1",
+      childSessionId: "child-1",
+      mode: "continuable")
+    harness.activeSubagentAddress = continuable
+    try expectEqual(harness.displayedStopTarget, .subagent(continuable))
+  }
+}
+
 private func testChildPlanAndQueueFrames_doNotLeakRootState() throws {
   try MainActor.assumeIsolated {
     let harness = HarnessController(startRuntime: false)
@@ -1098,6 +1120,7 @@ let dshSubagentProjectionTests: [NamedTest] = [
   ("Stale subagent history activation does not replace newer selection", testStaleSubagentHistoryActivationDoesNotReplaceNewerSelection),
   ("Displayed running state follows open child rather than root", testDisplayedRunningStateFollowsOpenChildRatherThanRoot),
   ("Displayed execution target selects root and continuable child", testDisplayedExecutionTarget_selectsRootAndContinuableChild),
+  ("Stop interrupts a one-shot child through its parent", testDisplayedStopTarget_interruptsOneShotChild),
   ("Child plan and queue frames do not leak root state", testChildPlanAndQueueFrames_doNotLeakRootState),
   ("Subagent catalog generation rejects old parent", testSubagentCatalogGenerationRejectsOldParent),
   ("One-shot subagent goal is read-only", testOneShotSubagentGoal_isReadOnly),

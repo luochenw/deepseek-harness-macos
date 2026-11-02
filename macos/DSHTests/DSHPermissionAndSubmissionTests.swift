@@ -432,6 +432,35 @@ private func testRemoteSessionStatus_clearsDisplayedRunningState() throws {
   }
 }
 
+private func testStop_reportsFailureInTheConversation() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    let root = HarnessController.Session(
+      title: "Root",
+      workspaceName: "Workspace",
+      updatedAt: Date(),
+      messages: [],
+      isRunning: true,
+      hostSessionId: "root")
+    harness.sessions = [root]
+    harness.selectedSessionID = root.id
+    harness.hostCurrentSessionID = "root"
+    harness.isRunning = true
+
+    harness.stop()
+    try expectEqual(harness.sessions[0].messages.last?.text, "Host 未连接，无法停止本轮。")
+
+    // Port 1 refuses the connection, so the cancel itself fails.
+    harness.hostClient = DSHHostClient(baseURL: URL(string: "http://127.0.0.1:1")!)
+    harness.stop()
+    let deadline = Date().addingTimeInterval(5)
+    while harness.sessions[0].messages.last?.text.hasPrefix("停止失败：") != true, Date() < deadline {
+      RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+    }
+    try expect(harness.sessions[0].messages.last?.text.hasPrefix("停止失败：") == true)
+  }
+}
+
 private func testSubagentFailure_routesToOriginatingRootAfterNavigation() throws {
   try MainActor.assumeIsolated {
     let harness = HarnessController(startRuntime: false)
@@ -505,6 +534,7 @@ let dshPermissionAndSubmissionTests: [NamedTest] = [
   ("Root running reconciliation clears a displayed stale session", testRootRunningReconciliation_clearsDisplayedStaleSession),
   ("Root running reconciliation keeps background state isolated", testRootRunningReconciliation_updatesBackgroundRowWithoutDisplayedFlag),
   ("Remote session status clears the displayed running state", testRemoteSessionStatus_clearsDisplayedRunningState),
+  ("Stop reports a failure in the conversation", testStop_reportsFailureInTheConversation),
   ("Subagent failures route to their originating root session", testSubagentFailure_routesToOriginatingRootAfterNavigation),
   ("Permission projection rejects an older snapshot", testPermissionProjection_rejectsOlderSnapshot),
 ]

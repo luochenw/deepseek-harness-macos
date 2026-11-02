@@ -37,13 +37,14 @@ extension HarnessController {
     guard let hostClient else { return }
     Task {
       let delays: [UInt64] = [0, 150_000_000, 350_000_000, 750_000_000, 1_500_000_000]
+      var hostSawRunning = false
       for delay in delays {
         if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
         guard !Task.isCancelled else { return }
         guard let summaries = try? await hostClient.sessions(),
               let summary = summaries.first(where: { $0.sessionId == sessionID })
         else { continue }
-        guard !summary.running else { continue }
+        guard !summary.running else { hostSawRunning = true; continue }
         await MainActor.run {
           self.reconcileRootSessionRunningState(
             sessionID: sessionID,
@@ -55,6 +56,15 @@ extension HarnessController {
           }
         }
         return
+      }
+      // A turn/end or status may still settle it later; say what is known now.
+      await MainActor.run {
+        guard self.sessions.first(where: { $0.id == localSessionID })?.isRunning == true else { return }
+        self.appendSystem(
+          hostSawRunning
+            ? "已请求停止，但 Host 仍显示这一轮在运行。"
+            : "已请求停止，但没能从 Host 的会话列表确认这一轮是否已结束。",
+          to: localSessionID)
       }
     }
   }

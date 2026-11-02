@@ -251,7 +251,8 @@ extension HarnessController {
   }
 
   func interruptSubagent(_ entry: DSHSubagentEntry) {
-    guard let hostClient, let parent = currentSubagentParentID, entry.kind == "child", entry.mode == "continuable" else { return }
+    // Any live child, one-shot included: see `displayedStopTarget`.
+    guard let hostClient, let parent = currentSubagentParentID, entry.kind == "child" else { return }
     Task {
       do {
         try await hostClient.interruptSubagent(parentSessionId: parent, childSessionId: entry.id)

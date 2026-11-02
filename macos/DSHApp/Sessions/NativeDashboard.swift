@@ -91,7 +91,7 @@ private struct SubagentCard: View {
             Text(item.kind == "diagnostic" ? (item.reason ?? "不可用") : (item.mode ?? "child")).font(.caption2).foregroundStyle(DSHTheme.inkFaint)
           }
           Spacer()
-          if item.activity == "running" && item.mode == "continuable" { Button(action: { harness.interruptSubagent(item) }) { Image(systemName: "stop.fill").foregroundStyle(DSHTheme.coral) }.buttonStyle(.borderless).help("中断子代理") }
+          if item.activity == "running" && item.kind == "child" { Button(action: { harness.interruptSubagent(item) }) { Image(systemName: "stop.fill").foregroundStyle(DSHTheme.coral) }.buttonStyle(.borderless).help("中断子代理") }
           if item.hasChildren == true { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(DSHTheme.inkFaint) }
         } }.buttonStyle(.plain).disabled(item.kind != "child")
       }

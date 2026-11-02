@@ -6,6 +6,7 @@ Invariants (each must cite a Note or test):
 - Projections apply per key against a sequence watermark, and a late stale frame must be dropped — source: `macos/DSHTests/DSHSubagentProjectionTests.swift` ("Subagent presentation rejects older projection frame").
 - `displayedTools/Todos/Goal/PlanActive/QueueItems` are the only read source for Dashboard, GoalBar, Composer and QueueDock — source: `feature/2026-08-25-subagent-context-projection.md`.
 - A child's Goal/Plan/Queue are read-only; the Host rejects changes with `agent-busy` — source: `macos/DSHTests/DSHSubagentProjectionTests.swift` ("One-shot subagent goal is read-only").
+- Stop reaches every open or listed live child, one-shot included, through `subagents/interruptByParent`; only prompting is limited to continuable children — source: `bug-fix/2026-11-02-stop-one-shot-child.md`.
 - Whole-tree traversal is capped at depth 6 / 200 nodes, and hitting the cap must be reported explicitly as truncation — source: `feature/2026-08-14-subagent-descendants-tree.md`.
 Before reporting done: `bash scripts/test-subagent-context-ui.sh` and `./scripts/test-macos-native.sh --unit`.
 Pitfalls:

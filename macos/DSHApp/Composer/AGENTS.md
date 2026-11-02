@@ -8,6 +8,7 @@ Invariants (each must cite a Note or test):
 - Draft images stay ordered, are deduplicated by path, cap at 20, and a successful submit removes only the submitted IDs — source: `macos/DSHTests/DSHAttachmentTests.swift` ("Draft attachments deduplicate and enforce maximum").
 - The slash panel appears only for a bare token, and picking while running must go through the busy submit path — source: `feature/2026-08-17-composer-slash-command-menu.md`.
 - Global Esc only acts in the main window, outside editable text and with no modal on screen — source: `macos/DSHTests/DSHTaskEscapeTests.swift` ("Task Escape policy only stops plain main-window Escape").
+- Every way Stop can fail is written into the conversation, because the main window has no `status` line — source: `macos/DSHTests/DSHPermissionAndSubmissionTests.swift` ("Stop reports a failure in the conversation").
 Before reporting done: `./scripts/test-permission-composer-ui.sh` and `./scripts/test-macos-native.sh --unit`.
 Pitfalls:
 - The empty-queue direct-send rule means a running composer can no longer create the first queued message — source: `bug-fix/2026-10-23-direct-running-send-without-queue.md`.

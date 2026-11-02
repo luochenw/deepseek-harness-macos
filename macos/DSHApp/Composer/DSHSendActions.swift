@@ -177,9 +177,15 @@ extension HarnessController {
     }
   }
 
+  /// The main window shows no `status` line, so every way Stop can fail is
+  /// written into the conversation; otherwise a failed Stop looks like a dead
+  /// button.
   func stop() {
-    guard let hostClient else { return }
-    switch displayedExecutionTarget {
+    guard let hostClient else {
+      appendSystem("Host 未连接，无法停止本轮。")
+      return
+    }
+    switch displayedStopTarget {
     case .subagent(let address):
       Task {
         do {
@@ -188,7 +194,7 @@ extension HarnessController {
             childSessionId: address.childSessionId)
           await MainActor.run { self.status = "已请求中断子代理" }
         } catch {
-          await MainActor.run { self.status = "子代理中断失败：\(error.localizedDescription)" }
+          await MainActor.run { self.appendSystem("停止子代理失败：\(error.localizedDescription)") }
         }
       }
       return
@@ -199,7 +205,11 @@ extension HarnessController {
           try await hostClient.cancel(sessionId: sessionID)
           await MainActor.run { self.status = "已请求取消持久会话" }
         } catch {
-          await MainActor.run { self.status = "取消失败：\(error.localizedDescription)" }
+          await MainActor.run {
+            if let localSessionID {
+              self.appendSystem("停止失败：\(error.localizedDescription)", to: localSessionID)
+            }
+          }
         }
         if let localSessionID {
           await MainActor.run {
@@ -210,7 +220,7 @@ extension HarnessController {
         }
       }
     case .none:
-      return
+      appendSystem("这个会话还没有连接到 Host，无法停止。")
     }
   }
   /// The bundled Host is a long-lived child process, not per-message — this

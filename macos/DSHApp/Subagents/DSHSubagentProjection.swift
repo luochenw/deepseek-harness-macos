@@ -142,6 +142,14 @@ extension HarnessController {
     return .none
   }
 
+  /// What Stop interrupts. Unlike `displayedExecutionTarget`, a one-shot child
+  /// counts: the Host interrupts any live child its parent owns, and the
+  /// request's `mode` is a fixed discriminator rather than the child's kind.
+  var displayedStopTarget: DSHDisplayedExecutionTarget {
+    if let address = activeSubagentAddress { return .subagent(address) }
+    return displayedExecutionTarget
+  }
+
   func hasSubagentPresentation(sessionID: String) -> Bool {
     subagentPresentationState.contexts[sessionID] != nil
   }
