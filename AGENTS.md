@@ -207,7 +207,8 @@ installed app or a copy of it. Kill processes you didn't start. Modify
 ./scripts/build-macos-app.sh                 # builds dist/DeepSeek Harness.app
 ./scripts/refresh-macos-app.sh               # Swift-only in-place refresh of /Applications app
 ./scripts/test-macos-native.sh               # swiftc -typecheck + Info.plist lint (no build needed)
-./scripts/test-macos-native.sh --quick       # design-system checks + unit tests, no UI scripts (about 2 minutes)
+./scripts/test-macos-native.sh --quick       # design-system checks + unit tests, no UI scripts (about 1 minute)
+./scripts/test-macos-native.sh --unit        # gates + UI scripts + unit tests (about 1.5 minutes)
 ./scripts/test-macos-native.sh --smoke       # + starts the built app's Host, checks read/write API and Agent platform
 ./scripts/verify-native-host-api.sh <App>    # what --smoke calls; runnable standalone
 plutil -lint "dist/DeepSeek Harness.app/Contents/Info.plist"
