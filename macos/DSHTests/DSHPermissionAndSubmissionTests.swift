@@ -432,6 +432,24 @@ private func testRemoteSessionStatus_clearsDisplayedRunningState() throws {
   }
 }
 
+private func testRunningComposer_showsSendOnlyWithContent() throws {
+  try MainActor.assumeIsolated {
+    let harness = HarnessController(startRuntime: false)
+    harness.isRunning = true
+    try expect(!harness.runningComposerShowsSend)
+    harness.draft = "   "
+    try expect(!harness.runningComposerShowsSend)
+    harness.draft = "补充一句"
+    try expect(harness.runningComposerShowsSend)
+    // An Agent Batch cannot be dispatched mid-turn, so the button stays Stop.
+    harness.composerAgentProfileID = "profile-1"
+    try expect(!harness.runningComposerShowsSend)
+    harness.composerAgentProfileID = nil
+    harness.isRunning = false
+    try expect(!harness.runningComposerShowsSend)
+  }
+}
+
 private func testStop_reportsFailureInTheConversation() throws {
   try MainActor.assumeIsolated {
     let harness = HarnessController(startRuntime: false)
@@ -535,6 +553,7 @@ let dshPermissionAndSubmissionTests: [NamedTest] = [
   ("Root running reconciliation keeps background state isolated", testRootRunningReconciliation_updatesBackgroundRowWithoutDisplayedFlag),
   ("Remote session status clears the displayed running state", testRemoteSessionStatus_clearsDisplayedRunningState),
   ("Stop reports a failure in the conversation", testStop_reportsFailureInTheConversation),
+  ("Running composer shows Send only once the draft has content", testRunningComposer_showsSendOnlyWithContent),
   ("Subagent failures route to their originating root session", testSubagentFailure_routesToOriginatingRootAfterNavigation),
   ("Permission projection rejects an older snapshot", testPermissionProjection_rejectsOlderSnapshot),
 ]

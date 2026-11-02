@@ -3,6 +3,7 @@ Scope: draft editing and keyboard policy, draft images, the queue display and it
 Key files: `ComposerView.swift` (draft field and keyboard wiring), `DSHComposerSubmission.swift` (busy/steer submit decision), `DSHQueue.swift` (queue snapshots and mutation RPC), `DSHAttachments.swift` (draft image model), `NativeCommandPalette.swift` (slash panel), `QueueDockView.swift` (queue chrome).
 Invariants (each must cite a Note or test):
 - The submit mode while running is computed once by a pure policy: an empty queue steers directly and shows no queue chrome — source: `bug-fix/2026-10-23-direct-running-send-without-queue.md`.
+- One submit button: Send while idle; while running, Stop with an empty draft and Send (the Enter path) once it has content, decided by content alone so an in-flight send never flips it to Stop; Esc stops either way — source: `macos/DSHTests/DSHPermissionAndSubmissionTests.swift` ("Running composer shows Send only once the draft has content").
 - Queue chrome appears only after the snapshot settles (300ms debounce) — source: `macos/DSHTests/DSHPermissionAndSubmissionTests.swift` ("Queue chrome waits for a stable queue snapshot").
 - Enter must be passed through while an IME composition is active (`.ignored`); only Esc stops the current turn — source: `bug-fix/2026-08-18-composer-keyboard-ime-esc.md`.
 - Draft images stay ordered, are deduplicated by path, cap at 20, and a successful submit removes only the submitted IDs — source: `macos/DSHTests/DSHAttachmentTests.swift` ("Draft attachments deduplicate and enforce maximum").

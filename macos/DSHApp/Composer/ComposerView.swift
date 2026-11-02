@@ -389,23 +389,21 @@ struct Composer: View {
       }
   }
 
+  /// One button in one place. While a turn runs it is Stop until the draft has
+  /// content, then Send, which goes the same way as Enter (steer or queue by
+  /// the busy-submit policy). Esc stops the turn either way.
   @ViewBuilder private var composerSubmissionControls: some View {
     if harness.displayedIsRunning {
-      Button(action: harness.stop) { Image(systemName: "stop.fill").font(.system(size: 13)) }
-        .buttonStyle(.dshIconSecondary).help("停止（Esc）")
-      if harness.composerAgentProfileID == nil {
-        if harness.activeSubagentAddress == nil {
-          Button(action: harness.steerDraft) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
-            .buttonStyle(.dshIconPrimary)
-            .disabled(!harness.canSubmitRunningDraft)
-            .help("直接发送到当前轮")
+      if harness.runningComposerShowsSend {
+        Button(action: { _ = harness.submitBusyComposer(accelerated: false) }) {
+          Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold))
         }
-        if harness.activeSubagentAddress != nil || !visibleQueuedItems.isEmpty {
-          Button(action: harness.queueDraft) { Image(systemName: "tray.and.arrow.down") }
-            .buttonStyle(.dshIconSecondary)
-            .disabled(!harness.canSubmitRunningDraft)
-            .help("排队发送：本轮结束后自动发送")
-        }
+        .buttonStyle(.dshIconPrimary)
+        .disabled(!harness.canSubmitRunningDraft)
+        .help("发送到当前会话（Esc 停止本轮）")
+      } else {
+        Button(action: harness.stop) { Image(systemName: "stop.fill").font(.system(size: 12, weight: .semibold)) }
+          .buttonStyle(.dshIconPrimary).help("停止（Esc）")
       }
     } else if harness.selectedComposerAgentProfile != nil {
       Button(action: harness.submitComposer) { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }

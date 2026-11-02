@@ -59,3 +59,5 @@ The permission/composer snapshot suite and 188 native tests passed, and the
 composer UI test now guards the queue button's empty-queue visibility. In the
 installed app, a running turn exposed only Stop and the direct Send action; the
 Queue action was absent while its queue was empty.
+
+2026-11-02: the separate running Send and Queue buttons were merged into one button that is Stop with an empty draft and Send (the Enter path) once the draft has content. See `simplification/2026-11-02-single-submit-button.md`. The empty-queue steering and queue-chrome rules above still hold.

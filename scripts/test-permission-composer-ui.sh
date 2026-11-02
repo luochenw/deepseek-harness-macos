@@ -22,18 +22,20 @@ grep -q 'PermissionMenu()' "$COMPOSER" || {
   echo "permission-composer-ui: composer does not render the permission menu" >&2
   exit 1
 }
-grep -q 'Button(action: harness.steerDraft)' "$COMPOSER" || {
-  echo "permission-composer-ui: running composer has no steer action" >&2
+# One submit button in one place: while running it is Stop with an empty draft
+# and Send (the same path as Enter) once the draft has content.
+grep -q 'Button(action: harness.stop)' "$COMPOSER" || {
+  echo "permission-composer-ui: running composer has no stop action" >&2
   exit 1
 }
-grep -q 'Button(action: harness.queueDraft)' "$COMPOSER" || {
-  echo "permission-composer-ui: running composer has no queue action" >&2
+grep -q 'Button(action: { _ = harness.submitBusyComposer(accelerated: false) })' "$COMPOSER" || {
+  echo "permission-composer-ui: running Send does not take the Enter path" >&2
   exit 1
 }
-grep -q 'harness.activeSubagentAddress != nil || !visibleQueuedItems.isEmpty' "$COMPOSER" || {
-  echo "permission-composer-ui: root queue action is not gated by existing queued messages" >&2
+if grep -q 'Button(action: harness.steerDraft)\|Button(action: harness.queueDraft)' "$COMPOSER"; then
+  echo "permission-composer-ui: running composer shows a second send button; it should switch one button" >&2
   exit 1
-}
+fi
 grep -q 'QueueDockView(items: visibleQueuedItems)' "$COMPOSER" \
   && grep -q 'DSHQueueChrome.settleDelayMilliseconds' "$COMPOSER" || {
   echo "permission-composer-ui: queue chrome is not stabilized against transient snapshots" >&2

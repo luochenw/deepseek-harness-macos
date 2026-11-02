@@ -136,11 +136,21 @@ extension HarnessController {
   }
 
   var canSubmitRunningDraft: Bool {
-    let hasContent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty
-    return displayedIsRunning && hasContent && !isViewingReadOnlySubagent
+    displayedIsRunning && draftHasContent && !isViewingReadOnlySubagent
       && composerAgentProfileID == nil
       && hostClient != nil && hostCurrentSessionID != nil
       && !runningSubmissionInFlight && !composerSubmissionInFlight
+  }
+
+  /// The composer's one button while a turn runs: Send once the draft has
+  /// something to send, otherwise Stop. Decided by content alone, so a send in
+  /// flight greys Send out instead of flipping it to Stop under the cursor.
+  var runningComposerShowsSend: Bool {
+    displayedIsRunning && draftHasContent && !isViewingReadOnlySubagent && composerAgentProfileID == nil
+  }
+
+  private var draftHasContent: Bool {
+    !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty
   }
 
   var canSteerQueuedMessages: Bool {
