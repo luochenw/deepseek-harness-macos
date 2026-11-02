@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/scripts/lib-test-library.sh"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
 VIEW="$ROOT/macos/DSHApp/Transcript/ConversationView.swift"
 STREAMING="$ROOT/macos/DSHApp/Transcript/StreamingAssistantText.swift"
@@ -54,13 +55,11 @@ grep -q 'DSHConversationLayout.horizontalInset' "$VIEW" \
 }
 
 rm -rf "$SNAPSHOT_DIR"
-swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
-  -o "$BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
-swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$BUILD" -L "$BUILD" -lDSHAppLib \
+dsh_test_library "$BUILD"
+swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$DSH_TEST_LIBRARY_DIR" -L "$DSH_TEST_LIBRARY_DIR" -lDSHAppLib \
   -o "$BUILD/reasoning-snapshot-check" \
   "$FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit
-DYLD_LIBRARY_PATH="$BUILD" "$BUILD/reasoning-snapshot-check" "$SNAPSHOT_DIR"
+DYLD_LIBRARY_PATH="$DSH_TEST_LIBRARY_DIR" "$BUILD/reasoning-snapshot-check" "$SNAPSHOT_DIR"
 
 for name in reasoning-wide.png reasoning-narrow.png; do
   [[ -s "$SNAPSHOT_DIR/$name" ]] || {

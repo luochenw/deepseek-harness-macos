@@ -23,6 +23,9 @@ struct DSHTestsMain {
     allTests += dshAttachmentTests
     allTests += dshToolPresentationTests
     allTests += dshToolResultTests
+    allTests += dshSessionEventParityTests
+    allTests += dshCoreTimelineTests
+    allTests += dshSessionActivityTests
     allTests += dshRunCodeDetailsTests
     allTests += dshSubagentProjectionTests
     allTests += dshProjectionsTests

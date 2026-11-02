@@ -2,12 +2,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib-test-library.sh"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
 PERMISSIONS="$ROOT/macos/DSHApp/Sessions/DSHPermissions.swift"
 SUBMISSION="$ROOT/macos/DSHApp/Composer/DSHComposerSubmission.swift"
 COMPOSER="$ROOT/macos/DSHApp/Composer/ComposerView.swift"
 SETTINGS="$ROOT/macos/DSHApp/Settings/DSHSettingsView.swift"
-EVENTS="$ROOT/macos/DSHApp/Host/DSHEventSocket.swift"
+FOLLOW="$ROOT/macos/DSHApp/Host/DSHHostSessionFollow.swift"
 FIXTURE="$ROOT/scripts/fixtures/permission-composer-snapshot-check.swift"
 BUILD="$(mktemp -d)"
 SNAPSHOT_DIR="${PERMISSION_COMPOSER_SNAPSHOT_DIR:-${TMPDIR:-/tmp}/dsh-permission-composer-snapshots}"
@@ -76,11 +77,11 @@ grep -q 'PermissionDefaultSettingsRow()' "$SETTINGS" || {
   echo "permission-composer-ui: default permission setting is missing" >&2
   exit 1
 }
-grep -q 'key == "permissions"' "$EVENTS" || {
+grep -q 'key == "permissions"' "$FOLLOW" || {
   echo "permission-composer-ui: permission projection is not consumed" >&2
   exit 1
 }
-grep -q 'rememberPermissionSelection(selection, sessionID: sessionId, seq: seq)' "$EVENTS" || {
+grep -q 'rememberPermissionSelection(selection, sessionID: sessionID, seq: seq)' "$FOLLOW" || {
   echo "permission-composer-ui: permission projection lacks sequence-aware routing" >&2
   exit 1
 }
@@ -114,12 +115,10 @@ grep -q 'confirmationDialog' "$ROOT/macos/DSHApp/Sessions/PermissionViews.swift"
 }
 
 rm -rf "$SNAPSHOT_DIR"
-swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
-  -o "$BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
-swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$BUILD" -L "$BUILD" -lDSHAppLib \
+dsh_test_library "$BUILD"
+swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$DSH_TEST_LIBRARY_DIR" -L "$DSH_TEST_LIBRARY_DIR" -lDSHAppLib \
   -o "$BUILD/permission-composer-snapshot-check" \
   "$FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit
-DYLD_LIBRARY_PATH="$BUILD" "$BUILD/permission-composer-snapshot-check" "$SNAPSHOT_DIR"
+DYLD_LIBRARY_PATH="$DSH_TEST_LIBRARY_DIR" "$BUILD/permission-composer-snapshot-check" "$SNAPSHOT_DIR"
 
 echo "permission-composer-ui: OK"

@@ -23,6 +23,14 @@ enum DSHTurnTiming {
     if seconds < 10 {
       return String(format: "%.1f 秒", seconds)
     }
-    return DSHModelUsagePresentation.duration(milliseconds)
+    return durationText(milliseconds)
+  }
+
+  static func durationText(_ milliseconds: Double) -> String {
+    let seconds = max(0, milliseconds) / 1_000
+    if seconds < 60 { return "\(Int(seconds.rounded())) 秒" }
+    let minutes = Int(seconds) / 60
+    let remainder = Int(seconds) % 60
+    return remainder == 0 ? "\(minutes) 分" : "\(minutes) 分 \(remainder) 秒"
   }
 }

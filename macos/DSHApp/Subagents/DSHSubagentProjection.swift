@@ -2,9 +2,8 @@ import Combine
 import Foundation
 
 struct DSHBufferedSubagentEvent {
-  let seq: Int?
-  let event: [String: Any]
-  let view: [String: Any]?
+  let raw: DSHRawEvent
+  let event: DSHSessionEvent
 }
 
 enum DSHDisplayedExecutionTarget: Equatable {
@@ -43,26 +42,9 @@ private final class DSHSubagentPresentationState {
   }
 }
 
-@MainActor
-private final class DSHSubagentPresentationRegistry {
-  static let shared = DSHSubagentPresentationRegistry()
-  private var states: [ObjectIdentifier: DSHSubagentPresentationState] = [:]
-
-  func state(for controller: HarnessController) -> DSHSubagentPresentationState {
-    states = states.filter { $0.value.controller != nil }
-    let key = ObjectIdentifier(controller)
-    if let state = states[key], let owner = state.controller, owner === controller {
-      return state
-    }
-    let state = DSHSubagentPresentationState(controller: controller)
-    states[key] = state
-    return state
-  }
-}
-
 extension HarnessController {
   private var subagentPresentationState: DSHSubagentPresentationState {
-    DSHSubagentPresentationRegistry.shared.state(for: self)
+    stateBag.state { DSHSubagentPresentationState(controller: self) }
   }
 
   private var displayedSubagentSessionID: String? {
@@ -234,16 +216,9 @@ extension HarnessController {
       && activeSubagentAddress?.childSessionId != sessionID
   }
 
-  func bufferSubagentEvent(
-    sessionID: String,
-    event: [String: Any],
-    view: [String: Any]?
-  ) {
+  func bufferSubagentEvent(sessionID: String, raw: DSHRawEvent, event: DSHSessionEvent) {
     guard var context = subagentPresentationState.contexts[sessionID] else { return }
-    context.bufferedEvents.append(DSHBufferedSubagentEvent(
-      seq: event["seq"] as? Int,
-      event: event,
-      view: view))
+    context.bufferedEvents.append(DSHBufferedSubagentEvent(raw: raw, event: event))
     subagentPresentationState.contexts[sessionID] = context
   }
 
@@ -259,8 +234,8 @@ extension HarnessController {
   ) -> ([DSHBufferedSubagentEvent], [[String: Any]]) {
     guard var context = subagentPresentationState.contexts[sessionID] else { return ([], []) }
     let events = context.bufferedEvents
-      .filter { ($0.seq ?? Int.max) > historySequence }
-      .sorted { ($0.seq ?? Int.max) < ($1.seq ?? Int.max) }
+      .filter { ($0.raw.sequence ?? Int.max) > historySequence }
+      .sorted { ($0.raw.sequence ?? Int.max) < ($1.raw.sequence ?? Int.max) }
     let jobs = context.bufferedJobs
     context.bufferedEvents = []
     context.bufferedJobs = []
@@ -333,6 +308,16 @@ extension HarnessController {
         else { context.planActive = projections.values.plan?.active ?? false }
         context.projectionSequences["plan"] = projectionSeq
       }
+      if let inbox = projections.rawValues["inbox"],
+         shouldApplySubagentProjectionBaseline(
+           key: "inbox",
+           rawValue: inbox,
+           typedValuePresent: true,
+           seq: projectionSeq,
+           context: context) {
+        context.queueItems = DSHQueueItem.fromInbox(inbox.plainValue) ?? []
+        context.projectionSequences["inbox"] = projectionSeq
+      }
     }
     subagentPresentationState.contexts[sessionID] = context
     subagentPresentationState.notify()
@@ -365,12 +350,25 @@ extension HarnessController {
         guard let plan = DSHProjectionDecoder.decode(DSHPlanState.self, from: value) else { return }
         context.planActive = plan.active
       }
+    case "inbox":
+      guard let items = DSHQueueItem.fromInbox(value) else { return }
+      context.queueItems = items
     default:
       return
     }
     context.projectionSequences[key] = seq
     subagentPresentationState.contexts[sessionID] = context
     subagentPresentationState.notify()
+  }
+
+  /// Tools and projections stay keyed by child session even while another
+  /// transcript is on screen; message rows reach only the displayed child.
+  func applySubagentEvent(_ event: DSHSessionEvent, raw: DSHRawEvent, sessionID: String) {
+    var store = DSHSubagentTimelineStore(controller: self, sessionID: sessionID)
+    DSHSessionTimeline.apply(event, raw: raw, mode: .live, to: &store)
+    if case .todos(let items) = event, let seq = raw.sequence {
+      replaceSubagentTodos(sessionID: sessionID, items: items, seq: seq)
+    }
   }
 
   func appendSubagentTool(sessionID: String, tool: ToolActivity, seq: Int) {
@@ -405,13 +403,13 @@ extension HarnessController {
     return tool
   }
 
-  func settleSubagentTools(sessionID: String, seq: Int) {
+  func settleSubagentTools(sessionID: String, as state: ToolActivity.State, seq: Int) {
     guard var context = subagentPresentationState.contexts[sessionID] else { return }
     var changed = false
     for index in context.tools.indices
     where context.tools[index].state == .running
       && seq >= context.toolSequences[context.tools[index].callId, default: -1] {
-      context.tools[index].state = .succeeded
+      context.tools[index].settle(as: state)
       context.toolSequences[context.tools[index].callId] = seq
       changed = true
     }
@@ -420,14 +418,11 @@ extension HarnessController {
     subagentPresentationState.notify()
   }
 
-  func replaceSubagentTodos(sessionID: String, value: [[String: Any]], seq: Int) {
+  func replaceSubagentTodos(sessionID: String, items: [DSHTodoItem], seq: Int) {
     guard var context = subagentPresentationState.contexts[sessionID],
           seq >= context.projectionSequences["todos", default: -1]
     else { return }
-    context.todos = value.compactMap { item in
-      guard let content = item["content"] as? String, let status = item["status"] as? String else { return nil }
-      return DSHTodoItem(content: content, status: status)
-    }
+    context.todos = items
     context.projectionSequences["todos"] = seq
     subagentPresentationState.contexts[sessionID] = context
     subagentPresentationState.notify()
@@ -482,4 +477,47 @@ extension HarnessController {
     (rawValue != nil || typedValuePresent)
       && seq >= context.projectionSequences[key, default: -1]
   }
+}
+
+@MainActor
+struct DSHSubagentTimelineStore: DSHTimelineStore {
+  let controller: HarnessController
+  let sessionID: String
+
+  private var isDisplayed: Bool { controller.activeSubagentAddress?.childSessionId == sessionID }
+
+  var turnStartedAt: Date? {
+    get { isDisplayed ? controller.subagentTranscript?.turnStartedAt : nil }
+    nonmutating set {
+      if isDisplayed { controller.subagentTranscript?.turnStartedAt = newValue }
+    }
+  }
+
+  mutating func withMessages(_ body: (inout [HarnessController.Message]) -> Void) {
+    guard isDisplayed, var transcript = controller.subagentTranscript else { return }
+    body(&transcript.messages)
+    controller.subagentTranscript = transcript
+  }
+
+  mutating func addTool(_ tool: HarnessController.ToolActivity, seq: Int) {
+    controller.appendSubagentTool(sessionID: sessionID, tool: tool, seq: seq)
+  }
+
+  mutating func updateTool(
+    callID: String,
+    seq: Int,
+    _ update: (inout HarnessController.ToolActivity) -> Void
+  ) {
+    controller.updateSubagentTool(sessionID: sessionID, callID: callID, seq: seq, update: update)
+  }
+
+  mutating func settleRunningTools(as state: DSHToolActivity.State, seq: Int) {
+    controller.settleSubagentTools(sessionID: sessionID, as: state, seq: seq)
+  }
+
+  mutating func setRunning(_ running: Bool) {
+    if isDisplayed { controller.subagentTranscript?.isRunning = running }
+  }
+
+  mutating func recordWorkflowEvent(_ event: DSHSessionEvent, seq: Int) {}
 }

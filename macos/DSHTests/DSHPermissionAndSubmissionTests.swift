@@ -183,27 +183,13 @@ private func testComposerSubmissionPolicy_keepsNativeCommandsLocal() throws {
 }
 
 private func testQueueItems_separateQueuedAndSteering() throws {
-  let items = DSHQueueItem.fromMux([
-    [
-      "id": "queue-1",
-      "placement": "queued",
-      "message": [
-        "id": "message-queue-1",
-        "content": [["type": "text", "text": "下一轮"]],
-      ],
-    ],
-    [
-      "id": "steer-1",
-      "placement": "steering",
-      "message": [
-        "id": "message-steer-1",
-        "content": [["type": "text", "text": "当前轮"]],
-      ],
-    ],
-  ])
+  let items = DSHQueueItem.fromInbox([
+    "next-turn": [["id": "queue-1", "content": [["type": "text", "text": "下一轮"]]]],
+    "next-step": [["id": "steer-1", "content": [["type": "text", "text": "当前轮"]]]],
+  ]) ?? []
   try expectEqual(items.filter(\.isQueued).map(\.id), ["queue-1"])
   try expectEqual(items.filter(\.isSteering).map(\.id), ["steer-1"])
-  try expectEqual(items.last?.messageID, "message-steer-1")
+  try expectEqual(items.last?.messageID, "steer-1")
 }
 
 private func testQueueChrome_waitsForStableQueueSnapshot() throws {
@@ -211,19 +197,15 @@ private func testQueueChrome_waitsForStableQueueSnapshot() throws {
 }
 
 private func testQueueItems_disableEditingForNonTextContent() throws {
-  let items = DSHQueueItem.fromMux([
-    [
+  let items = DSHQueueItem.fromInbox([
+    "next-turn": [[
       "id": "queue-image",
-      "placement": "queued",
-      "message": [
-        "id": "message-image",
-        "content": [
-          ["type": "text", "text": "参考这张图"],
-          ["type": "image", "attachment": ["attachmentId": "image-1"]],
-        ],
+      "content": [
+        ["type": "text", "text": "参考这张图"],
+        ["type": "image", "attachment": ["attachmentId": "image-1"]],
       ],
-    ],
-  ])
+    ]],
+  ]) ?? []
   try expectEqual(items.first?.text, "参考这张图")
   try expect(items.first?.hasNonTextContent == true)
   try expect(items.first?.isEditable == false)
@@ -347,13 +329,26 @@ private func testSubmissionRunning_updatesOnlyOriginatingSession() throws {
     harness.selectedSessionID = second.id
     harness.hostCurrentSessionID = "session-b"
     harness.isRunning = true
-    harness.setSubmissionRunning(
-      false,
+    // Another client started a turn in A while this submission was in flight.
+    harness.hostSessions = [DSHSessionSummary(
+      sessionId: "session-a",
+      updatedAt: 0,
+      running: true,
+      blank: false,
+      cwd: nil,
+      agentPreset: nil,
+      parentSessionId: nil,
+      origin: nil,
+      projections: nil)]
+    harness.reconcileRootSessionRunningState(
+      sessionID: "session-a",
       localSessionID: first.id,
-      hostSessionID: "session-a")
+      running: false,
+      reportedByHost: false)
     try expect(!harness.sessions[0].isRunning)
     try expect(harness.sessions[1].isRunning)
     try expect(harness.isRunning)
+    try expect(harness.hostSessions[0].running, "a late local completion must not clear what the Host reported")
   }
 }
 
@@ -486,42 +481,6 @@ private func testPermissionProjection_rejectsOlderSnapshot() throws {
   }
 }
 
-private func testPermissionProjection_acceptsRestartedBaselineAfterReset() throws {
-  try MainActor.assumeIsolated {
-    let harness = HarnessController(startRuntime: false)
-    harness.hostCurrentSessionID = "session-1"
-    let options = [
-      DSHPermissionOption(value: "read-only", name: "read-only", description: nil),
-      DSHPermissionOption(value: "workspace-write", name: "workspace-write", description: nil),
-    ]
-    harness.rememberPermissionSelection(
-      DSHPermissionSelection(options: options, currentValue: "workspace-write"),
-      sessionID: "session-1",
-      seq: 80)
-    try expect(harness.truncatePermissionSelection(sessionID: "session-1", lastSeq: 2))
-    harness.rememberPermissionSelection(
-      DSHPermissionSelection(options: options, currentValue: "read-only"),
-      sessionID: "session-1",
-      seq: 2)
-    try expectEqual(harness.currentPermissionSelection?.currentValue, "read-only")
-  }
-}
-
-private func testPermissionProjection_keepsBaselineAtOrBeforeSubscriptionWatermark() throws {
-  try MainActor.assumeIsolated {
-    let harness = HarnessController(startRuntime: false)
-    harness.hostCurrentSessionID = "session-1"
-    harness.rememberPermissionSelection(
-      DSHPermissionSelection(
-        options: [DSHPermissionOption(value: "workspace-write", name: "workspace-write", description: nil)],
-        currentValue: "workspace-write"),
-      sessionID: "session-1",
-      seq: 2)
-    try expect(!harness.truncatePermissionSelection(sessionID: "session-1", lastSeq: 2))
-    try expectEqual(harness.currentPermissionSelection?.currentValue, "workspace-write")
-  }
-}
-
 let dshPermissionAndSubmissionTests: [NamedTest] = [
   ("Permission projection decodes dynamic options", testPermissionProjection_decodesDynamicOptions),
   ("Permission custom state is display-only", testPermissionProjection_customIsDisplayOnly),
@@ -548,6 +507,4 @@ let dshPermissionAndSubmissionTests: [NamedTest] = [
   ("Remote session status clears the displayed running state", testRemoteSessionStatus_clearsDisplayedRunningState),
   ("Subagent failures route to their originating root session", testSubagentFailure_routesToOriginatingRootAfterNavigation),
   ("Permission projection rejects an older snapshot", testPermissionProjection_rejectsOlderSnapshot),
-  ("Permission projection accepts restarted baseline after reset", testPermissionProjection_acceptsRestartedBaselineAfterReset),
-  ("Permission projection keeps a valid subscribed baseline", testPermissionProjection_keepsBaselineAtOrBeforeSubscriptionWatermark),
 ]

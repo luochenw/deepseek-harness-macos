@@ -45,8 +45,8 @@
 
 ## 质量规范
 
-- **main.swift 冻结**：`main.swift` 只保留 App 入口、`HarnessController` 类声明与核心生命周期——新的 `@Published` 状态、controller 方法、顶层 View **一律不再**写进这个文件，哪怕是"核心流程"。新状态/新逻辑写成所属域目录下 `DSH<Feature>.swift` 里的 `extension HarnessController`（没有对应文件就新建一个）；新界面写成同一目录下独立的 `<Feature>View.swift` / `Native<Feature>View.swift`。这条规则配了 gate，不是口头约定：`./scripts/test-macos-native.sh` 会检查 `main.swift` 行数不超过基线，超了直接报错退出。
-- `main.swift` 的历史债分批拆分已完成；工作区偏好恢复逻辑迁出后当前为 489 行，仍只保留 App 入口、`HarnessController` 类声明、状态与核心生命周期。进度与决策见 [Agent Note](.agents/notes/implemented/architecture/2026-08-18-quality-remediation-plan.md)。
+- **main.swift 冻结**：`main.swift` 只保留 App 入口、`HarnessController` 类声明与核心生命周期——新的 `@Published` 状态、controller 方法、顶层 View **一律不再**写进这个文件，哪怕是"核心流程"。新状态/新逻辑写成所属域目录下 `DSH<Feature>.swift` 里的 `extension HarnessController`（没有对应文件就新建一个）；新界面写成同一目录下独立的 `<Feature>View.swift` / `Native<Feature>View.swift`。这条规则配了 gate，不是口头约定：`./scripts/test-macos-native.sh` 会检查 `main.swift` 行数和 `@Published` 数量不超过基线，超了直接报错退出。
+- `main.swift` 的历史债分批拆分已完成；工作区偏好恢复逻辑迁出后当前为 347 行，仍只保留 App 入口、`HarnessController` 类声明、状态与核心生命周期。进度与决策见 [Agent Note](.agents/notes/implemented/architecture/2026-08-18-quality-remediation-plan.md)。
 - 改行为的代码（不是纯文档/纯 UI 文案）优先带上能验证的手段——现阶段是契约 fixture（`NativeContractCheck.swift`）+ smoke（`--smoke`），单测基建落地后（见上面 Note 的 Phase 1）新逻辑改动要带对应单测。
 
 ## 规则文件组织方式：每个域目录一份
@@ -63,7 +63,8 @@
 - 通用规则只写在根 `AGENTS.md` / `CLAUDE.md`，域文件不重复。
 - 改了某个域的不变量，或者踩了新坑并写进 Agent Note 后，同步更新这个域的 `AGENTS.md`。不变量没有出处就不写。
 - 新增一个域目录时，同时建 `AGENTS.md` 和 `CLAUDE.md`。`./scripts/test-macos-native.sh` 有三条卡口：`macos/DSHApp/` 根目录不能有 `.swift` 文件，每个含 `.swift` 的子目录都必须有这两份文件，`AGENTS.md` 不超过 60 行。
-- `macos/DSHTests/` 暂时保持平铺，测试文件靠前缀对应到域。
+- `macos/DSHTests/` 暂时保持平铺，测试文件靠前缀对应到域；`DSHCore*` 测试不依赖控制器，由 `./scripts/test-core.sh` 单独运行。
+- 加功能时各部分放哪里，见 AGENTS.md 的「Adding a feature」。
 
 ## 开发与收尾流程
 
@@ -153,6 +154,8 @@ gh release create v<version> \
 
 | 场景 | 命令 |
 |------|------|
+| 改了事件、转录或工具逻辑（几秒） | `./scripts/test-core.sh` |
+| 门禁 + 全部单测（约 1 分钟） | `./scripts/test-macos-native.sh --unit` |
 | 类型检查（无需构建） | `./scripts/test-macos-native.sh` |
 | 构建 | `./scripts/build-macos-app.sh` |
 | Swift-only 原地刷新已安装 App | `./scripts/refresh-macos-app.sh` |

@@ -122,35 +122,16 @@ private final class DSHPermissionClientState {
     self.controller = controller
   }
 
+  func relax() {
+    snapshots = snapshots.mapValues { Snapshot(selection: $0.selection, seq: -1) }
+  }
+
   func set(_ selection: DSHPermissionSelection, for sessionID: String, seq: Int) {
     if let current = snapshots[sessionID], seq < current.seq { return }
     if snapshots[sessionID]?.selection != selection { controller?.objectWillChange.send() }
     snapshots[sessionID] = Snapshot(selection: selection, seq: seq)
   }
 
-  func truncate(sessionID: String, lastSeq: Int) -> Bool {
-    guard let current = snapshots[sessionID], current.seq > lastSeq else { return false }
-    controller?.objectWillChange.send()
-    snapshots.removeValue(forKey: sessionID)
-    return true
-  }
-}
-
-@MainActor
-private final class DSHPermissionClientRegistry {
-  static let shared = DSHPermissionClientRegistry()
-  private var states: [ObjectIdentifier: DSHPermissionClientState] = [:]
-
-  func state(for controller: HarnessController) -> DSHPermissionClientState {
-    states = states.filter { $0.value.controller != nil }
-    let key = ObjectIdentifier(controller)
-    if let state = states[key], let owner = state.controller, owner === controller {
-      return state
-    }
-    let state = DSHPermissionClientState(controller: controller)
-    states[key] = state
-    return state
-  }
 }
 
 @MainActor
@@ -190,23 +171,6 @@ private final class DSHSettingsChoiceClientState {
   }
 }
 
-@MainActor
-private final class DSHSettingsChoiceClientRegistry {
-  static let shared = DSHSettingsChoiceClientRegistry()
-  private var states: [ObjectIdentifier: DSHSettingsChoiceClientState] = [:]
-
-  func state(for controller: HarnessController) -> DSHSettingsChoiceClientState {
-    states = states.filter { $0.value.controller != nil }
-    let key = ObjectIdentifier(controller)
-    if let state = states[key], let owner = state.controller, owner === controller {
-      return state
-    }
-    let state = DSHSettingsChoiceClientState(controller: controller)
-    states[key] = state
-    return state
-  }
-}
-
 private enum DSHPermissionError: LocalizedError {
   case unavailable
   case commandRejected(String)
@@ -221,11 +185,11 @@ private enum DSHPermissionError: LocalizedError {
 
 extension HarnessController {
   private var permissionClientState: DSHPermissionClientState {
-    DSHPermissionClientRegistry.shared.state(for: self)
+    stateBag.state { DSHPermissionClientState(controller: self) }
   }
 
   private var settingsChoiceClientState: DSHSettingsChoiceClientState {
-    DSHSettingsChoiceClientRegistry.shared.state(for: self)
+    stateBag.state { DSHSettingsChoiceClientState(controller: self) }
   }
 
   var currentPermissionSelection: DSHPermissionSelection? {
@@ -307,8 +271,9 @@ extension HarnessController {
   }
 
   @discardableResult
-  func truncatePermissionSelection(sessionID: String, lastSeq: Int) -> Bool {
-    permissionClientState.truncate(sessionID: sessionID, lastSeq: lastSeq)
+  /// Keeps what is shown but lets the next projection through whatever its sequence.
+  func relaxPermissionWatermarks() {
+    permissionClientState.relax()
   }
 
   func beginSettingsChoiceMutation(_ namespace: String) -> Bool {

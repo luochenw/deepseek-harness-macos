@@ -1,6 +1,12 @@
 import Foundation
 @testable import DSHAppLib
 
+@MainActor
+private func deliverWorkbenchEvent(to harness: HarnessController, sessionID: String, event: [String: Any]) {
+  guard let raw = DSHRawEvent(frame: event), let decoded = DSHSessionEvent(raw: raw, view: nil) else { return }
+  harness.consumeModelWorkbenchEvent(sessionID: sessionID, raw: raw, event: decoded)
+}
+
 private func testWorkbenchContext_closesSelectedTabToRightNeighbor() throws {
   let first = DSHWorkbenchTab(kind: .execution, title: "执行")
   let second = DSHWorkbenchTab(kind: .agents, title: "Agent")
@@ -360,9 +366,7 @@ private func testModelWorkbenchEvents_allowRepeatedCallIDsAcrossTurns() throws {
     harness.hostCurrentSessionID = "root-session"
 
     for (turn, path) in [(0, "first"), (1, "second")] {
-      harness.consumeModelWorkbenchEvent(
-        sessionID: "root-session",
-        event: [
+      deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: [
           "type": "tool/call",
           "data": [
             "turn": turn,
@@ -372,9 +376,7 @@ private func testModelWorkbenchEvents_allowRepeatedCallIDsAcrossTurns() throws {
             "arguments": ["url": "https://example.com/\(path)"],
           ],
         ])
-      harness.consumeModelWorkbenchEvent(
-        sessionID: "root-session",
-        event: [
+      deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: [
           "seq": turn + 1,
           "type": "tool/result",
           "data": [
@@ -411,9 +413,7 @@ private func testModelWorkbenchEvents_retrySettledSubagentAfterSessionRefresh() 
     harness.sessions = [session]
     harness.selectedSessionID = session.id
     harness.hostCurrentSessionID = "root-session"
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "child-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "child-session", event: [
         "type": "tool/call",
         "data": [
           "turn": 0,
@@ -423,9 +423,7 @@ private func testModelWorkbenchEvents_retrySettledSubagentAfterSessionRefresh() 
           "arguments": ["path": "guide.md"],
         ],
       ])
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "child-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "child-session", event: [
         "seq": 2,
         "type": "tool/result",
         "data": [
@@ -494,12 +492,10 @@ private func testModelWorkbenchEvents_openOnlyAfterSuccessfulSettlement() throws
         "arguments": #"{"path":"guide.md"}"#,
       ],
     ]
-    harness.consumeModelWorkbenchEvent(sessionID: "root-session", event: call)
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: call)
     try expect(harness.workbenchTabs.isEmpty)
 
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "root-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: [
         "type": "tool/result",
         "data": [
           "callId": "call-1",
@@ -514,24 +510,18 @@ private func testModelWorkbenchEvents_openOnlyAfterSuccessfulSettlement() throws
       "name": DSHModelWorkbenchTool.markdownName,
       "arguments": #"{"path":"guide.md"}"#,
     ]
-    harness.consumeModelWorkbenchEvent(sessionID: "root-session", event: succeedingCall)
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "root-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: succeedingCall)
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: [
         "type": "tool/result",
         "data": ["callId": "call-2", "result": "requested"],
       ])
     try expectEqual(harness.workbenchTabs.count, 1)
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "root-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: [
         "type": "tool/result",
         "data": ["callId": "call-2", "result": "requested"],
       ])
     try expectEqual(harness.workbenchTabs.count, 1)
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "root-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: [
         "type": "tool/call",
         "data": [
           "callId": "call-3",
@@ -539,12 +529,8 @@ private func testModelWorkbenchEvents_openOnlyAfterSuccessfulSettlement() throws
           "arguments": #"{"path":"guide.md"}"#,
         ],
       ])
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "root-session",
-      event: ["type": "turn/end", "data": [:]])
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "root-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: ["type": "turn/end", "data": [:]])
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: [
         "type": "tool/result",
         "data": ["callId": "call-3", "result": "requested"],
       ])
@@ -572,9 +558,7 @@ private func testModelWorkbenchEvents_supportSuccessfulCodeDispatch() throws {
     harness.selectedSessionID = session.id
     harness.hostCurrentSessionID = "root-session"
     harness.workspace = root
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "root-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: [
         "type": "tool/code-dispatch-start",
         "data": [
           "subCallId": "root:code:0",
@@ -582,9 +566,7 @@ private func testModelWorkbenchEvents_supportSuccessfulCodeDispatch() throws {
           "arguments": ["path": "guide.md"],
         ],
       ])
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "root-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: [
         "type": "tool/code-dispatch",
         "data": [
           "subCallId": "root:code:0",
@@ -594,9 +576,7 @@ private func testModelWorkbenchEvents_supportSuccessfulCodeDispatch() throws {
         ],
       ])
     try expect(harness.workbenchTabs.isEmpty)
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "root-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: [
         "type": "tool/code-dispatch-start",
         "data": [
           "subCallId": "root:code:1",
@@ -604,9 +584,7 @@ private func testModelWorkbenchEvents_supportSuccessfulCodeDispatch() throws {
           "arguments": ["path": "guide.md"],
         ],
       ])
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "root-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "root-session", event: [
         "type": "tool/code-dispatch",
         "data": [
           "subCallId": "root:code:1",
@@ -659,9 +637,7 @@ private func testModelWorkbenchEvents_keepBackgroundSessionOwnership() throws {
         projections: nil),
     ]
 
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "background-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "background-session", event: [
         "type": "tool/call",
         "data": [
           "callId": "background-call",
@@ -669,9 +645,7 @@ private func testModelWorkbenchEvents_keepBackgroundSessionOwnership() throws {
           "arguments": #"{"path":"guide.md"}"#,
         ],
       ])
-    harness.consumeModelWorkbenchEvent(
-      sessionID: "background-session",
-      event: [
+    deliverWorkbenchEvent(to: harness, sessionID: "background-session", event: [
         "type": "tool/result",
         "data": ["callId": "background-call", "result": "requested"],
       ])

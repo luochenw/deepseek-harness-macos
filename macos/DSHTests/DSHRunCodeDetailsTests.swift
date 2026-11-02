@@ -42,7 +42,7 @@ private func testLiveRunCode_tracksNestedCallAndFinalOutput() throws {
     harness.selectedSessionID = session.id
     harness.hostCurrentSessionID = "session-run-code"
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "session-run-code",
       "event": [
@@ -56,7 +56,7 @@ private func testLiveRunCode_tracksNestedCallAndFinalOutput() throws {
         ],
       ],
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "session-run-code",
       "event": [
@@ -71,7 +71,7 @@ private func testLiveRunCode_tracksNestedCallAndFinalOutput() throws {
         ],
       ],
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "session-run-code",
       "event": [
@@ -88,7 +88,7 @@ private func testLiveRunCode_tracksNestedCallAndFinalOutput() throws {
         ],
       ],
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "session-run-code",
       "event": [
@@ -299,7 +299,7 @@ private func testLiveTurnDuration_isPersistedAtTurnEnd() throws {
         "reason": ["kind": "completed"],
       ]],
     ] as [[String: Any]] {
-      harness.consumeMuxFrame([
+      harness.deliverFrame([
         "type": "session/event",
         "sessionId": "session-timing",
         "event": event,

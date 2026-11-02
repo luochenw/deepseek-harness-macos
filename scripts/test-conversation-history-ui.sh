@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib-test-library.sh"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
 PRESENTATION="$ROOT/macos/DSHApp/Transcript/DSHConversationPresentation.swift"
 VIEW="$ROOT/macos/DSHApp/Transcript/ConversationView.swift"
@@ -38,7 +39,7 @@ grep -q 'displayedConversationMessageToken' "$PRESENTATION" || {
   echo "conversation-history-ui: transcript presentation token is missing" >&2
   exit 1
 }
-grep -q 'DSHConversationFoldRegistry' "$VIEW" || {
+grep -q 'DSHConversationFoldCacheState' "$VIEW" || {
   echo "conversation-history-ui: transcript folding must be cached across unrelated updates" >&2
   exit 1
 }
@@ -83,12 +84,10 @@ grep -q 'ScrollView(.vertical, showsIndicators: false)' "$VIEW" || {
 }
 
 rm -rf "$SNAPSHOT_DIR"
-swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
-  -o "$BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
-swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$BUILD" -L "$BUILD" -lDSHAppLib \
+dsh_test_library "$BUILD"
+swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$DSH_TEST_LIBRARY_DIR" -L "$DSH_TEST_LIBRARY_DIR" -lDSHAppLib \
   -o "$BUILD/conversation-history-snapshot-check" \
   "$FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit
-DYLD_LIBRARY_PATH="$BUILD" "$BUILD/conversation-history-snapshot-check" "$SNAPSHOT_DIR"
+DYLD_LIBRARY_PATH="$DSH_TEST_LIBRARY_DIR" "$BUILD/conversation-history-snapshot-check" "$SNAPSHOT_DIR"
 
 echo "conversation-history-ui: OK"

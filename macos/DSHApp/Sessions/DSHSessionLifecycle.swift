@@ -1,15 +1,17 @@
 import Foundation
 
 extension HarnessController {
-  /// Snapshot and list responses are the recovery boundary for missed turn
-  /// boundaries. Keep the row, sidebar summary, and displayed root flag in
-  /// lockstep so a reconnect cannot leave the composer stuck on Stop.
+  /// The only writer of a root session's running state, so a reconnect cannot
+  /// leave the composer stuck on Stop. The sidebar summary records what the Host
+  /// reported: a local submission moves only the row and the displayed flag, or
+  /// a late completion could clear a turn another client has since started.
   func reconcileRootSessionRunningState(
     sessionID: String,
     localSessionID: UUID,
-    running: Bool
+    running: Bool,
+    reportedByHost: Bool = true
   ) {
-    if let hostIndex = hostSessions.firstIndex(where: { $0.sessionId == sessionID }) {
+    if reportedByHost, let hostIndex = hostSessions.firstIndex(where: { $0.sessionId == sessionID }) {
       hostSessions[hostIndex].running = running
     }
     guard let sessionIndex = sessions.firstIndex(where: { $0.id == localSessionID }) else {
@@ -19,6 +21,12 @@ extension HarnessController {
     guard hostCurrentSessionID == sessionID,
           selectedSessionID == localSessionID
     else { return }
+    isRunning = running
+  }
+
+  /// Opening a session may read a summary older than the row, so this moves only
+  /// the displayed flag. The follow snapshot then settles the row.
+  func showOpenedSessionRunning(_ running: Bool) {
     isRunning = running
   }
 
@@ -52,23 +60,7 @@ extension HarnessController {
   }
 
   func resetRootSessionPresentationState() {
-    activeTools = []
-    subagents = []
-    skills = []
-    workflows = []
-    selectedWorkflowRunID = nil
-    hostCommands = []
-    messageFeedback = [:]
-    todos = []
-    hostPlanActive = false
-    goal = nil
-    tokenUsage = nil
-    contextPressure = nil
-    sessionStats = nil
-    queueItems = []
-    runNotice = nil
-    retryNotice = nil
-    currentSessionModels = nil
+    rootScope = DSHRootSessionScope()
     resetAgentSessionState()
   }
 

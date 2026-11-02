@@ -94,36 +94,10 @@ private final class DSHExternalAgentBridgeState {
   init(controller: HarnessController) {
     self.controller = controller
   }
-}
 
-/// Registry keyed by controller identity — the state lives outside `HarnessController` because
-/// main.swift is frozen (see AGENTS.md).
-@MainActor
-private final class DSHExternalAgentBridgeRegistry {
-  static let shared = DSHExternalAgentBridgeRegistry()
-  private var states: [ObjectIdentifier: DSHExternalAgentBridgeState] = [:]
-
-  func state(for controller: HarnessController) -> DSHExternalAgentBridgeState {
-    prune()
-    let key = ObjectIdentifier(controller)
-    if let state = states[key], let owner = state.controller, owner === controller {
-      return state
-    }
-    let state = DSHExternalAgentBridgeState(controller: controller)
-    states[key] = state
-    return state
-  }
-
-  /// Drop observers for controllers that have been deallocated — an NSObjectProtocol token
-  /// retained in a dictionary outlives the block's weak capture otherwise.
-  private func prune() {
-    let dead = states.filter { $0.value.controller == nil }.map(\.key)
-    for key in dead {
-      if let token = states[key]?.activationObserver {
-        NotificationCenter.default.removeObserver(token)
-      }
-      states.removeValue(forKey: key)
-    }
+  /// A block observer's registration outlives its weak capture.
+  deinit {
+    if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
   }
 }
 
@@ -160,7 +134,7 @@ extension HarnessController {
   /// Refresh sidebar snapshots when the App becomes frontmost, so sessions an external process
   /// created while the App was in the background show up without any user action.
   func installExternalAgentActivationObserver() {
-    let state = DSHExternalAgentBridgeRegistry.shared.state(for: self)
+    let state = stateBag.state { DSHExternalAgentBridgeState(controller: self) }
     guard state.activationObserver == nil else { return }
     state.activationObserver = NotificationCenter.default.addObserver(
       forName: NSApplication.didBecomeActiveNotification,
@@ -172,7 +146,7 @@ extension HarnessController {
   }
 
   func refreshHostSnapshotsOnActivation() {
-    let state = DSHExternalAgentBridgeRegistry.shared.state(for: self)
+    let state = stateBag.state { DSHExternalAgentBridgeState(controller: self) }
     let now = Date()
     if let last = state.lastForegroundRefresh,
        now.timeIntervalSince(last) < Self.externalAgentForegroundRefreshInterval {

@@ -10,6 +10,7 @@ struct QuestionBatchSheet: View {
       Text("Agent 需要你的回答")
         .font(.title2.weight(.bold))
         .foregroundStyle(DSHTheme.ink)
+      RequestSourceLabel(sessionID: question.sessionId)
       ScrollView {
         VStack(alignment: .leading, spacing: DSHSpace.s4) {
           ForEach(question.items) { item in

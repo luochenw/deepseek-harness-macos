@@ -106,6 +106,7 @@ enum DSHSessionFollowSnapshotDecoder {
 struct DSHSessionWireEventFrame: Decodable {
   let type: String
   let event: DSHRawEvent
+  let view: DSHJSONValue?
 }
 
 struct DSHSessionAssistantStreamEnvelope: Decodable {
@@ -188,6 +189,9 @@ private final class DSHSessionFollowState {
   var subagentStreams: [String: String] = [:]
   var completedHistoryBySession: [String: DSHHistoryCacheVersion] = [:]
   var completedHistoryToolsBySession: [String: [HarnessController.ToolActivity]] = [:]
+  var completedHistoryWorkflowsBySession: [String: DSHWorkflowLog] = [:]
+  /// The highest sequence seen per session. Unlike `cursor`, it survives a new follow.
+  var highestSequenceBySession: [String: Int] = [:]
   var preservingCachedHistory = false
   var retainingVisibleHistory = false
 
@@ -196,26 +200,9 @@ private final class DSHSessionFollowState {
   }
 }
 
-@MainActor
-private final class DSHSessionFollowRegistry {
-  static let shared = DSHSessionFollowRegistry()
-  private var states: [ObjectIdentifier: DSHSessionFollowState] = [:]
-
-  func state(for controller: HarnessController) -> DSHSessionFollowState {
-    states = states.filter { $0.value.controller != nil }
-    let key = ObjectIdentifier(controller)
-    if let state = states[key], let owner = state.controller, owner === controller {
-      return state
-    }
-    let state = DSHSessionFollowState(controller: controller)
-    states[key] = state
-    return state
-  }
-}
-
 extension HarnessController {
   private var sessionFollowState: DSHSessionFollowState {
-    DSHSessionFollowRegistry.shared.state(for: self)
+    stateBag.state { DSHSessionFollowState(controller: self) }
   }
 
   var rootSessionFollowCursor: Int? { sessionFollowState.cursor }
@@ -226,6 +213,10 @@ extension HarnessController {
 
   func cachedRootHistoryTools(sessionID: String) -> [HarnessController.ToolActivity]? {
     sessionFollowState.completedHistoryToolsBySession[sessionID]
+  }
+
+  func cachedRootHistoryWorkflows(sessionID: String) -> DSHWorkflowLog? {
+    sessionFollowState.completedHistoryWorkflowsBySession[sessionID]
   }
 
   func isPreservingCachedRootHistory(sessionID: String) -> Bool {
@@ -244,6 +235,7 @@ extension HarnessController {
         summaryUpdatedAt ?? Date().timeIntervalSince1970 * 1_000))
     if hostCurrentSessionID == sessionID {
       state.completedHistoryToolsBySession[sessionID] = activeTools
+      state.completedHistoryWorkflowsBySession[sessionID] = rootScope.workflowLog
     }
   }
 
@@ -326,7 +318,7 @@ extension HarnessController {
       sessionID: sessionID,
       onItem: { [weak self] frame in
         guard let jobs = frame["jobs"] as? [[String: Any]] else { return }
-        self?.consumeMuxFrame(["type": "session/jobs", "sessionId": sessionID, "jobs": jobs])
+        self?.applySessionJobs(sessionID: sessionID, jobs: jobs)
       },
       onEnd: {},
       onError: { [weak self] message in self?.hostStatus = "后台任务流失败：\(message)" })
@@ -343,7 +335,7 @@ extension HarnessController {
     guard let type = frame["type"] as? String else { return }
     if type == "projection",
        let projection = DSHProjectionDecoder.decode(DSHSessionControlProjection.self, from: frame) {
-      applyProjection(sessionID: projection.sessionId, key: projection.key, value: anyValue(projection.value), seq: projection.seq)
+      applyProjection(sessionID: projection.sessionId, key: projection.key, value: projection.value.plainValue, seq: projection.seq)
       return
     }
     guard type == "baseline",
@@ -388,21 +380,32 @@ extension HarnessController {
         return
       }
       let folded = foldHistoryContent(snapshot.records)
+      // A Host that crashed before flushing its log comes back behind what this
+      // client already saw. Nothing kept from before is trustworthy then.
+      let rewound = max(state.highestSequenceBySession[sessionID] ?? -1, state.completedHistoryBySession[sessionID]?.sequence ?? -1) > snapshot.cursor
+      if rewound {
+        state.completedHistoryBySession[sessionID] = nil
+        state.completedHistoryToolsBySession[sessionID] = nil
+        state.completedHistoryWorkflowsBySession[sessionID] = nil
+        rootScope.workflowLog = DSHWorkflowLog()
+      }
+      state.highestSequenceBySession[sessionID] = snapshot.cursor
       let cached = state.completedHistoryBySession[sessionID]
       let cachedSequence = cached?.sequence
       let preserveCachedHistory = state.preservingCachedHistory
         && !sessions[index].messages.isEmpty
         && (cachedSequence.map { $0 >= snapshot.cursor } ?? (cached?.updatedAt != nil))
-      let retainVisibleHistory = state.retainingVisibleHistory
+      let retainVisibleHistory = !rewound
+        && state.retainingVisibleHistory
         && !sessions[index].messages.isEmpty
       if preserveCachedHistory || retainVisibleHistory {
         sessions[index].messages = DSHHistoryPageMerge.mergeTail(
           folded.messages,
           into: sessions[index].messages)
       } else {
-        sessions[index].messages = folded.messages.isEmpty && !snapshot.hasMore
-          ? [Message(role: .system, text: "这个会话还没有可显示的消息。")]
-          : folded.messages
+        sessions[index].messages = DSHHistoryPageMerge.replacingRows(
+          with: folded.messages,
+          keepingUnloggedFrom: sessions[index].messages)
       }
       sessions[index].turnStartedAt = folded.activeTurnStartedAt
       reconcileRootSessionRunningState(
@@ -412,9 +415,10 @@ extension HarnessController {
       sessions[index].isLoadingHistory = preserveCachedHistory || retainVisibleHistory
         ? false
         : snapshot.hasMore
-      activeTools = DSHToolActivityMerge.preservingDetails(
-        incoming: folded.tools,
-        previous: activeTools)
+      activeTools = preserveCachedHistory || retainVisibleHistory
+        ? DSHToolActivityMerge.mergingTail(folded.tools, into: activeTools)
+        : DSHToolActivityMerge.preservingDetails(incoming: folded.tools, previous: activeTools)
+      recordWorkflowHistory(folded, sessionID: sessionID)
       let oldest = DSHHistoryPagination.oldestSeq(in: snapshot.records)
       sessions[index].updatedAt = Date()
       if let projections = snapshot.projections {
@@ -430,17 +434,10 @@ extension HarnessController {
       state.assistantAttemptID = snapshot.assistantStream?.activeAttempt?.attemptId
       state.assistantNextIndex = snapshot.assistantStream?.activeAttempt?.nextIndex
       for streamChunk in snapshot.assistantStream?.activeAttempt?.stream ?? [] {
-        guard let chunk = jsonObject(streamChunk.chunk) else { continue }
-        consumeMuxFrame([
-          "type": "session/event",
-          "sessionId": sessionID,
-          "event": [
-            "type": "assistant/chunk",
-            "seq": state.cursor ?? 0,
-            "time": 0,
-            "data": ["chunk": chunk],
-          ],
-        ])
+        consumeSessionEvent(
+          .assistantChunk(streamChunk.chunk, seq: state.cursor ?? 0),
+          view: nil,
+          sessionID: sessionID)
       }
       status = preserveCachedHistory
         ? "已从本地缓存恢复完整会话"
@@ -473,9 +470,12 @@ extension HarnessController {
       }
       state.preservingCachedHistory = false
       state.retainingVisibleHistory = false
+      deliverPendingSessionErrors(sessionID: sessionID, localSessionID: localSessionID)
     case "event":
+      // A frame that cannot be applied must not advance the cursor: the next
+      // event then reads as a gap and the follow snapshot repairs the session.
       guard let eventFrame = DSHProjectionDecoder.decode(DSHSessionWireEventFrame.self, from: frame),
-            let data = jsonObject(eventFrame.event.data)
+            eventFrame.event.data.object != nil
       else { return }
       if let expected = state.nextSeq, eventFrame.event.seq != expected {
         hostStatus = "会话事件序号断裂：期望 \(expected)，收到 \(eventFrame.event.seq)"
@@ -490,22 +490,14 @@ extension HarnessController {
       }
       state.nextSeq = eventFrame.event.seq + 1
       state.cursor = eventFrame.event.seq
-      consumeMuxFrame([
-        "type": "session/event",
-        "sessionId": sessionID,
-        "event": [
-          "type": eventFrame.event.type,
-          "seq": eventFrame.event.seq,
-          "time": eventFrame.event.time,
-          "data": data,
-        ],
-        "view": frame["view"] ?? [:],
-      ])
+      state.highestSequenceBySession[sessionID] = max(state.highestSequenceBySession[sessionID] ?? -1, eventFrame.event.seq)
+      consumeSessionEvent(eventFrame.event, view: eventFrame.view, sessionID: sessionID)
       if let cached = state.completedHistoryBySession[sessionID] {
         state.completedHistoryBySession[sessionID] = DSHHistoryCacheVersion(
           sequence: max(cached.sequence ?? eventFrame.event.seq, eventFrame.event.seq),
           updatedAt: Date().timeIntervalSince1970 * 1_000)
         state.completedHistoryToolsBySession[sessionID] = activeTools
+        state.completedHistoryWorkflowsBySession[sessionID] = rootScope.workflowLog
       }
     case "assistant-stream":
       guard let envelope = DSHProjectionDecoder.decode(DSHSessionAssistantStreamEnvelope.self, from: frame),
@@ -543,12 +535,8 @@ extension HarnessController {
         }
         state.assistantAttemptID = attemptID
         state.assistantNextIndex = index + 1
-        guard let chunk = plainValue(envelope.frame["chunk"]) as? [String: Any] else { return }
-        consumeMuxFrame([
-          "type": "session/event",
-          "sessionId": sessionID,
-          "event": ["type": "assistant/chunk", "seq": state.cursor ?? 0, "time": 0, "data": ["chunk": chunk]],
-        ])
+        guard let chunk = envelope.frame["chunk"] else { return }
+        consumeSessionEvent(.assistantChunk(chunk, seq: state.cursor ?? 0), view: nil, sessionID: sessionID)
       case "end":
         guard let index = envelope.frame["index"]?.integer,
               index == (state.assistantNextIndex ?? 0) else {
@@ -573,10 +561,15 @@ extension HarnessController {
     seq: Int
   ) {
     rememberPermissionSelection(values.permissions, sessionID: sessionID, seq: seq)
+    if hasSubagentPresentation(sessionID: sessionID) {
+      for (key, rawValue) in rawValues {
+        applySubagentProjection(sessionID: sessionID, key: key, value: rawValue.plainValue, seq: seq)
+      }
+    }
     guard sessionID == hostCurrentSessionID else { return }
     for (key, rawValue) in rawValues {
       guard key != "permissions" else { continue }
-      applyProjection(key: key, value: anyValue(rawValue))
+      applyProjection(key: key, value: rawValue.plainValue)
     }
   }
 
@@ -590,14 +583,6 @@ extension HarnessController {
     } else if hasSubagentPresentation(sessionID: sessionID) {
       applySubagentProjection(sessionID: sessionID, key: key, value: value, seq: seq)
     }
-  }
-
-  private func jsonObject(_ value: DSHJSONValue) -> [String: Any]? {
-    anyValue(value) as? [String: Any]
-  }
-
-  private func plainValue(_ value: DSHJSONValue?) -> Any? {
-    value.map(anyValue)
   }
 
   func confirmMigrationIfNeeded(for summary: DSHSessionSummary) -> Bool {

@@ -2,11 +2,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib-test-library.sh"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
 ATTACHMENTS="$ROOT/macos/DSHApp/Composer/DSHAttachments.swift"
 PREVIEW="$ROOT/macos/DSHApp/Transcript/NativeAttachmentPreview.swift"
 CONVERSATION="$ROOT/macos/DSHApp/Transcript/ConversationView.swift"
-EVENTS="$ROOT/macos/DSHApp/Host/DSHEventSocket.swift"
+EVENTS="$ROOT/macos/DSHApp/Core/DSHSessionEvent.swift"
 SNAPSHOT_FIXTURE="$ROOT/scripts/fixtures/attachment-rail-snapshot-check.swift"
 SNAPSHOT_BUILD="$(mktemp -d)"
 SNAPSHOT_DIR="${ATTACHMENT_RAIL_SNAPSHOT_DIR:-${TMPDIR:-/tmp}/dsh-attachment-rail-snapshots}"
@@ -32,7 +33,7 @@ grep -q 'AttachmentRail(items: harness.displayedAttachmentRailItems' "$CONVERSAT
   echo "attachment-rail-ui: conversation header does not render the rail" >&2
   exit 1
 }
-grep -q 'DSHAttachmentRef.fromLiveMessage' "$EVENTS" || {
+grep -q 'DSHAttachmentRef.fromMessage' "$EVENTS" || {
   echo "attachment-rail-ui: live messages do not retain image references" >&2
   exit 1
 }
@@ -42,12 +43,10 @@ grep -q 'retryImage' "$PREVIEW" || {
 }
 
 rm -rf "$SNAPSHOT_DIR"
-swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
-  -o "$SNAPSHOT_BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
-swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$SNAPSHOT_BUILD" -L "$SNAPSHOT_BUILD" -lDSHAppLib \
+dsh_test_library "$SNAPSHOT_BUILD"
+swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$DSH_TEST_LIBRARY_DIR" -L "$DSH_TEST_LIBRARY_DIR" -lDSHAppLib \
   -o "$SNAPSHOT_BUILD/attachment-rail-snapshot-check" \
   "$SNAPSHOT_FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit
-DYLD_LIBRARY_PATH="$SNAPSHOT_BUILD" "$SNAPSHOT_BUILD/attachment-rail-snapshot-check" "$SNAPSHOT_DIR"
+DYLD_LIBRARY_PATH="$DSH_TEST_LIBRARY_DIR" "$SNAPSHOT_BUILD/attachment-rail-snapshot-check" "$SNAPSHOT_DIR"
 
 echo "attachment-rail-ui: OK"

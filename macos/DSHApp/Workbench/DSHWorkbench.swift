@@ -323,28 +323,11 @@ private final class DSHWorkbenchState {
   }
 }
 
-@MainActor
-private final class DSHWorkbenchRegistry {
-  static let shared = DSHWorkbenchRegistry()
-  private var states: [ObjectIdentifier: DSHWorkbenchState] = [:]
-
-  func state(for controller: HarnessController) -> DSHWorkbenchState {
-    states = states.filter { $0.value.controller != nil }
-    let key = ObjectIdentifier(controller)
-    if let state = states[key], let owner = state.controller, owner === controller {
-      return state
-    }
-    let state = DSHWorkbenchState(controller: controller)
-    states[key] = state
-    return state
-  }
-}
-
 extension HarnessController {
   private static let defaultWorkbenchContextKey = "default"
 
   private var workbenchState: DSHWorkbenchState {
-    DSHWorkbenchRegistry.shared.state(for: self)
+    stateBag.state { DSHWorkbenchState(controller: self) }
   }
 
   static func workbenchLocalContextKey(_ id: UUID) -> String { "local:\(id.uuidString)" }
@@ -483,30 +466,26 @@ extension HarnessController {
     createBrowserWorkbench(url: url, contextKey: workbenchContextKey, reveal: true)
   }
 
-  func consumeModelWorkbenchEvent(sessionID: String, event: [String: Any]) {
-    guard let kind = event["type"] as? String,
-          let data = event["data"] as? [String: Any] else { return }
-    switch kind {
-    case "tool/call":
+  func consumeModelWorkbenchEvent(sessionID: String, raw: DSHRawEvent, event: DSHSessionEvent) {
+    let data = raw.data.object ?? [:]
+    switch event {
+    case .toolCall(let call):
+      guard let name = call.name, DSHModelWorkbenchTool.names.contains(name) else { return }
       rememberModelWorkbenchCall(
         sessionID: sessionID,
         key: modelWorkbenchCallKey(sessionID: sessionID, data: data),
-        data: data)
-    case "tool/code-dispatch-start":
-      guard let callID = data["subCallId"] as? String else { return }
+        data: raw.plainData)
+    case .subcallStarted(let subcall, .code):
+      guard DSHModelWorkbenchTool.names.contains(subcall.name) else { return }
       rememberModelWorkbenchCall(
         sessionID: sessionID,
-        key: modelWorkbenchCodeCallKey(
-          sessionID: sessionID,
-          data: data,
-          callID: callID),
+        key: modelWorkbenchCodeCallKey(sessionID: sessionID, subcall: subcall),
         data: [
-          "callId": callID,
-          "name": data["name"] ?? "",
-          "arguments": data["arguments"] ?? [:],
+          "callId": subcall.callId,
+          "name": subcall.name,
+          "arguments": data["arguments"]?.plainValue ?? [:],
         ])
-    case "tool/result":
-      guard let result = DSHToolResultDecoder.live(from: data) else { return }
+    case .toolResult(let result, _):
       let key = modelWorkbenchCallKey(
         sessionID: sessionID,
         data: data,
@@ -517,34 +496,29 @@ extension HarnessController {
         succeeded: !result.isError,
         handledKey: modelWorkbenchEventKey(
           sessionID: sessionID,
-          event: event,
+          raw: raw,
           fallback: key))
-    case "tool/code-dispatch":
-      guard let name = data["name"] as? String,
-            DSHModelWorkbenchTool.names.contains(name),
-            let callID = data["subCallId"] as? String
-      else { return }
-      let key = modelWorkbenchCodeCallKey(
-        sessionID: sessionID,
-        data: data,
-        callID: callID)
+    case .subcallFinished(let subcall, _, .code):
+      guard DSHModelWorkbenchTool.names.contains(subcall.name) else { return }
+      let succeeded = data["isError"]?.bool == false
+      let key = modelWorkbenchCodeCallKey(sessionID: sessionID, subcall: subcall)
       if workbenchState.pendingModelCalls[key] != nil {
         finishModelWorkbenchCall(
           sessionID: sessionID,
           key: key,
-          succeeded: data["isError"] as? Bool == false,
+          succeeded: succeeded,
           handledKey: modelWorkbenchEventKey(
             sessionID: sessionID,
-            event: event,
+            raw: raw,
             fallback: key))
-      } else if data["isError"] as? Bool == false {
+      } else if succeeded {
         rememberModelWorkbenchCall(
           sessionID: sessionID,
           key: key,
           data: [
-            "callId": callID,
-            "name": name,
-            "arguments": data["arguments"] ?? [:],
+            "callId": subcall.callId,
+            "name": subcall.name,
+            "arguments": data["arguments"]?.plainValue ?? [:],
           ])
         finishModelWorkbenchCall(
           sessionID: sessionID,
@@ -552,10 +526,10 @@ extension HarnessController {
           succeeded: true,
           handledKey: modelWorkbenchEventKey(
             sessionID: sessionID,
-            event: event,
+            raw: raw,
             fallback: key))
       }
-    case "turn/end":
+    case .turnEnded:
       clearPendingModelWorkbenchRequests(sessionID: sessionID, includeSettled: false)
     default:
       break
@@ -1005,30 +979,25 @@ extension HarnessController {
 
   private func modelWorkbenchCallKey(
     sessionID: String,
-    data: [String: Any],
+    data: [String: DSHJSONValue],
     callID: String? = nil
   ) -> String {
-    let callID = callID ?? data["callId"] as? String ?? "unknown"
-    let turn = DSHToolPresentationNumber.integerValue(data["turn"]) ?? -1
-    let step = DSHToolPresentationNumber.integerValue(data["step"]) ?? -1
+    let callID = callID ?? data["callId"]?.string ?? "unknown"
+    let turn = data["turn"]?.integer ?? -1
+    let step = data["step"]?.integer ?? -1
     return "\(sessionID):call:\(turn):\(step):\(callID)"
   }
 
-  private func modelWorkbenchCodeCallKey(
-    sessionID: String,
-    data: [String: Any],
-    callID: String
-  ) -> String {
-    let rootCallID = data["rootCallId"] as? String ?? data["parentCallId"] as? String ?? "unknown"
-    return "\(sessionID):code:\(rootCallID):\(callID)"
+  private func modelWorkbenchCodeCallKey(sessionID: String, subcall: DSHSubcallPayload) -> String {
+    "\(sessionID):code:\(subcall.rootCallId ?? "unknown"):\(subcall.callId)"
   }
 
   private func modelWorkbenchEventKey(
     sessionID: String,
-    event: [String: Any],
+    raw: DSHRawEvent,
     fallback: String
   ) -> String {
-    guard let seq = DSHToolPresentationNumber.integerValue(event["seq"]) else { return fallback }
+    guard let seq = raw.sequence else { return fallback }
     return "\(sessionID):event:\(seq)"
   }
 

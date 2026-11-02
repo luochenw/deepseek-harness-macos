@@ -547,7 +547,7 @@ private func testGolden_longReasoningRowCollapses() throws {
 }
 
 /// ④ Live growth. Every event of a real turn is delivered through
-/// `consumeMuxFrame`, and after each one the folded group count and the newest
+/// `deliverFrame`, and after each one the folded group count and the newest
 /// command title must match the events delivered so far — never an older frame.
 private func testGolden_liveGrowthTracksEveryEvent() throws {
   try MainActor.assumeIsolated {
@@ -582,7 +582,7 @@ private func testGolden_liveGrowthTracksEveryEvent() throws {
     var midSnapshot: DSHGoldenRender?
     var seenCounts: [Int] = []
     for (index, entry) in fixture.records.enumerated() {
-      harness.consumeMuxFrame([
+      harness.deliverFrame([
         "type": "session/event",
         "sessionId": "session-golden",
         "event": goldenEventDictionary(entry.event),

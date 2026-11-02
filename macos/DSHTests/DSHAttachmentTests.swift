@@ -66,7 +66,7 @@ private func testAttachmentRail_prefersChildSessionForSubagentTranscript() throw
 }
 
 private func testAttachmentRef_decodesLiveMessageImage() throws {
-  let ref = DSHAttachmentRef.fromLiveMessage([
+  let ref = DSHAttachmentRef.fromMessage(.object(decodedObject([
     "content": [[
       "type": "image",
       "attachment": [
@@ -78,7 +78,7 @@ private func testAttachmentRef_decodesLiveMessageImage() throws {
         "name": "live.jpg",
       ],
     ]],
-  ])
+  ])))
 
   try expectEqual(ref?.attachmentId, "live-image")
   try expectEqual(ref?.mediaType, "image/jpeg")
@@ -163,7 +163,7 @@ private func testLiveRootEvent_keepsDistinctPrefixUserImageMessage() throws {
     harness.selectedSessionID = session.id
     harness.hostCurrentSessionID = "root-session"
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "root-session",
       "event": [
@@ -197,7 +197,7 @@ private func testLiveRootEvent_reconcilesLocalImageEchoIntoExistingMessage() thr
     harness.selectedSessionID = session.id
     harness.hostCurrentSessionID = "root-session"
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "root-session",
       "event": [
@@ -231,7 +231,7 @@ private func testLiveRootEvent_neverReconcilesRelayIntoPendingLocalMessage() thr
 
     var relay = liveImageMessage(id: "relay-user", text: "请看这里", attachmentID: "relay-image")
     relay["source"] = ["kind": "plugin", "plugin": "session-relay"]
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "root-session",
       "event": ["type": "user/message", "data": relay],
@@ -257,7 +257,7 @@ private func testLiveRootEvent_settlesStreamingAssistantPlaceholder() throws {
     harness.selectedSessionID = session.id
     harness.hostCurrentSessionID = "root-session"
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "root-session",
       "event": [
@@ -265,7 +265,7 @@ private func testLiveRootEvent_settlesStreamingAssistantPlaceholder() throws {
         "data": ["chunk": ["type": "text-delta", "textDelta": "流式"]],
       ],
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "root-session",
       "event": [
@@ -339,7 +339,7 @@ private func testLiveRootEvent_preservesConsecutiveAssistantAttachments() throws
       ("assistant-a", "第一张", "assistant-image-a"),
       ("assistant-b", "第二张", "assistant-image-b"),
     ] {
-      harness.consumeMuxFrame([
+      harness.deliverFrame([
         "type": "session/event",
         "sessionId": "root-session",
         "event": [
@@ -374,7 +374,7 @@ private func testLiveRootEvent_preservesConsecutiveAssistantAttachmentsWithoutMe
       ("无 ID 第一张", "anonymous-image-a"),
       ("无 ID 第二张", "anonymous-image-b"),
     ] {
-      harness.consumeMuxFrame([
+      harness.deliverFrame([
         "type": "session/event",
         "sessionId": "root-session",
         "event": [
@@ -409,7 +409,7 @@ private func testLiveSubagentEvent_preservesConsecutiveAssistantAttachments() th
       ("child-a", "子代理第一张", "child-image-a"),
       ("child-b", "子代理第二张", "child-image-b"),
     ] {
-      harness.consumeMuxFrame([
+      harness.deliverFrame([
         "type": "session/event",
         "sessionId": "child-session",
         "event": [

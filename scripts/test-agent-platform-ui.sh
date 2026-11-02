@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib-test-library.sh"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
 VIEW="$ROOT/macos/DSHApp/AgentPlatform/AgentPlatformView.swift"
 WIRE="$ROOT/macos/DSHApp/AgentPlatform/DSHAgentPlatform.swift"
@@ -36,12 +37,10 @@ grep -q 'integrationSummary' "$WIRE" || { echo "agent-platform-ui: integration e
 swiftc -target "$SWIFT_TARGET" "$POLICY" "$POLICY_FIXTURE" -o "$POLICY_BIN"
 "$POLICY_BIN"
 rm -rf "$SNAPSHOT_DIR"
-swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
-  -o "$SNAPSHOT_BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
-swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$SNAPSHOT_BUILD" -L "$SNAPSHOT_BUILD" -lDSHAppLib \
+dsh_test_library "$SNAPSHOT_BUILD"
+swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$DSH_TEST_LIBRARY_DIR" -L "$DSH_TEST_LIBRARY_DIR" -lDSHAppLib \
   -o "$SNAPSHOT_BUILD/agent-platform-snapshot-check" \
   "$SNAPSHOT_FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit
-DYLD_LIBRARY_PATH="$SNAPSHOT_BUILD" "$SNAPSHOT_BUILD/agent-platform-snapshot-check" "$SNAPSHOT_DIR"
+DYLD_LIBRARY_PATH="$DSH_TEST_LIBRARY_DIR" "$SNAPSHOT_BUILD/agent-platform-snapshot-check" "$SNAPSHOT_DIR"
 
 echo "agent-platform-ui: OK"

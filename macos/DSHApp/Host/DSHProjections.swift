@@ -83,16 +83,6 @@ struct DSHSessionStats: Decodable {
   let toolMs: Double
 }
 
-enum DSHProjectionDecoder {
-  /// Projection frame values arrive as untyped JSON objects; round-trip
-  /// through JSONSerialization into the typed wire structs.
-  static func decode<T: Decodable>(_ type: T.Type, from value: Any) -> T? {
-    guard JSONSerialization.isValidJSONObject(value),
-          let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
-    return try? JSONDecoder().decode(T.self, from: data)
-  }
-}
-
 extension HarnessController {
   /// Applies one live `session/projection` frame for the currently open
   /// session — the push channel that keeps the title, dashboard cards, and
@@ -125,22 +115,8 @@ extension HarnessController {
     case "sessionStats":
       if let stats = DSHProjectionDecoder.decode(DSHSessionStats.self, from: value) { sessionStats = stats }
     case "inbox":
-      if let inbox = value as? [String: Any] {
-        var items: [DSHQueueItem] = []
-        for (target, placement) in [("next-turn", "queued"), ("next-step", "steering")] {
-          for (index, message) in (inbox[target] as? [[String: Any]] ?? []).enumerated() {
-            let content = message["content"] as? [[String: Any]] ?? []
-            let text = content.compactMap { $0["text"] as? String }.joined()
-            let messageID = message["id"] as? String ?? "\(target)-\(index)"
-            items.append(DSHQueueItem(
-              id: messageID,
-              messageID: messageID,
-              placement: placement,
-              text: text,
-              hasNonTextContent: content.contains { ($0["type"] as? String) != "text" }))
-          }
-        }
-        if let sessionID = hostCurrentSessionID { rememberQueueSnapshot(items, sessionID: sessionID) }
+      if let items = DSHQueueItem.fromInbox(value), let sessionID = hostCurrentSessionID {
+        rememberQueueSnapshot(items, sessionID: sessionID)
       }
     case "subagentCatalog":
       if let entries = value as? [[String: Any]] {

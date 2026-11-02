@@ -153,7 +153,7 @@ struct SettingsEditorView: View {
   /// to match, so a subsequent save diffs against exactly what is shown.
   private func load(_ source: DSHSettingsNamespace) {
     jsonText = Self.prettyJSON(source.value)
-    baseline = Self.plainValue(source.value) as? [String: Any] ?? [:]
+    baseline = source.value.plainValue as? [String: Any] ?? [:]
     let references = Array(Set(source.value.credentialReferences())).sorted()
     if credentialRef.isEmpty, references.count == 1 {
       credentialRef = references[0]
@@ -228,20 +228,6 @@ struct SettingsEditorView: View {
           let raw = try? JSONSerialization.jsonObject(with: data),
           let object = raw as? [String: Any] else { return nil }
     return object
-  }
-
-  /// Convert a decoded namespace value into the plain Foundation JSON shapes
-  /// `JSONSerialization` produces, so the baseline and the parsed editor
-  /// buffer diff over one representation.
-  private static func plainValue(_ value: DSHJSONValue) -> Any {
-    switch value {
-    case .string(let value): return value
-    case .number(let value): return value
-    case .bool(let value): return value
-    case .object(let value): return value.mapValues(plainValue)
-    case .array(let value): return value.map(plainValue)
-    case .null: return NSNull()
-    }
   }
 
   /// Minimal path ops turning `old` into `new`: unchanged keys produce no op

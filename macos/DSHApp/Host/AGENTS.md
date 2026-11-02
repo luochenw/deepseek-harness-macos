@@ -2,6 +2,7 @@
 Scope: the 0.2 transport contract (token→303→cookie, unary `{args}` calls, the `/api/remote.mux` logical stream), Host process supervision and restart, `host.json` publication, history paging and projection decoding. Renders no UI and decides nothing about session selection or scroll position.
 Key files: `DSHHostProtocol.swift` (envelope types, `DSHHostClient` actor, `DSHHostRuntime`), `DSHHostGateway.swift` (auth transport and unary calls), `DSHEventSocket.swift` (long-lived push connections), `DSHHostSupervisor.swift` (restart policy and generations), `DSHHistory.swift` (session paging and projection decode), `DSHExternalAgentBridge.swift` (`host.json` publication for external agents).
 Invariants (each must cite a Note or test):
+- Every session event enters through `consumeSessionEvent`, and only the open root session and an open subagent are followed — source: `architecture/2026-11-02-core-layer-and-session-activity.md`.
 - One authenticated transport: unary, Typert, download and WebSocket share the same `dsh-auth-*` cookie, and a 401 re-handshakes and replays once — source: `architecture/2026-08-28-dsh-0.2-protocol-migration.md` ("401 重新握手并重放一次").
 - Never pick a same-named cookie out of the shared store, or multiple loopback Hosts cross over to a stale port — source: `architecture/2026-08-28-dsh-0.2-protocol-migration.md` ("不能再从全局 cookie 存储挑选同名 cookie").
 - Request payloads are always `{args:{...}}` and responses are validated by `rpcId` — source: `architecture/2026-08-28-dsh-0.2-protocol-migration.md` ("{args:{...}}").

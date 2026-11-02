@@ -64,6 +64,7 @@ extension HarnessController {
         }
         try await hostClient.prompt(sessionId: created.sessionId, content: [.text(outgoing)])
         await MainActor.run {
+          self.noteSessionStarted(created.sessionId)
           voiceDiag("[dispatch] created \(created.sessionId) cwd=\(cwd ?? "nil")")
           self.status = "语音任务已派发到「\(targetName)」"
           self.appendSystem("语音任务已派发到「\(targetName)」，后台执行中：\(String(instruction.prefix(48)))")
@@ -100,24 +101,5 @@ extension HarnessController {
     pendingVoiceTaskFocusID = nil
     openHostSession(summary)
     return true
-  }
-
-  /// Mux events for dispatched sessions (everything except the one on
-  /// screen is normally dropped) — completion is the signal that matters;
-  /// approvals/questions already notify globally through their own frames.
-  func handleVoiceTaskEvent(sessionID: String, event: [String: Any]) {
-    guard let kind = event["type"] as? String, let label = voiceTaskSessions[sessionID] else { return }
-    switch kind {
-    case "turn/end":
-      voiceTaskSessions[sessionID] = nil
-      if sessionID != hostCurrentSessionID {
-        // Recomputes from the session-wide facts; a finished voice task is not
-        // by itself a reason to raise the "!" badge.
-        nativeAlerts.notifyTurnFinished(summary: "语音任务完成：\(label)。点击查看会话列表。")
-      }
-      refreshHostSnapshots()
-    default:
-      break
-    }
   }
 }

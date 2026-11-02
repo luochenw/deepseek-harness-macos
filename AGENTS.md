@@ -12,6 +12,9 @@ A SwiftUI/AppKit **native** macOS client for [DSH](https://github.com/deepseek-a
 macos/DSHApp/       Swift sources, one directory per feature domain — no Xcode
                     project (see below). Only Info.plist and AppIcon.icns sit at
                     this level; a *.swift here fails the layout gate.
+  Core/               The domain layer: wire values, event decoding, the session
+                      timeline, transcript and tool models. No UI, no controller;
+                      scripts/test-core.sh compiles it alone
   App/                @main entry, the one HarnessController, ContentView,
                       lifecycle, global Esc policy, NativeContractCheck (fixture)
   Host/               RPC envelope + DSHHostClient, event sockets, Host runtime
@@ -75,17 +78,35 @@ corresponding extension files. SwiftUI views read state via
 `@EnvironmentObject private var harness: HarnessController` and never hold
 their own copy of Host-derived state.
 
-When adding a feature:
-1. New wire types (`Encodable`/`Decodable` structs mirroring a Host RPC
-   method's payload/result) go in a `DSH<Feature>.swift` file, following the
-   existing `DSH`-prefixed naming (`DSHSubagentEntry`, `DSHWorkspaceView`, …).
-2. New `DSHHostClient` methods go in `DSHHostClientExtensions.swift` (or
-   `DSHHostProtocol.swift` if they're core session/workspace surface).
-3. New `@Published` state and controller methods go in an
-   `extension HarnessController` in the matching `DSH<Feature>.swift` file
-   (create one if the domain doesn't have one yet). Never inline them in
-   `main.swift`, even for "core" flows — that door is closed by the freeze.
-4. New views go in their own `<Feature>View.swift`.
+Extensions cannot store properties, so state has two homes. Fields that describe
+the open root session go in `DSHRootSessionScope`, which a session switch replaces
+whole. A domain's private state goes in a class fetched from
+`stateBag.state { ... }`, which lives exactly as long as the controller. Don't add
+a singleton keyed by controller: `./scripts/test-macos-native.sh` rejects it.
+
+## Adding a feature
+
+Put each piece where it belongs, then run the matching check:
+
+| The feature needs | It goes in | Check |
+|---|---|---|
+| A Host RPC | A typed wrapper on `DSHHostClient` in `DSHHostClientExtensions.swift` | `test-macos-native.sh` |
+| A new session event | A name and case in `Core/DSHSessionEvent.swift`, handling in `DSHSessionTimeline.apply`, a step in `DSHCoreTimelineTests` | `test-core.sh` |
+| New transcript or tool behaviour | `Core/`, with a test that needs no controller | `test-core.sh` |
+| State about the open session | A field on `DSHRootSessionScope` plus its forwarder | `--unit` |
+| State about a background session | `Sessions/DSHSessionActivity.swift`; only Host status reaches those sessions | `--unit` |
+| Private state for a domain | A class fetched through `stateBag.state { ... }` in that domain | `--unit` |
+| A screen | `<Feature>View.swift` in its domain, reading `harness` | `--unit` |
+| A whole new domain | A directory with `AGENTS.md` and a one-line `CLAUDE.md` | `test-macos-native.sh` |
+
+Only the open root session and an open subagent receive session events. Anything
+that must work for a session nobody is looking at has to use Host status or the
+session list; it will never see a `turn/end`.
+
+Prefer logic in `Core/`: a type that needs no controller gets tested in seconds.
+New wire types mirror a Host payload and keep the `DSH` prefix. Never add state,
+methods or views to `main.swift`. Text gates in `scripts/test-*.sh` grep sources, so
+a move can fail one; repoint it to the code's new home rather than deleting it.
 
 ## RPC & event protocol
 
@@ -96,12 +117,12 @@ When adding a feature:
   Add new calls as small typed wrapper methods (see any existing method in
   `DSHHostProtocol.swift`) — never call `.call(...)` directly from a View or
   from `HarnessController` business logic.
-- Two long-lived `DSHEventSocket` connections carry push events:
-  `api/events.host` (workspace/session lifecycle — `consumeHostFrame`) and
-  `api/events.mux` (per-turn streaming — `consumeMuxFrame` →
-  `applyLiveEvent` for the `session/event` case). When you add a new mux
-  event `type`/`kind`, add a `case` in the matching `switch` rather than a
-  new dispatch mechanism.
+- One `/api/remote.mux` connection carries `$events` (app and session status),
+  `session/control` (projections), and one `session/follow` per followed session.
+  Every session event enters through `consumeSessionEvent`, is decoded once by
+  `DSHSessionEvent`, and reaches transcript state through
+  `DSHSessionTimeline.apply`, for root live, subagent live and history replay
+  alike. The only differences are in `DSHTimelineMode`.
 - Every `DSHHostClient` call site follows the same shape: `Task { do { ...
   await MainActor.run { self.<published state> = ... } } catch { await
   MainActor.run { self.appendSystem(/self.status =/) "...失败：

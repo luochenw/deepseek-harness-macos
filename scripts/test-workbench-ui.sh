@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib-test-library.sh"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
 STATE="$ROOT/macos/DSHApp/Workbench/DSHWorkbench.swift"
 VIEW="$ROOT/macos/DSHApp/Workbench/WorkbenchView.swift"
@@ -33,7 +34,7 @@ grep -q 'DispatchSource.makeFileSystemObjectSource' "$MARKDOWN" || { echo "workb
 grep -q 'NSAllowsLocalNetworking' "$ROOT/macos/DSHApp/Info.plist" || { echo "workbench-ui: local HTTP navigation is not allowed by Info.plist" >&2; exit 1; }
 grep -q 'cachedParse' "$ROOT/macos/DSHApp/Transcript/NativeMarkdownText.swift" || { echo "workbench-ui: Markdown parsing is not cached for scrolling" >&2; exit 1; }
 grep -q 'consumeModelWorkbenchEvent' "$EVENTS" || { echo "workbench-ui: live tool results do not reach the native workbench" >&2; exit 1; }
-grep -q 'case "tool/code-dispatch"' "$STATE" || { echo "workbench-ui: Code Mode workbench calls are not handled" >&2; exit 1; }
+grep -q 'case .subcallFinished(let subcall, _, .code)' "$STATE" || { echo "workbench-ui: Code Mode workbench calls are not handled" >&2; exit 1; }
 grep -Rq 'open_workbench_browser' "$(dirname "$RUNTIME_TOOL")" || { echo "workbench-ui: browser tool is not model-callable" >&2; exit 1; }
 grep -Rq 'open_workbench_markdown' "$(dirname "$RUNTIME_TOOL")" || { echo "workbench-ui: Markdown tool is not model-callable" >&2; exit 1; }
 grep -q '@dsh-app/dsh-tool-workbench' "$RUNTIME_PATCH" || { echo "workbench-ui: workbench tool package is not mounted" >&2; exit 1; }
@@ -43,15 +44,13 @@ if grep -Eq 'RoundedRectangle\(cornerRadius: *[0-9]' "$VIEW" "$BROWSER" "$MARKDO
 fi
 
 rm -rf "$SNAPSHOT_DIR"
-swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
-  -o "$SNAPSHOT_BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
-swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$SNAPSHOT_BUILD" -L "$SNAPSHOT_BUILD" -lDSHAppLib \
+dsh_test_library "$SNAPSHOT_BUILD"
+swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$DSH_TEST_LIBRARY_DIR" -L "$DSH_TEST_LIBRARY_DIR" -lDSHAppLib \
   -o "$SNAPSHOT_BUILD/workbench-snapshot-check" \
   "$SNAPSHOT_FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit
-DYLD_LIBRARY_PATH="$SNAPSHOT_BUILD" "$SNAPSHOT_BUILD/workbench-snapshot-check" "$SNAPSHOT_DIR"
+DYLD_LIBRARY_PATH="$DSH_TEST_LIBRARY_DIR" "$SNAPSHOT_BUILD/workbench-snapshot-check" "$SNAPSHOT_DIR"
 
-swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$SNAPSHOT_BUILD" -L "$SNAPSHOT_BUILD" -lDSHAppLib \
+swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$DSH_TEST_LIBRARY_DIR" -L "$DSH_TEST_LIBRARY_DIR" -lDSHAppLib \
   -o "$SNAPSHOT_BUILD/workbench-browser-smoke" \
   "$BROWSER_SMOKE_FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit
 printf '%s\n' '<!doctype html><title>DSH Workbench Smoke</title><p>workbench-browser-ok</p>' > "$WEB_ROOT/index.html"
@@ -63,6 +62,6 @@ for _ in {1..50}; do
   sleep 0.1
 done
 curl -fsS "http://127.0.0.1:$PORT/" >/dev/null
-DYLD_LIBRARY_PATH="$SNAPSHOT_BUILD" "$SNAPSHOT_BUILD/workbench-browser-smoke" "http://127.0.0.1:$PORT/"
+DYLD_LIBRARY_PATH="$DSH_TEST_LIBRARY_DIR" "$SNAPSHOT_BUILD/workbench-browser-smoke" "http://127.0.0.1:$PORT/"
 
 echo "workbench-ui: OK"

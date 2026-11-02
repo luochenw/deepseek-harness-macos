@@ -1,4 +1,5 @@
 import Foundation
+@testable import DSHAppLib
 
 /// Minimal assert harness for `./scripts/test-macos-native.sh --unit` — no
 /// XCTest (this project deliberately has no Xcode/SwiftPM project, see
@@ -6,6 +7,26 @@ import Foundation
 /// Each test file lists its own `NamedTest`s explicitly in DSHTestsMain.swift
 /// rather than auto-discovering — Swift has no reflection-based test
 /// discovery without a framework, and explicit listing is easier to audit.
+
+/// Decodes a test payload the way a Host frame is decoded, so numbers arrive as
+/// JSON numbers rather than as the Swift `Int` literals a test happened to write.
+func decodedObject(_ value: [String: Any]) -> [String: DSHJSONValue] {
+  DSHProjectionDecoder.decode(DSHJSONValue.self, from: value)?.object ?? [:]
+}
+
+extension DSHRawEvent {
+  /// Hand-written test events may omit `seq` or `time`.
+  init?(frame: [String: Any]) {
+    guard let type = frame["type"] as? String,
+          let data = frame["data"].flatMap({ DSHProjectionDecoder.decode(DSHJSONValue.self, from: $0) })
+    else { return nil }
+    self.init(
+      type: type,
+      seq: frame["seq"] as? Int ?? -1,
+      time: (frame["time"] as? NSNumber)?.doubleValue ?? -1,
+      data: data)
+  }
+}
 
 enum TestFailure: Error, CustomStringConvertible {
   case message(String)

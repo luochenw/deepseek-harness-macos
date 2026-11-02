@@ -284,12 +284,9 @@ private func testSessionSwitchClearsAgentExecutionState() throws {
         output: "old",
         presentation: nil),
     ]
-    harness.workflows = [
-      HarnessController.WorkflowRun(
-        id: "old-workflow",
-        parentSessionId: "root-old",
-        name: "Old workflow"),
-    ]
+    harness.rootScope.workflowLog.record(
+      [(1, .workflowRunStarted(id: "old-workflow", name: "Old workflow"))],
+      parentSessionID: "root-old")
 
     harness.selectSession(next.id)
 

@@ -18,7 +18,9 @@ extension HarnessController: DSHBadgeFactsSource {
     pendingApproval != nil || pendingQuestion != nil
       || !queuedApprovals.isEmpty || !queuedQuestions.isEmpty
   }
-  var hasBackgroundRunningWork: Bool { !voiceTaskSessions.isEmpty }
+  var hasBackgroundRunningWork: Bool {
+    !voiceTaskSessions.isEmpty || hostSessions.contains(where: \.running)
+  }
 }
 
 /// The three Dock-badge states, in priority order.

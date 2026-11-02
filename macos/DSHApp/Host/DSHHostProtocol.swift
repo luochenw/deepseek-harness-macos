@@ -161,12 +161,6 @@ struct DSHGoalProjection: Decodable {
   let roundsStarted: Int?
 }
 
-struct DSHTodoItem: Decodable, Identifiable {
-  let content: String
-  let status: String
-  var id: String { content }
-}
-
 struct DSHPlanState: Decodable {
   let active: Bool
   let pending: Bool

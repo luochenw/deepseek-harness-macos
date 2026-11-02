@@ -27,23 +27,6 @@ private final class DSHConversationFoldCacheState {
   }
 }
 
-@MainActor
-private final class DSHConversationFoldRegistry {
-  static let shared = DSHConversationFoldRegistry()
-  private var states: [ObjectIdentifier: DSHConversationFoldCacheState] = [:]
-
-  func state(for controller: HarnessController) -> DSHConversationFoldCacheState {
-    states = states.filter { $0.value.controller != nil }
-    let key = ObjectIdentifier(controller)
-    if let state = states[key], state.controller === controller {
-      return state
-    }
-    let state = DSHConversationFoldCacheState(controller: controller)
-    states[key] = state
-    return state
-  }
-}
-
 private struct HeaderChip<Content: View>: View {
   let icon: String
   let label: String
@@ -210,6 +193,8 @@ private struct ToolStatusHeader: View {
   let running: Bool
   /// A failed call must be *visible* on the collapsed row: coral icon + 「失败」 chip.
   var failed: Bool = false
+  /// The turn ended before this call reported: neither done nor an error.
+  var interrupted: Bool = false
   let expanded: Bool
   let onToggle: () -> Void
   var onOpenDetails: (() -> Void)?
@@ -225,6 +210,7 @@ private struct ToolStatusHeader: View {
   private var accessibilityState: String {
     if running { return "执行中" }
     if failed { return "失败" }
+    if interrupted { return "已中断" }
     return ""
   }
 
@@ -239,6 +225,7 @@ private struct ToolStatusHeader: View {
           title: title,
           running: running,
           failed: failed,
+          interrupted: interrupted,
           expanded: expanded,
           hovering: hovering,
           mutating: mutating,
@@ -252,7 +239,7 @@ private struct ToolStatusHeader: View {
           // metrics keeps the lazy stack's first layout equal to its corrected layout (minHeight
           // only grows, so nothing clips).
           .frame(minHeight: DSHTranscriptRowEstimate.toolStatusRowHeight(
-            accessory: running || failed))
+            accessory: running || failed || interrupted))
           .background(
             hovering || expanded ? DSHTheme.surfaceTint2 : DSHTheme.surfaceTint,
             in: RoundedRectangle(cornerRadius: DSHRadius.sm, style: .continuous))
@@ -301,6 +288,7 @@ private struct ToolStatusLabel: View {
   let title: String?
   let running: Bool
   let failed: Bool
+  var interrupted: Bool = false
   let expanded: Bool
   let hovering: Bool
   var mutating: Bool = false
@@ -351,8 +339,8 @@ private struct ToolStatusLabel: View {
         }
       }
       Spacer(minLength: DSHSpace.s2)
-      if running || failed {
-        ToolStateAccessory(running: running, failed: failed)
+      if running || failed || interrupted {
+        ToolStateAccessory(running: running, failed: failed, interrupted: interrupted)
           .transition(.opacity)
       }
       Image(systemName: "chevron.right")
@@ -389,6 +377,7 @@ private struct DSHToolMutatingChip: View {
 private struct ToolStateAccessory: View {
   var running: Bool = true
   var failed: Bool = false
+  var interrupted: Bool = false
 
   var body: some View {
     if running {
@@ -413,6 +402,18 @@ private struct ToolStateAccessory: View {
       .padding(.horizontal, 6)
       .padding(.vertical, 2)
       .background(DSHTheme.coralSoft, in: Capsule())
+      .fixedSize()
+    } else if interrupted {
+      HStack(spacing: 4) {
+        Image(systemName: "stop.circle.fill")
+          .font(DSHType.micro)
+        Text("已中断")
+          .font(DSHType.micro)
+      }
+      .foregroundStyle(DSHToolRowPalette.secondary)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(DSHTheme.surfaceTint2, in: Capsule())
       .fixedSize()
     }
   }
@@ -449,6 +450,7 @@ private struct ToolInstructionRow: View {
         title: instruction.title,
         running: instruction.state == .running,
         failed: instruction.state == .failed,
+        interrupted: instruction.state == .interrupted,
         expanded: expanded,
         onToggle: { userToggled = !expanded },
         onOpenDetails: activity.map { selected in
@@ -670,7 +672,8 @@ struct ConversationView: View {
         title: title,
         kind: kind,
         running: running,
-        failed: activity?.state == .failed)
+        failed: activity?.state == .failed,
+        interrupted: activity?.state == .interrupted)
     }
     if DSHTranscriptPerf.isEnabled {
       DSHTranscriptPerf.toolGroupDigestBuilds += 1
@@ -715,6 +718,8 @@ struct ConversationView: View {
         hasher.combine(2)
       case .failed:
         hasher.combine(3)
+      case .interrupted:
+        hasher.combine(4)
       }
     }
     return String(hasher.finalize())
@@ -735,6 +740,7 @@ struct ConversationView: View {
       String(digest.commandCount),
       String(digest.mutatingCount),
       String(digest.failedCount),
+      String(digest.interruptedCount),
       digest.runningTitle ?? "-"
     ].joined(separator: "|")
   }
@@ -819,7 +825,7 @@ struct ConversationView: View {
     let messageToken = harness.displayedConversationMessageToken
     let transcriptItems = messages.isEmpty
       ? []
-      : DSHConversationFoldRegistry.shared.state(for: harness).items(
+      : harness.stateBag.state { DSHConversationFoldCacheState(controller: harness) }.items(
         messages: messages,
         token: messageToken,
         running: harness.displayedIsRunning)
@@ -1564,7 +1570,7 @@ struct ToolGroupRow: View, Equatable {
   /// One chip slot, failure first: 「N 条失败」 is the thing a reader must not miss, 「其中 M 条修改了文件」 is
   /// secondary.
   private var chipText: String? {
-    digest?.failedSummary ?? digest?.mutatingSummary
+    digest?.failedSummary ?? digest?.interruptedSummary ?? digest?.mutatingSummary
   }
 
   var body: some View {
@@ -1588,6 +1594,7 @@ struct ToolGroupRow: View, Equatable {
         title: groupTitle,
         running: digest?.isRunning == true,
         failed: digest?.isFailed == true,
+        interrupted: digest?.isInterrupted == true,
         expanded: expanded,
         onToggle: { expanded.toggle() },
         mutating: mutatingCount > 0,

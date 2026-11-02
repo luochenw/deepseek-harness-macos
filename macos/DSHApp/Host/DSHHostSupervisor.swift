@@ -130,30 +130,13 @@ final class DSHHostSupervisorState {
   }
 }
 
-@MainActor
-final class DSHHostSupervisorRegistry {
-  static let shared = DSHHostSupervisorRegistry()
-  private var states: [ObjectIdentifier: DSHHostSupervisorState] = [:]
-
-  func state(for controller: HarnessController) -> DSHHostSupervisorState {
-    states = states.filter { $0.value.controller != nil }
-    let key = ObjectIdentifier(controller)
-    if let state = states[key], let owner = state.controller, owner === controller {
-      return state
-    }
-    let state = DSHHostSupervisorState(controller: controller)
-    states[key] = state
-    return state
-  }
-}
-
 extension HarnessController {
   /// UI copy shown once automatic restarts are exhausted.
   nonisolated static let hostGaveUpStatus =
     "Host 多次异常退出，自动重启已停止（连续失败 \(DSHHostSupervisorPolicy.default.maximumAttempts + 1) 次），请点击「重新连接 Host」"
 
   var hostSupervisorState: DSHHostSupervisorState {
-    DSHHostSupervisorRegistry.shared.state(for: self)
+    stateBag.state { DSHHostSupervisorState(controller: self) }
   }
 
   /// Entry point used by `init`, `reconnectHostStreams` and the event-stream retry path.
@@ -234,6 +217,7 @@ extension HarnessController {
     let state = hostSupervisorState
     let client = DSHHostClient(connection: connection)
     hostClient = client
+    noteHostStreamsRestarted()
     hostEvents?.stop()
     hostEvents = DSHEventSocket(client: client, onClosed: { [weak self] in
       self?.handleHostStreamClosed()

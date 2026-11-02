@@ -274,7 +274,7 @@ private func testVoiceCompletionDoesNotFakeAttention() throws {
     drainMainQueue(harness.nativeAlerts)
     try expectEqual(written.last ?? nil, "•")
 
-    // Exactly what handleVoiceTaskEvent(_:event:) does on turn/end.
+    // What finishing a voice task does to the badge.
     harness.voiceTaskSessions["voice-1"] = nil
     harness.isRunning = false
     harness.nativeAlerts.notifyTurnFinished(summary: "语音任务完成")

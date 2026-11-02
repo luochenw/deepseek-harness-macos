@@ -185,7 +185,7 @@ extension HarnessController {
   /// running flag — the composer's stop button and the transcript tail
   /// animation read it, and only a local send() used to set it.
   private func syncSessionScopedState(from summary: DSHSessionSummary, rowRunning: Bool) {
-    isRunning = rowRunning || summary.running
+    showOpenedSessionRunning(rowRunning || summary.running)
     todos = summary.projections?.values.todos ?? []
     hostPlanActive = summary.projections?.values.plan?.active ?? false
     goal = summary.projections?.values.goal

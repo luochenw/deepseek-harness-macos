@@ -61,27 +61,10 @@ final class HarnessController: ObservableObject {
     }
   }
 
-  struct Message: Identifiable, Equatable {
-    enum Role { case user, assistant, system, tool }
-    let id = UUID()
-    let role: Role
-    var text: String
-    var timestamp = Date()
-    var attachment: DSHAttachmentRef?
-    var reasoning: String?
-    /// Host durable message id — the key for per-message Typert feedback.
-    var hostMessageId: String?
-    /// For `.tool` rows: joins the transcript row to its live `ToolActivity`
-    /// (state, summary, presentation) in `activeTools` at render time, so the
-    /// row updates in place when the result lands without mutating messages.
-    var toolCallId: String?
-    /// True for `source: {kind:"plugin", plugin:"session-relay"}` messages
-    /// (dsh-tool-session-relay) — the one non-"user" source kind admitted
-    /// past the injected-context filter below, so the transcript can show
-    /// who a cross-session message came from without text-sniffing the
-    /// plugin's envelope wording.
-    var isRelayMessage = false
-  }
+  typealias Message = DSHMessage
+  typealias ToolActivity = DSHToolActivity
+  typealias ToolPresentation = DSHToolPresentation
+  typealias WorkflowRun = DSHWorkflowRun
 
   struct Session: Identifiable, Equatable {
     let id = UUID()
@@ -125,38 +108,6 @@ final class HarnessController: ObservableObject {
     let mediaType: String
   }
 
-  struct WorkflowRun: Identifiable {
-    /// The wire vocabulary is `WorkflowAgentOutcome = 'completed' | 'failed'
-    /// | 'cancelled'` (member-level) and `WorkflowStopReason = 'completed' |
-    /// 'cancelled' | 'error'` (run-level) — both absent while running. See
-    /// .agents/notes/implemented/feature/2026-08-14-workflow-phase-grouping-and-status.md.
-    enum Status { case running, completed, failed, cancelled }
-    struct Member: Identifiable {
-      let id: Int; var label: String; var phase: String?; let childId: String; var outcome: String?
-      var status: Status {
-        switch outcome {
-        case "completed": .completed
-        case "failed": .failed
-        case "cancelled": .cancelled
-        default: .running
-        }
-      }
-    }
-    let id: String
-    let parentSessionId: String
-    var name: String
-    var stopReason: String?
-    var members: [Member] = []
-    var status: Status {
-      switch stopReason {
-      case "completed": .completed
-      case "error": .failed
-      case "cancelled": .cancelled
-      default: .running
-      }
-    }
-  }
-
   struct SubagentNavigationNode: Identifiable {
     let address: DSHSubagentAddress
     let title: String
@@ -177,82 +128,9 @@ final class HarnessController: ObservableObject {
     func flattened() -> [SubagentTreeNode] { [self] + children.flatMap { $0.flattened() } }
   }
 
-  struct ToolActivity: Identifiable {
-    enum State { case running, succeeded, failed }
-    let id = UUID(); let callId: String
-    var name: String; var summary: String; var state: State
-    var output: String; var arguments: String? = nil; var imageAttachments: [DSHAttachmentRef] = []; var presentation: ToolPresentation?
-    var children: [DSHToolChildActivity] = []
-  }
-
-  struct ToolPresentation {
-    struct Diff: Identifiable { let id = UUID(); let path: String; let oldText: String?; let newText: String }
-    struct FileLine: Identifiable { let id = UUID(); let number: Int; let text: String }
-    struct SearchMatch: Identifiable { let id = UUID(); let lineNumber: Int; let line: String }
-    struct SearchFile: Identifiable { let id = UUID(); let path: String; let matches: [SearchMatch] }
-    struct Source: Identifiable { let id = UUID(); let url: String; let title: String?; let snippet: String?; let publishedAt: String? }
-
-    let card: String
-    let title: String?
-    let path: String?
-    let output: String?
-    let exitCode: Int?
-    let signal: String?
-    let cwd: String?
-    let description: String?
-    let diffs: [Diff]
-    let lines: [FileLine]
-    let totalLines: Int?
-    let lang: String?
-    let searchShape: String?
-    let files: [SearchFile]
-    let paths: [String]
-    let truncated: Bool
-    let total: Int?
-    let webKind: String?
-    let answer: String?
-    let url: String?
-    let statusCode: Int?
-    let sources: [Source]
-
-    static func from(_ view: [String: Any]?) -> Self? {
-      guard let view, let card = view["card"] as? String else { return nil }
-      let diffs = (view["diffs"] as? [[String: Any]] ?? []).compactMap { diff -> Diff? in
-        guard let path = diff["path"] as? String, let newText = diff["newText"] as? String else { return nil }
-        return Diff(path: path, oldText: diff["oldText"] as? String, newText: newText)
-      }
-      let lines = (view["lines"] as? [[String: Any]] ?? []).compactMap { line -> FileLine? in
-        guard let number = DSHToolPresentationNumber.integerValue(line["number"]), let text = line["text"] as? String else { return nil }
-        return FileLine(number: number, text: text)
-      }
-      let files = (view["files"] as? [[String: Any]] ?? []).compactMap { file -> SearchFile? in
-        guard let path = file["path"] as? String else { return nil }
-        let matches = (file["matches"] as? [[String: Any]] ?? []).compactMap { match -> SearchMatch? in
-          guard let lineNumber = DSHToolPresentationNumber.integerValue(match["lineNumber"]), let line = match["line"] as? String else { return nil }
-          return SearchMatch(lineNumber: lineNumber, line: line)
-        }
-        return SearchFile(path: path, matches: matches)
-      }
-      let sources = (view["sources"] as? [[String: Any]] ?? []).compactMap { source -> Source? in
-        guard let url = source["url"] as? String else { return nil }
-        return Source(url: url, title: source["title"] as? String, snippet: source["snippet"] as? String, publishedAt: source["publishedAt"] as? String)
-      }
-      return ToolPresentation(
-        card: card, title: view["title"] as? String, path: view["path"] as? String,
-        output: view["output"] as? String, exitCode: DSHToolPresentationNumber.integerValue(view["exitCode"]),
-        signal: view["signal"] as? String, cwd: view["cwd"] as? String,
-        description: view["description"] as? String, diffs: diffs, lines: lines,
-        totalLines: DSHToolPresentationNumber.integerValue(view["totalLines"]), lang: view["lang"] as? String,
-        searchShape: view["shape"] as? String, files: files,
-        paths: view["paths"] as? [String] ?? [], truncated: view["truncated"] as? Bool ?? false,
-        total: DSHToolPresentationNumber.integerValue(view["total"]), webKind: view["kind"] as? String,
-        answer: view["answer"] as? String, url: view["url"] as? String,
-        statusCode: DSHToolPresentationNumber.integerValue(view["statusCode"]), sources: sources
-      )
-    }
-  }
-
   @Published var sessions: [Session] = []
+  @Published var rootScope = DSHRootSessionScope()
+  let stateBag = DSHControllerStateBag()
   @Published var selectedSessionID: UUID?
   @Published var draft = ""
   @Published var activeSubagentAddress: DSHSubagentAddress?
@@ -265,7 +143,6 @@ final class HarnessController: ObservableObject {
   @Published var subagentTree: [SubagentTreeNode]?
   @Published var subagentTreeLoading = false
   @Published var subagentTreeTruncated = false
-  @Published var selectedWorkflowRunID: String?
   @Published var draftImages: [DraftImage] = []
   /// `/model` 的原生落点：composer 模型选择 popover（SwiftUI Menu 无法编程打开）。
   @Published var showModelPicker = false
@@ -294,28 +171,12 @@ final class HarnessController: ObservableObject {
   /// Preset chosen while no Host session exists yet (lazy creation);
   /// consumed by attachHostSessionToCurrentPlaceholder.
   @Published var pendingHostPresetID: String?
-  @Published var activeTools: [ToolActivity] = []
-  @Published var todos: [DSHTodoItem] = []
-  @Published var subagents: [DSHSubagentEntry] = []
-  @Published var skills: [DSHSkillEntry] = []
-  @Published var workflows: [WorkflowRun] = []
-  @Published var runNotice: String?
-  @Published var retryNotice: String?
   @Published var availableModels: [DSHModelGroup] = []
-  @Published var currentSessionModels: DSHSessionModels?
   @Published var configurableProviders: [DSHConfigurableProvider] = []
   @Published var credentialStates: [String: DSHCredentialView] = [:]
   @Published var settingsDescription: DSHSettingsDescription?
   @Published var hostPresets: [DSHAgentPreset] = []
-  @Published var hostPlanActive = false
-  @Published var goal: DSHGoalProjection?
-  @Published var tokenUsage: DSHTokenUsage?
-  @Published var contextPressure: DSHContextPressure?
-  @Published var sessionStats: DSHSessionStats?
-  @Published var hostCommands: [DSHCommandDescriptor] = []
-  @Published var messageFeedback: [String: DSHMessageFeedbackItem] = [:]
   @Published var pluginEntries: [DSHPluginInventoryEntry] = []
-  @Published var queueItems: [DSHQueueItem] = []
   @Published var pendingApproval: PendingApproval?
   @Published var pendingQuestion: PendingQuestion?
   /// Backlog behind the currently-shown `pendingApproval`/`pendingQuestion` —

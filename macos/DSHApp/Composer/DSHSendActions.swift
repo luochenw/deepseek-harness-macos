@@ -70,8 +70,11 @@ extension HarnessController {
       // fallback to `prompt(...)` starts a real turn, and without this the
       // `guard !isRunning` above never engages, letting a second send fire
       // into the same session while the first is still in flight.
-      isRunning = true
-      sessions[sessionIndex].isRunning = true
+      reconcileRootSessionRunningState(
+        sessionID: hostSessionID,
+        localSessionID: localSessionID,
+        running: true,
+        reportedByHost: false)
       Task {
         do {
           if let execution = try await hostClient.executeCommand(sessionId: hostSessionID, line: text) {
@@ -85,10 +88,11 @@ extension HarnessController {
               }
               // Command execution isn't a turn — no `turn/end` event will
               // arrive to reset this, unlike the `prompt(...)` fallback below.
-              self.setSubmissionRunning(
-                false,
+              self.reconcileRootSessionRunningState(
+                sessionID: hostSessionID,
                 localSessionID: localSessionID,
-                hostSessionID: hostSessionID)
+                running: false,
+                reportedByHost: false)
             }
           } else {
             try await hostClient.prompt(sessionId: hostSessionID, content: [.text(text)])
@@ -96,10 +100,11 @@ extension HarnessController {
         } catch {
           await MainActor.run {
             self.clearPendingLocalUserMessage(localSessionID: localSessionID, messageID: pendingMessageID)
-            self.setSubmissionRunning(
-              false,
+            self.reconcileRootSessionRunningState(
+              sessionID: hostSessionID,
               localSessionID: localSessionID,
-              hostSessionID: hostSessionID)
+              running: false,
+              reportedByHost: false)
             self.appendSystem("命令执行失败：\(error.localizedDescription)", to: localSessionID)
           }
         }
@@ -141,8 +146,11 @@ extension HarnessController {
     // previously left either a glued-together "处理中…<real text>" bubble or
     // a dangling stale line once real content replaced it (never cleaned up
     // — see .agents/notes/implemented/bug-fix/2026-08-17-composer-consolidation.md).
-    sessions[sessionIndex].isRunning = true
-    isRunning = true
+    reconcileRootSessionRunningState(
+      sessionID: hostSessionID,
+      localSessionID: localSessionID,
+      running: true,
+      reportedByHost: false)
     status = "持久 Host 正在处理"
     Task {
       do {
@@ -158,26 +166,14 @@ extension HarnessController {
       } catch {
         await MainActor.run {
           self.clearPendingLocalUserMessage(localSessionID: localSessionID, messageID: pendingMessageID)
-          self.setSubmissionRunning(
-            false,
+          self.reconcileRootSessionRunningState(
+            sessionID: hostSessionID,
             localSessionID: localSessionID,
-            hostSessionID: hostSessionID)
+            running: false,
+            reportedByHost: false)
           self.appendSystem("Host prompt 失败：\(error.localizedDescription)", to: localSessionID)
         }
       }
-    }
-  }
-
-  func setSubmissionRunning(
-    _ running: Bool,
-    localSessionID: UUID,
-    hostSessionID: String
-  ) {
-    if let index = sessions.firstIndex(where: { $0.id == localSessionID }) {
-      sessions[index].isRunning = running
-    }
-    if selectedSessionID == localSessionID && hostCurrentSessionID == hostSessionID {
-      isRunning = running
     }
   }
 

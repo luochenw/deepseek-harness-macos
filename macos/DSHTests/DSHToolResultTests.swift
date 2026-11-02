@@ -71,8 +71,8 @@ private func flatToolResult(callId: String, text: String, isError: Bool = false)
 }
 
 private func testToolResultDecoder_readsNestedCallIdAndContent() throws {
-  let decoded = DSHToolResultDecoder.live(
-    from: nestedToolResult(callId: "call-a", text: "nested output"))
+  let decoded = DSHToolResultDecoder.decode(
+    from: decodedObject(nestedToolResult(callId: "call-a", text: "nested output")))
 
   try expectEqual(decoded?.callId, "call-a")
   try expectEqual(decoded?.output, "nested output")
@@ -84,17 +84,11 @@ private func testToolResultDecoder_readsFlatDSH02Message() throws {
     callId: "call-flat",
     text: "flat output",
     isError: true)
-  let decoded = DSHToolResultDecoder.live(from: data)
-  let encoded = try JSONSerialization.data(withJSONObject: data)
-  let historyData = try JSONDecoder().decode(DSHJSONValue.self, from: encoded).object
-  let history = historyData.flatMap(DSHToolResultDecoder.history(from:))
+  let decoded = DSHToolResultDecoder.decode(from: decodedObject(data))
 
   try expectEqual(decoded?.callId, "call-flat")
   try expectEqual(decoded?.output, "flat output")
   try expectEqual(decoded?.isError, true)
-  try expectEqual(history?.callId, "call-flat")
-  try expectEqual(history?.output, "flat output")
-  try expectEqual(history?.isError, true)
 }
 
 private func testToolPresentation_mergeKeepsTerminalCallContextForGenericResult() throws {
@@ -103,13 +97,13 @@ private func testToolPresentation_mergeKeepsTerminalCallContextForGenericResult(
     title: "ls -la",
     cwd: "/workspace",
     description: "列出目录")
-  let generic = HarnessController.ToolPresentation.fromEventView([
+  let generic = HarnessController.ToolPresentation.fromEventView(.object(decodedObject([
     "for": "result",
     "view": [
       "card": "generic",
       "content": [["type": "text", "text": "file-a\nfile-b"]],
     ],
-  ])
+  ])))
   let merged = HarnessController.ToolPresentation.merging(
     call: call,
     result: generic,
@@ -172,7 +166,7 @@ private func testLiveToolResult_updatesOnlyCorrelatedCallAndMergesCallContext() 
       presentation: toolPresentation(card: "read", title: "读取"))
     harness.activeTools = [terminal, other]
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "root-session",
       "event": [
@@ -229,7 +223,7 @@ private func testLiveFlatRunCodeResult_settlesAndPreservesOutput() throws {
         presentation: nil),
     ]
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "root-session",
       "event": [

@@ -115,7 +115,7 @@ private func testToolResultDecoder_extractsImageAttachments() throws {
     ],
   ]
 
-  let decoded = DSHToolResultDecoder.live(from: data)
+  let decoded = DSHToolResultDecoder.decode(from: decodedObject(data))
 
   try expectEqual(decoded?.callId, "image-call")
   try expectEqual(decoded?.imageAttachments.count, 1)

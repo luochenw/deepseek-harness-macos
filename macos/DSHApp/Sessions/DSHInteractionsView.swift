@@ -1,6 +1,17 @@
 import SwiftUI
 
 
+/// Requests reach the app from every running session, so each sheet says whose it is.
+struct RequestSourceLabel: View {
+  @EnvironmentObject var harness: HarnessController
+  let sessionID: String
+  var body: some View {
+    Label(harness.requestSourceDescription(sessionID: sessionID), systemImage: "bubble.left.and.bubble.right")
+      .font(.subheadline)
+      .foregroundStyle(DSHTheme.inkFaint)
+  }
+}
+
 struct ApprovalSheet: View {
   @EnvironmentObject var harness: HarnessController
   let approval: HarnessController.PendingApproval
@@ -8,6 +19,7 @@ struct ApprovalSheet: View {
     VStack(alignment: .leading, spacing: DSHSpace.s4) {
       Label("需要权限", systemImage: "exclamationmark.shield.fill").font(.title2.weight(.bold)).foregroundStyle(DSHTheme.warm)
       Text("DSH 请求执行：\(approval.toolName)").font(.headline).foregroundStyle(DSHTheme.ink)
+      RequestSourceLabel(sessionID: approval.sessionId)
       if let reason = approval.reason { Text(reason).foregroundStyle(DSHTheme.inkFaint) }
       Text("仅本次执行。请确认该操作符合你的意图。").font(.caption).foregroundStyle(DSHTheme.inkFaint)
       HStack { Spacer(); Button("拒绝") { harness.answerApproval(approval, allowed: false) }.buttonStyle(.dshSecondary); Button("本会话总是允许") { harness.answerApproval(approval, allowed: true, alwaysThisSession: true) }.buttonStyle(.dshGhost).help("本会话内 \(approval.toolName) 的后续请求将自动允许（换会话后失效）"); Button("允许一次") { harness.answerApproval(approval, allowed: true) }.buttonStyle(.dshPrimary) }

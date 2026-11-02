@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib-test-library.sh"
 APP="${APP_PATH:-$ROOT/dist/DeepSeek Harness.app}"
 MODE="contract"
 MINIMUM_MACOS_VERSION="14.0"
@@ -59,7 +60,8 @@ command -v plutil >/dev/null || { echo "plutil is required (macOS only)." >&2; e
 # instead (see CLAUDE.md "质量规范" / AGENTS.md). This gate is what makes that
 # a rule instead of a suggestion — it only ever ratchets down.
 MAIN_SWIFT="$ROOT/macos/DSHApp/App/main.swift"
-MAIN_SWIFT_LINE_LIMIT=489
+MAIN_SWIFT_LINE_LIMIT=347
+MAIN_SWIFT_PUBLISHED_LIMIT=50
 [[ -f "$MAIN_SWIFT" ]] || { echo "Expected main.swift at $MAIN_SWIFT — did it move or get removed (e.g. finished the Phase 2 split)? Update MAIN_SWIFT and MAIN_SWIFT_LINE_LIMIT here, and the freeze rule in AGENTS.md/CLAUDE.md, to match." >&2; exit 1; }
 # awk, not `wc -l`: wc -l counts newline bytes, so a final line with no
 # trailing newline would silently undercount by one right at the limit.
@@ -70,6 +72,55 @@ if (( main_swift_lines > MAIN_SWIFT_LINE_LIMIT )); then
   exit 1
 fi
 echo "main.swift size check: OK ($main_swift_lines/$MAIN_SWIFT_LINE_LIMIT lines)"
+main_swift_published="$(grep -c '@Published' "$MAIN_SWIFT")"
+if (( main_swift_published > MAIN_SWIFT_PUBLISHED_LIMIT )); then
+  echo "main.swift declares $main_swift_published @Published properties, over the limit of $MAIN_SWIFT_PUBLISHED_LIMIT." >&2
+  echo "Session-scoped state belongs in DSHRootSessionScope; domain state belongs in a class held by stateBag." >&2
+  exit 1
+fi
+
+# Session timeline gates (see the session-timeline Agent Note). Line counts did
+# not stop state and event handling from spreading, so these check the coupling
+# directly: one reader of event shapes, one owner of controller state, one
+# writer of running state.
+DSHAPP_SOURCES="$ROOT/macos/DSHApp"
+SESSION_EVENT_FILE="$DSHAPP_SOURCES/Core/DSHSessionEvent.swift"
+timeline_issues=0
+report_timeline_issue() {
+  echo "$1" >&2
+  echo "$2" | sed "s|$ROOT/||" >&2
+  timeline_issues=$((timeline_issues + 1))
+}
+SESSION_EVENT_TESTS="$ROOT/macos/DSHTests/DSHCoreTimelineTests.swift"
+while IFS= read -r event_name; do
+  stray="$(grep -rnF --include='*.swift' "\"$event_name\"" "$DSHAPP_SOURCES" | grep -v 'Core/DSHSessionEvent.swift:' || true)"
+  [[ -z "$stray" ]] || report_timeline_issue "Event name $event_name must stay in DSHSessionEvent.swift:" "$stray"
+  grep -qF "\"$event_name\"" "$SESSION_EVENT_TESTS" \
+    || report_timeline_issue "Event $event_name has no case in DSHCoreTimelineTests:" "$SESSION_EVENT_TESTS"
+done < <(sed -nE 's/^  static let [A-Za-z]+ = "(.+)"$/\1/p' "$SESSION_EVENT_FILE")
+stray="$(grep -rnF --include='*.swift' 'DSHSessionEventName.' "$DSHAPP_SOURCES" \
+  | grep -vE 'Core/DSHSessionEvent\.swift:|Core/DSHAssistantStreamProjection\.swift:' || true)"
+[[ -z "$stray" ]] || report_timeline_issue "Read session events through DSHSessionEvent, not by event name:" "$stray"
+stray="$(grep -rnE --include='*.swift' '\.live\(|fromLive(Message|Content)|func live[A-Z]' "$DSHAPP_SOURCES" || true)"
+[[ -z "$stray" ]] || report_timeline_issue "Live/history decoder twins are gone; decode through DSHSessionEvent:" "$stray"
+stray="$(grep -rnE --include='*.swift' 'ObjectIdentifier\((controller|harness|self)\)|Registry\.shared' "$DSHAPP_SOURCES" || true)"
+[[ -z "$stray" ]] || report_timeline_issue "Controller state belongs in stateBag, not a singleton keyed by controller:" "$stray"
+# Five writes in the lifecycle file (the reconcile pair, clear, select, open) and
+# the subagent overlay's own flag. A new write needs a reason, not a new copy.
+RUNNING_WRITER_LIMIT=6
+running_writers="$(grep -rnE --include='*.swift' '(^|[^A-Za-z_])isRunning = ' "$DSHAPP_SOURCES" \
+  | grep -vE 'System/NativeAlerts\.swift:|var isRunning' || true)"
+stray="$(echo "$running_writers" | grep -vE 'Sessions/DSHSessionLifecycle\.swift:|Subagents/DSHSubagentProjection\.swift:' || true)"
+[[ -z "$stray" ]] || report_timeline_issue "Running state changes only through reconcileRootSessionRunningState:" "$stray"
+if (( "$(echo "$running_writers" | grep -c .)" > RUNNING_WRITER_LIMIT )); then
+  report_timeline_issue "More than $RUNNING_WRITER_LIMIT running-state writes:" "$running_writers"
+fi
+if (( timeline_issues > 0 )); then
+  echo "session timeline gates: $timeline_issues check(s) failed (see above)" >&2
+  exit 1
+fi
+echo "session timeline gates: OK (one event reader, one state owner, one running writer)"
+"$ROOT/scripts/test-core.sh"
 
 # Feature-directory layout (see the feature-directories Agent Note): sources
 # live one level down under macos/DSHApp/<Domain>/, and every domain directory
@@ -166,8 +217,16 @@ echo "style gates: OK (0 issues)"
 
 # The production build compiles this exact glob; keeping the command here avoids
 # a second source list or a synthetic test project that could drift from builds.
-swiftc -target "$SWIFT_TARGET" -typecheck -parse-as-library "$ROOT"/macos/DSHApp/*/*.swift \
-  -framework AppKit -framework SwiftUI -framework WebKit
+BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "$BUILD_DIR"' EXIT
+unset DSH_TEST_LIBRARY_DIR
+# The typecheck covers the shipping configuration; the library is built with
+# -D DEBUG. Running them together keeps this step as long as the slower one.
+swiftc -target "$SWIFT_TARGET" -typecheck -parse-as-library -wmo "$ROOT"/macos/DSHApp/*/*.swift \
+  -framework AppKit -framework SwiftUI -framework WebKit &
+typecheck_pid=$!
+dsh_test_library "$BUILD_DIR"
+wait "$typecheck_pid"
 plutil -lint "$ROOT/macos/DSHApp/Info.plist" >/dev/null
 "$ROOT/scripts/test-design-system.sh"
 "$ROOT/scripts/test-settings-ui.sh"
@@ -201,21 +260,11 @@ if [[ "$MODE" == "smoke" ]]; then
 fi
 
 if [[ "$MODE" == "unit" ]]; then
-  UNIT_DIR="$(mktemp -d)"
-  trap 'rm -rf "$UNIT_DIR"' EXIT
-  # Same production source glob as the real build, compiled as a library
-  # (-enable-testing exposes `internal` declarations to @testable import)
-  # instead of an app executable — main.swift's own @main entry point never
-  # gets linked into an executable here, so it can't collide with the test
-  # runner's @main below.
-  # -D DEBUG keeps the probe counters and their switches settable. The shipping
-  # build does NOT define it, so `DSHTranscriptPerf.isEnabled`/`forceRowFrames`
-  # are `let false` there and nothing can turn measurement on in production.
-  swiftc -target "$SWIFT_TARGET" -parse-as-library -D DEBUG -enable-testing -emit-library -emit-module -module-name DSHAppLib \
-    -o "$UNIT_DIR/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-    "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
-  swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$UNIT_DIR" -L "$UNIT_DIR" -lDSHAppLib \
-    -o "$UNIT_DIR/dsh-unit-tests" \
+  # main.swift's own @main entry point is never linked into an executable here,
+  # so it can't collide with the test runner's @main.
+  swiftc -target "$SWIFT_TARGET" -parse-as-library -wmo -num-threads 8 \
+    -I "$DSH_TEST_LIBRARY_DIR" -L "$DSH_TEST_LIBRARY_DIR" -lDSHAppLib \
+    -o "$BUILD_DIR/dsh-unit-tests" \
     "$ROOT"/macos/DSHTests/*.swift -framework AppKit -framework SwiftUI -framework WebKit
-  DYLD_LIBRARY_PATH="$UNIT_DIR" "$UNIT_DIR/dsh-unit-tests"
+  DYLD_LIBRARY_PATH="$DSH_TEST_LIBRARY_DIR" "$BUILD_DIR/dsh-unit-tests"
 fi

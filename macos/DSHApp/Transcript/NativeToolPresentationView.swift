@@ -254,6 +254,7 @@ private struct ToolSubcallRow: View {
     case .running: "运行中"
     case .succeeded: "完成"
     case .failed: "失败"
+    case .interrupted: "已中断"
     }
   }
 
@@ -262,6 +263,7 @@ private struct ToolSubcallRow: View {
     case .running: DSHTheme.warm
     case .succeeded: DSHTheme.accent
     case .failed: DSHTheme.coral
+    case .interrupted: DSHTheme.inkFaint
     }
   }
 

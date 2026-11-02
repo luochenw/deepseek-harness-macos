@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib-test-library.sh"
 SWIFT_TARGET="${SWIFT_TARGET:-$(uname -m)-apple-macos14.0}"
 VIEW="$ROOT/macos/DSHApp/Transcript/NativeToolPresentationView.swift"
 CONVERSATION="$ROOT/macos/DSHApp/Transcript/ConversationView.swift"
@@ -122,7 +123,7 @@ grep -q 'case "image"' "$VIEW" \
   echo "tool-presentation-ui: read_image results are not rendered as clickable images" >&2
   exit 1
 }
-grep -q 'case "read_image"' "$SUPPORT" || {
+grep -q 'case "read_image"' "$ROOT/macos/DSHApp/Core/DSHToolDecoding.swift" || {
   echo "tool-presentation-ui: read_image arguments are not represented" >&2
   exit 1
 }
@@ -136,12 +137,10 @@ grep -q 'struct DSHDisclosureWindow' "$SUPPORT" || {
 }
 
 rm -rf "$SNAPSHOT_DIR"
-swiftc -target "$SWIFT_TARGET" -parse-as-library -enable-testing -emit-library -emit-module -module-name DSHAppLib \
-  -o "$SNAPSHOT_BUILD/libDSHAppLib.dylib" -module-link-name DSHAppLib \
-  "$ROOT"/macos/DSHApp/*/*.swift -framework AppKit -framework SwiftUI -framework WebKit
-swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$SNAPSHOT_BUILD" -L "$SNAPSHOT_BUILD" -lDSHAppLib \
+dsh_test_library "$SNAPSHOT_BUILD"
+swiftc -target "$SWIFT_TARGET" -parse-as-library -I "$DSH_TEST_LIBRARY_DIR" -L "$DSH_TEST_LIBRARY_DIR" -lDSHAppLib \
   -o "$SNAPSHOT_BUILD/tool-presentation-snapshot-check" \
   "$SNAPSHOT_FIXTURE" -framework AppKit -framework SwiftUI -framework WebKit
-DYLD_LIBRARY_PATH="$SNAPSHOT_BUILD" "$SNAPSHOT_BUILD/tool-presentation-snapshot-check" "$SNAPSHOT_DIR"
+DYLD_LIBRARY_PATH="$DSH_TEST_LIBRARY_DIR" "$SNAPSHOT_BUILD/tool-presentation-snapshot-check" "$SNAPSHOT_DIR"
 
 echo "tool-presentation-ui: OK"

@@ -3,67 +3,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 struct DSHAttachmentPayload: Encodable { let sessionId: String; let attachmentId: String }
-struct DSHAttachmentRef: Decodable, Equatable { let attachmentId: String; let mediaType: String; let bytes: Int; let width: Int; let height: Int; let name: String? }
 struct DSHAttachmentResult: Decodable { let attachment: DSHAttachmentRef; let data: String }
-
-extension DSHAttachmentRef {
-  static func fromHistoryMessage(_ message: DSHJSONValue?) -> Self? {
-    fromHistoryContent(message?.object?["content"]?.array ?? []).first
-  }
-
-  static func fromHistoryContent(_ content: [DSHJSONValue]) -> [Self] {
-    content.compactMap { block in
-      guard let block = block.object,
-            block["type"]?.string == "image",
-            let attachment = block["attachment"]?.object,
-            let attachmentId = attachment["attachmentId"]?.string,
-            let mediaType = attachment["mediaType"]?.string,
-            let bytes = historyInteger(attachment["bytes"])
-      else { return nil }
-      return Self(
-        attachmentId: attachmentId,
-        mediaType: mediaType,
-        bytes: bytes,
-        width: historyInteger(attachment["width"]) ?? 0,
-        height: historyInteger(attachment["height"]) ?? 0,
-        name: attachment["name"]?.string)
-    }
-  }
-
-  static func fromLiveMessage(_ message: [String: Any]) -> Self? {
-    fromLiveContent(message["content"] as? [[String: Any]] ?? []).first
-  }
-
-  static func fromLiveContent(_ content: [[String: Any]]) -> [Self] {
-    return content.compactMap { block in
-      guard block["type"] as? String == "image",
-            let attachment = block["attachment"] as? [String: Any],
-            let attachmentId = attachment["attachmentId"] as? String,
-            let mediaType = attachment["mediaType"] as? String,
-            let bytes = liveInteger(attachment["bytes"])
-      else { return nil }
-      return Self(
-        attachmentId: attachmentId,
-        mediaType: mediaType,
-        bytes: bytes,
-        width: liveInteger(attachment["width"]) ?? 0,
-        height: liveInteger(attachment["height"]) ?? 0,
-        name: attachment["name"] as? String)
-    }
-  }
-
-  private static func historyInteger(_ value: DSHJSONValue?) -> Int? {
-    guard case let .number(number)? = value else { return nil }
-    return Int(number)
-  }
-
-  private static func liveInteger(_ value: Any?) -> Int? {
-    if let integer = value as? Int { return integer }
-    if let number = value as? NSNumber { return number.intValue }
-    if let double = value as? Double { return Int(double) }
-    return nil
-  }
-}
 
 struct DSHAttachmentRailItem: Identifiable, Equatable {
   let messageID: UUID
@@ -94,9 +34,10 @@ enum DSHAttachmentRail {
     incomingText: String,
     attachment: DSHAttachmentRef?
   ) -> Bool {
-    guard attachment != nil,
-          let marker = localText.range(of: "\n[图片附件：") else { return false }
-    return incomingText == String(localText[..<marker.lowerBound])
+    DSHTranscriptMessageMarker.matchesAttachmentEcho(
+      localText: localText,
+      incomingText: incomingText,
+      attachment: attachment)
   }
 
   private static func normalizedSessionID(_ sessionID: String?) -> String? {

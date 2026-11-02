@@ -29,26 +29,9 @@ private final class DSHWorkspaceStreamState {
   }
 }
 
-@MainActor
-private final class DSHWorkspaceStreamRegistry {
-  static let shared = DSHWorkspaceStreamRegistry()
-  private var states: [ObjectIdentifier: DSHWorkspaceStreamState] = [:]
-
-  func state(for controller: HarnessController) -> DSHWorkspaceStreamState {
-    states = states.filter { $0.value.controller != nil }
-    let key = ObjectIdentifier(controller)
-    if let state = states[key], let owner = state.controller, owner === controller {
-      return state
-    }
-    let state = DSHWorkspaceStreamState(controller: controller)
-    states[key] = state
-    return state
-  }
-}
-
 extension HarnessController {
   private var workspaceStreamState: DSHWorkspaceStreamState {
-    DSHWorkspaceStreamRegistry.shared.state(for: self)
+    stateBag.state { DSHWorkspaceStreamState(controller: self) }
   }
 
   var hostWorkspaceSnapshot: DSHWorkspaceList {

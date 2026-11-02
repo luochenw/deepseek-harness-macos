@@ -26,19 +26,23 @@ struct DSHQueueItem: Identifiable, Equatable {
     self.hasNonTextContent = hasNonTextContent
   }
 
-  static func fromMux(_ values: [[String: Any]]) -> [Self] {
-    values.compactMap { item in
-      guard let id = item["id"] as? String else { return nil }
-      let message = item["message"] as? [String: Any]
-      let content = message?["content"] as? [[String: Any]] ?? []
-      let text = content.compactMap { $0["text"] as? String }.joined()
-      return Self(
-        id: id,
-        messageID: message?["id"] as? String,
-        placement: item["placement"] as? String ?? "queued",
-        text: text,
-        hasNonTextContent: content.contains { ($0["type"] as? String) != "text" })
+  /// The `inbox` projection: messages waiting for the next turn or the next step.
+  static func fromInbox(_ value: Any) -> [Self]? {
+    guard let inbox = value as? [String: Any] else { return nil }
+    var items: [Self] = []
+    for (target, placement) in [("next-turn", "queued"), ("next-step", "steering")] {
+      for (index, message) in (inbox[target] as? [[String: Any]] ?? []).enumerated() {
+        let content = message["content"] as? [[String: Any]] ?? []
+        let messageID = message["id"] as? String ?? "\(target)-\(index)"
+        items.append(Self(
+          id: messageID,
+          messageID: messageID,
+          placement: placement,
+          text: content.compactMap { $0["text"] as? String }.joined(),
+          hasNonTextContent: content.contains { ($0["type"] as? String) != "text" }))
+      }
     }
+    return items
   }
 }
 
@@ -139,26 +143,9 @@ private final class DSHQueueClientState {
   }
 }
 
-@MainActor
-private final class DSHQueueClientRegistry {
-  static let shared = DSHQueueClientRegistry()
-  private var states: [ObjectIdentifier: DSHQueueClientState] = [:]
-
-  func state(for controller: HarnessController) -> DSHQueueClientState {
-    states = states.filter { $0.value.controller != nil }
-    let key = ObjectIdentifier(controller)
-    if let state = states[key], let owner = state.controller, owner === controller {
-      return state
-    }
-    let state = DSHQueueClientState(controller: controller)
-    states[key] = state
-    return state
-  }
-}
-
 extension HarnessController {
   private var queueClientState: DSHQueueClientState {
-    DSHQueueClientRegistry.shared.state(for: self)
+    stateBag.state { DSHQueueClientState(controller: self) }
   }
 
   func rememberQueueSnapshot(_ items: [DSHQueueItem], sessionID: String) {

@@ -20,11 +20,7 @@ enum DSHModelUsagePresentation {
   }
 
   static func duration(_ milliseconds: Double) -> String {
-    let seconds = max(0, milliseconds) / 1_000
-    if seconds < 60 { return "\(Int(seconds.rounded())) 秒" }
-    let minutes = Int(seconds) / 60
-    let remainder = Int(seconds) % 60
-    return remainder == 0 ? "\(minutes) 分" : "\(minutes) 分 \(remainder) 秒"
+    DSHTurnTiming.durationText(milliseconds)
   }
 
   static func cacheHitRate(_ usage: DSHTokenUsage) -> Int? {

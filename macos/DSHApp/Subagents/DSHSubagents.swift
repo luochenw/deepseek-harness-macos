@@ -173,21 +173,11 @@ extension HarnessController {
     }
   }
 
-  private func consumeSubagentFollowFrame(_ frame: [String: Any], sessionID: String) {
+  func consumeSubagentFollowFrame(_ frame: [String: Any], sessionID: String) {
     guard frame["type"] as? String == "event",
-          let value = DSHProjectionDecoder.decode(DSHSessionWireEventFrame.self, from: frame),
-          let data = anyValue(value.event.data) as? [String: Any]
+          let value = DSHProjectionDecoder.decode(DSHSessionWireEventFrame.self, from: frame)
     else { return }
-    consumeMuxFrame([
-      "type": "session/event",
-      "sessionId": sessionID,
-      "event": [
-        "type": value.event.type,
-        "seq": value.event.seq,
-        "time": value.event.time,
-        "data": data,
-      ],
-    ])
+    consumeSessionEvent(value.event, view: value.view, sessionID: sessionID)
   }
 
   func activateLoadedSubagentPresentation(
@@ -215,14 +205,12 @@ extension HarnessController {
       isRunning: running,
       turnStartedAt: folded.activeTurnStartedAt)
     activeSubagentAddress = address
+    deliverPendingSubagentErrors(sessionID: address.childSessionId)
     let (events, jobs) = drainBufferedSubagentEvents(
       sessionID: address.childSessionId,
       after: historySequence)
     for buffered in events {
-      applyLiveSubagentEvent(
-        sessionID: address.childSessionId,
-        event: buffered.event,
-        view: buffered.view)
+      applySubagentEvent(buffered.event, raw: buffered.raw, sessionID: address.childSessionId)
     }
     if !jobs.isEmpty {
       mergeSubagentJobs(sessionID: address.childSessionId, jobs: jobs)

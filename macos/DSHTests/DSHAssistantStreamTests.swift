@@ -2,21 +2,21 @@ import Foundation
 @testable import DSHAppLib
 
 private func testAssistantStreamProjection_readsCurrentAndLegacyShapes() throws {
-  let current = DSHAssistantStreamProjection.live(
+  let current = DSHAssistantStreamProjection.decode(
     eventType: "assistant/chunk",
-    data: ["chunk": ["type": "text-delta", "text": "GO"]])
-  let legacy = DSHAssistantStreamProjection.live(
+    data: decodedObject(["chunk": ["type": "text-delta", "text": "GO"]]))
+  let legacy = DSHAssistantStreamProjection.decode(
     eventType: "assistant/chunk",
-    data: ["chunk": ["type": "text-delta", "textDelta": "OLD"]])
-  let reasoning = DSHAssistantStreamProjection.live(
+    data: decodedObject(["chunk": ["type": "text-delta", "textDelta": "OLD"]]))
+  let reasoning = DSHAssistantStreamProjection.decode(
     eventType: "assistant/chunk",
-    data: ["chunk": [
+    data: decodedObject(["chunk": [
       "type": "block-end",
       "block": ["type": "reasoning", "text": "thinking"],
-    ]])
-  let aggregate = DSHAssistantStreamProjection.live(
+    ]]))
+  let aggregate = DSHAssistantStreamProjection.decode(
     eventType: "text-chunks",
-    data: ["texts": ["Hello", " world"]])
+    data: decodedObject(["texts": ["Hello", " world"]]))
 
   try expectEqual(current, DSHAssistantStreamDelta(kind: .text, text: "GO", isSnapshot: false))
   try expectEqual(legacy, DSHAssistantStreamDelta(kind: .text, text: "OLD", isSnapshot: false))
@@ -125,7 +125,7 @@ private func testLiveAssistantChunks_streamCurrentTextWithoutDuplication() throw
     harness.selectedSessionID = session.id
     harness.hostCurrentSessionID = "session-stream"
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "session-stream",
       "event": [
@@ -135,7 +135,7 @@ private func testLiveAssistantChunks_streamCurrentTextWithoutDuplication() throw
         "data": ["chunk": ["type": "text-delta", "text": "Hello"]],
       ],
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "session-stream",
       "event": [
@@ -168,7 +168,7 @@ private func testLiveReasoningOnlyAssistantMessage_settlesStreamingPlaceholder()
     harness.hostCurrentSessionID = "session-stream"
     harness.isRunning = true
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "session-stream",
       "event": [
@@ -178,7 +178,7 @@ private func testLiveReasoningOnlyAssistantMessage_settlesStreamingPlaceholder()
         "data": ["chunk": ["type": "reasoning-delta", "text": "thinking"]],
       ],
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "session-stream",
       "event": [
@@ -218,7 +218,7 @@ private func testLiveSubagentAssistantChunks_useCurrentTextShape() throws {
       messages: [],
       hostSessionId: "child-session")
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "child-session",
       "event": [

@@ -23,23 +23,6 @@ private final class DSHHostReconnectState {
   }
 }
 
-@MainActor
-private final class DSHHostReconnectRegistry {
-  static let shared = DSHHostReconnectRegistry()
-  private var states: [ObjectIdentifier: DSHHostReconnectState] = [:]
-
-  func state(for controller: HarnessController) -> DSHHostReconnectState {
-    states = states.filter { $0.value.controller != nil }
-    let key = ObjectIdentifier(controller)
-    if let state = states[key], let owner = state.controller, owner === controller {
-      return state
-    }
-    let state = DSHHostReconnectState(controller: controller)
-    states[key] = state
-    return state
-  }
-}
-
 extension HarnessController.Preset {
   var hostPresetID: String {
     switch self {
@@ -53,7 +36,7 @@ extension HarnessController.Preset {
 
 extension HarnessController {
   private var hostReconnectState: DSHHostReconnectState {
-    DSHHostReconnectRegistry.shared.state(for: self)
+    stateBag.state { DSHHostReconnectState(controller: self) }
   }
 
   func handleHostStreamClosed() {
@@ -195,6 +178,7 @@ extension HarnessController {
       startPersistentHost()
       return
     }
+    noteHostStreamsRestarted()
     cancelRootSessionFollow()
     hostEvents?.stop()
     hostEvents = DSHEventSocket(client: client, onClosed: { [weak self] in
@@ -230,6 +214,7 @@ extension HarnessController {
 
   func refreshHostSnapshots() {
     guard let hostClient else { return }
+    let request = beginSessionListRequest()
     Task {
       do {
         let nextSessions = try await hostClient.sessions()
@@ -241,13 +226,16 @@ extension HarnessController {
         // like a no-op in the sidebar (the rows came straight back on the
         // next refresh) even though the Host had archived it just fine.
         let archived = Set(snapshot.archivedSessionIds)
-        let visibleSessions = nextSessions.filter { !archived.contains($0.sessionId) }
+        let listedSessions = nextSessions.filter { !archived.contains($0.sessionId) }
         await MainActor.run {
+          guard self.acceptSessionList(request) else { return }
+          let visibleSessions = self.applyingNewerStatus(to: listedSessions, since: request)
           self.discardArchivedWorkbenchContexts(hostSessionIDs: archived)
           if let current = self.hostCurrentSessionID, archived.contains(current) {
             self.clearToDefaultPage()
           }
           self.hostSessions = visibleSessions
+          self.reconcileSessionActivity(with: visibleSessions, request: request)
           self.hostWorkspaces = snapshot.items
           if let sessionID = self.hostCurrentSessionID,
              let localSessionID = self.selectedSessionID,

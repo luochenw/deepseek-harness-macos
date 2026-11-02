@@ -56,10 +56,10 @@ private struct JobCard: View {
     }.padding(DSHSpace.s3).dshCard(tint: DSHTheme.surface, radius: DSHRadius.md)
   }
   private static func icon(_ state: HarnessController.ToolActivity.State) -> String {
-    switch state { case .running: "hourglass"; case .succeeded: "checkmark.circle"; case .failed: "exclamationmark.triangle" }
+    switch state { case .running: "hourglass"; case .succeeded: "checkmark.circle"; case .interrupted: "stop.circle"; case .failed: "exclamationmark.triangle" }
   }
   private static func color(_ state: HarnessController.ToolActivity.State) -> Color {
-    switch state { case .running: DSHTheme.accentBright; case .succeeded: DSHTheme.accent; case .failed: DSHTheme.coral }
+    switch state { case .running: DSHTheme.accentBright; case .succeeded: DSHTheme.accent; case .interrupted: DSHTheme.inkFaint; case .failed: DSHTheme.coral }
   }
 }
 

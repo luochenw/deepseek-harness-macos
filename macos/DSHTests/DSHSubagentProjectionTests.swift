@@ -336,23 +336,22 @@ private func testChildPlanAndQueueFrames_doNotLeakRootState() throws {
       childSessionId: "child-1",
       mode: "continuable")
 
-    harness.consumeMuxFrame([
-      "type": "session/projection",
+    harness.consumeSessionControlFrame([
+      "type": "projection",
       "sessionId": "child-1",
       "key": "plan",
       "value": ["active": true, "pending": false],
       "seq": 3,
     ])
-    harness.consumeMuxFrame([
-      "type": "session/queue",
+    harness.consumeSessionControlFrame([
+      "type": "projection",
       "sessionId": "child-1",
-      "items": [[
+      "key": "inbox",
+      "value": ["next-turn": [[
         "id": "child-queue",
-        "placement": "queued",
-        "message": [
-          "content": [["type": "text", "text": "child queue"]],
-        ],
-      ]],
+        "content": [["type": "text", "text": "child queue"]],
+      ]]],
+      "seq": 4,
     ])
 
     try expect(harness.displayedPlanActive)
@@ -408,7 +407,7 @@ private func testLoadingSubagent_replaysOnlyEventsNewerThanHistoryBaseline() thr
       mode: "continuable")
     let generation = harness.beginSubagentPresentationLoad(address: address)
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "child-1",
       "event": [
@@ -423,7 +422,7 @@ private func testLoadingSubagent_replaysOnlyEventsNewerThanHistoryBaseline() thr
         ],
       ],
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "child-1",
       "event": [
@@ -434,7 +433,7 @@ private func testLoadingSubagent_replaysOnlyEventsNewerThanHistoryBaseline() thr
         ],
       ],
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "child-1",
       "event": [
@@ -512,14 +511,14 @@ private func testChildProjectionTodoAndJobFrames_doNotMutateRootState() throws {
       childSessionId: "child-1",
       mode: "continuable")
 
-    harness.consumeMuxFrame([
-      "type": "session/projection",
+    harness.consumeSessionControlFrame([
+      "type": "projection",
       "sessionId": "child-1",
       "key": "todos",
       "value": [["content": "projected child todo", "status": "in_progress"]],
       "seq": 5,
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "child-1",
       "event": [
@@ -530,7 +529,7 @@ private func testChildProjectionTodoAndJobFrames_doNotMutateRootState() throws {
         ],
       ],
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "child-1",
       "event": [
@@ -541,7 +540,7 @@ private func testChildProjectionTodoAndJobFrames_doNotMutateRootState() throws {
         ],
       ],
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/jobs",
       "sessionId": "child-1",
       "jobs": [[
@@ -587,7 +586,7 @@ private func testLiveChildToolResult_updatesOnlyChildContext() throws {
       mode: "continuable")
     harness.seedSubagentPresentation(sessionID: "child-1", tools: [], projections: nil)
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "child-1",
       "event": [
@@ -608,7 +607,7 @@ private func testLiveChildToolResult_updatesOnlyChildContext() throws {
         ],
       ],
     ])
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "child-1",
       "event": [
@@ -661,7 +660,7 @@ private func testChildTurnEnd_settlesOnlyChildTools() throws {
       tools: [tool(callId: "child-tool", name: "read")],
       projections: nil)
 
-    harness.consumeMuxFrame([
+    harness.deliverFrame([
       "type": "session/event",
       "sessionId": "child-1",
       "event": [
