@@ -17,6 +17,18 @@ enum DSHTranscriptPerf {
   static var bodyEvaluations = 0
   static var rowEvaluations = 0
   static var rowAppearances = 0
+  /// `ToolGroupRow.init` calls: a row that is destroyed and rebuilt by
+  /// LazyVStack recycling increments this again, and its `@State` starts over.
+  static var toolGroupMounts = 0
+  /// How many group bodies were composed with the group OPEN, and how many with
+  /// it closed. A row that comes back from LazyVStack recycling composes its
+  /// first body closed (its `@State` started over), so these two counts are the
+  /// direct evidence for "the expanded row folded itself".
+  static var groupBodiesExpanded = 0
+  static var groupBodiesCollapsed = 0
+  /// Set by the row whenever its toggle flips; a test can assert the user's
+  /// flip is not followed by a silent collapse.
+  static var groupToggleFlips = 0
   static var rowFrameDeliveries = 0
   static var bottomDistanceDeliveries = 0
   static var contentHeightDrift: Double = 0
@@ -46,6 +58,8 @@ enum DSHTranscriptPerf {
   /// relayout loop the 2026-10-29 freeze was suspected of.
   static var tailScrollRequests = 0
   static var tailScrollExecutions = 0
+  /// Tail-scroll requests dropped because the viewport was already at the tail.
+  static var tailScrollSuppressed = 0
 }
 
 /// Per-row measured heights, keyed by row id and content version: starting a

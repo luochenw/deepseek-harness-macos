@@ -105,6 +105,7 @@ struct ToolPresentationSnapshotCheck {
               text: $0.name,
               toolCallId: $0.callId)
           },
+          rowID: "presentation-group",
           initiallyExpanded: true,
           digest: ConversationView.toolGroupDigest(
             tools.map {

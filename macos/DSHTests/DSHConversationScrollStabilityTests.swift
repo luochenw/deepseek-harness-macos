@@ -676,6 +676,20 @@ private func testHeightCache_keysOnContentVersionAndWidth() throws {
   }
 }
 
+private func testTailScroll_throttlesFromTheLastRun() throws {
+  let interval = DSHConversationScrollPolicy.tailScrollInterval
+  try expect(DSHConversationScrollPolicy.tailScrollDelay(sinceLast: 10, force: false) == 0,
+             "a follow after a quiet period must run at once")
+  try expect(DSHConversationScrollPolicy.tailScrollDelay(sinceLast: interval, force: false) == 0,
+             "a follow exactly one interval later must run at once")
+  let delay = DSHConversationScrollPolicy.tailScrollDelay(sinceLast: 0.03, force: false)
+  try expect(abs(delay - (interval - 0.03)) < 0.0001,
+             "a follow inside the interval waits only the remainder, got \(delay)")
+  try expect(DSHConversationScrollPolicy.tailScrollDelay(sinceLast: 0, force: true) == 0,
+             "the user's own send must never be throttled")
+  try expect(1 / interval <= 10, "following must stay at or below 10 scrolls a second")
+}
+
 let dshConversationScrollStabilityTests: [NamedTest] = [
   ("Scroll policy follows the tail only while pinned", testScrollPolicy_followsTailOnlyWhilePinned),
   ("Scroll policy follows a resize only while pinned", testScrollPolicy_resizeFollowsOnlyPinnedReader),
@@ -702,4 +716,5 @@ let dshConversationScrollStabilityTests: [NamedTest] = [
   ("Follow policy pins at rest only at the real bottom", testFollowPolicy_pinsAtRestOnlyAtTheRealBottom),
   ("Scroll box tracks momentum as an interaction", testScrollBox_tracksMomentumAsAnInteraction),
   ("Scroll box expires a lost gesture end", testScrollBox_expiresALostGestureEnd),
+  ("Tail scroll throttles from the last run", testTailScroll_throttlesFromTheLastRun),
 ]

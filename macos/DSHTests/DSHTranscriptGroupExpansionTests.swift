@@ -369,7 +369,11 @@ private func testExpand_bodyClassifiesEachCommandAtMostOnce() throws {
       ConversationView.toolGroupDigest(group, tools: harness.displayedTools)
     }
     let root = AnyView(
-      ToolGroupRow(messages: group, initiallyExpanded: true, digest: digest)
+      ToolGroupRow(
+        messages: group,
+        rowID: "expansion-test-group",
+        initiallyExpanded: true,
+        digest: digest)
         .frame(width: 836)
         .environmentObject(harness))
     let hosting = NSHostingView(rootView: root)
@@ -671,7 +675,29 @@ private func testExpand_lateArgumentsRefreshTheMutationCount() throws {
   }
 }
 
+/// An expanded row asks for every command's kind and title on each body, so the
+/// work must be keyed by the command's text and bounded.
+private func testExpand_commandMemoComputesOncePerText() throws {
+  let memo = DSHCommandMemo<Int>(limit: 2)
+  var computed = 0
+  let count: (String) -> Int = { computed += 1; return $0.utf8.count }
+  try expectEqual(memo.value(for: "ls", compute: count), 2)
+  try expectEqual(memo.value(for: "ls", compute: count), 2)
+  try expectEqual(computed, 1)
+  _ = memo.value(for: "pwd", compute: count)
+  _ = memo.value(for: "date", compute: count)
+  try expectEqual(computed, 3)
+  _ = memo.value(for: "ls", compute: count)
+  try expectEqual(computed, 4)
+  let command = "cd /tmp && cat > a.txt <<'EOF'\nhello\nEOF"
+  try expectEqual(
+    DSHToolCallClassifier.commandWritesFiles(command),
+    DSHToolCallClassifier.commandWritesFiles(command))
+  try expectEqual(DSHCommandTitle.summarize(command), DSHCommandTitle.summarize(command))
+}
+
 let dshTranscriptGroupExpansionTests: [NamedTest] = [
+  ("Expand: command memo computes once per text", testExpand_commandMemoComputesOncePerText),
   ("Expand: 64-command group line fits one frame",
    testExpand_sixtyFourCommandLineFitsOneFrame),
   ("Expand: 103-command group line fits one frame",

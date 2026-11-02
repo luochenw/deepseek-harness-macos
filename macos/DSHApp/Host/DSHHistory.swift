@@ -85,6 +85,27 @@ enum DSHHistoryPageMerge {
     return olderMessages.filter { !currentIDs.contains($0.id) } + currentMessages
   }
 
+  /// Apply a `session/follow` snapshot to the displayed transcript.
+  ///
+  /// A follow's first frame carries ONE message and ONE turn (a WebSocket frame
+  /// has a size cap). So when a stream is (re)opened while a complete transcript
+  /// is already on screen, replacing the array with that frame throws the whole
+  /// conversation away — the list collapses to a single row and then grows back
+  /// page by page. Only replace when the snapshot is the whole log, is at least as
+  /// long as what is displayed, or nothing usable is displayed yet.
+  static func applyFollowSnapshot(
+    _ incoming: [HarnessController.Message],
+    to current: [HarnessController.Message],
+    isComplete: Bool
+  ) -> [HarnessController.Message] {
+    guard !current.isEmpty else { return incoming }
+    // The whole log is authoritative even when shorter: compaction removes rows.
+    if isComplete || incoming.count >= current.count { return incoming }
+    // Otherwise a shorter frame is a partial (first-frame) payload. Fold it into
+    // the rows already on screen.
+    return mergeTail(incoming, into: current)
+  }
+
   /// Merge a follow snapshot's recent tail into an already visible transcript.
   /// Existing row UUIDs are retained so LazyVStack identities and scroll
   /// anchors stay stable while reconnect repair runs in the background.
@@ -472,9 +493,17 @@ extension HarnessController {
             self.rootSessionFollowCursor == nil,
             let index = self.sessions.firstIndex(where: { $0.id == localSessionID })
           else { return }
-          self.sessions[index].messages = folded.messages.isEmpty && !page.hasMore
-            ? [Message(role: .system, text: "这个会话还没有可显示的消息。")]
-            : folded.messages
+          // Same rule as a follow snapshot: a page smaller than what is already
+          // displayed is a partial view of the log, not a correction. Folding it
+          // in keeps the rows (and the scroll position) instead of collapsing
+          // the transcript and letting it grow back.
+          self.sessions[index].messages = DSHHistoryPageMerge.applyFollowSnapshot(
+            folded.messages,
+            to: self.sessions[index].messages,
+            isComplete: !page.hasMore)
+          if self.sessions[index].messages.isEmpty, !page.hasMore {
+            self.sessions[index].messages = [Message(role: .system, text: "这个会话还没有可显示的消息。")]
+          }
           self.sessions[index].turnStartedAt = folded.activeTurnStartedAt
           self.reconcileRootSessionRunningState(
             sessionID: sessionId,

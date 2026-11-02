@@ -400,9 +400,16 @@ extension HarnessController {
           folded.messages,
           into: sessions[index].messages)
       } else {
-        sessions[index].messages = folded.messages.isEmpty && !snapshot.hasMore
-          ? [Message(role: .system, text: "这个会话还没有可显示的消息。")]
-          : folded.messages
+        // A follow's first frame carries ONE message and ONE turn; replacing a
+        // complete transcript with it collapses the list and it then grows back
+        // (2026-10-30: content 61347 → 797 → 8503 on open).
+        sessions[index].messages = DSHHistoryPageMerge.applyFollowSnapshot(
+          folded.messages,
+          to: sessions[index].messages,
+          isComplete: !snapshot.hasMore)
+        if sessions[index].messages.isEmpty, !snapshot.hasMore {
+          sessions[index].messages = [Message(role: .system, text: "这个会话还没有可显示的消息。")]
+        }
       }
       sessions[index].turnStartedAt = folded.activeTurnStartedAt
       reconcileRootSessionRunningState(
